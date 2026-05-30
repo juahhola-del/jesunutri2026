@@ -1,0 +1,924 @@
+﻿<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Jesunutri | Inventario</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#090d14">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="application-name" content="Jesunutri">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Jesunutri">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="stylesheet" href="styles.css?v=6">
+  </head>
+  <body>
+    <section class="app-splash" id="appSplash">
+      <img src="logo.png" alt="Jesunutri">
+      <span>Cargando...</span>
+    </section>
+
+    <section class="login-screen" id="loginScreen" hidden>
+      <form class="login-card" id="loginForm">
+        <img src="logo.png" alt="Jesunutri" class="login-logo">
+        <div>
+          <h1>Ingreso</h1>
+          <p>Acceso privado al inventario de bodega.</p>
+        </div>
+        <label>
+          <span>Email</span>
+          <input name="email" type="email" autocomplete="email" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="email" required placeholder="jesu@admin.cl">
+        </label>
+        <label>
+          <span>Password</span>
+          <input name="password" type="password" autocomplete="current-password" required placeholder="Password">
+        </label>
+        <div class="login-error" id="loginError" hidden></div>
+        <button class="btn primary" type="submit" id="loginBtn">Ingresar</button>
+      </form>
+    </section>
+
+    <section class="operator-shell" id="operatorShell" hidden>
+      <header class="operator-header">
+        <img class="operator-logo" src="logo.png" alt="Jesunutri">
+        <div class="operator-top-actions">
+          <div class="operator-welcome" id="operatorWelcome">Bienvenido</div>
+          <button class="btn small logout-btn" type="button" id="operatorLogoutBtn">Salir</button>
+        </div>
+      </header>
+
+      <main>
+        <div class="internal-notice operator-notice" id="operatorNotice" hidden></div>
+
+        <section class="panel operator-panel">
+          <div class="section-heading">
+            <div>
+              <h2>Ingreso pendiente</h2>
+              <p>Registra productos para que Jesu revise y apruebe.</p>
+            </div>
+            <div class="receipt-display pos-receipt">Recepcion: <strong id="operatorReceiptDisplay"></strong></div>
+            <input id="operatorReceiptDate" type="date" hidden>
+          </div>
+
+          <div class="bulk-error-list" id="operatorBulkErrorList" hidden></div>
+
+          <details class="pos-summary" id="operatorProductsSummary">
+            <summary>
+              <span id="operatorProductsCount">Productos ingresados (0)</span>
+              <div class="pos-chip-list" id="operatorProductsChips"></div>
+            </summary>
+            <div class="pos-added-list" id="operatorProductsList"></div>
+          </details>
+
+          <form class="pos-form" id="operatorProductForm">
+            <div class="pos-product-row">
+              <label class="pos-field product-field">
+                <span>Producto</span>
+                <input name="nombre" type="text" list="productSuggestions" autocomplete="off" placeholder="Coca cola">
+              </label>
+              <label class="critical-toggle">
+                <input name="critico" type="checkbox">
+                <span>Crítico</span>
+              </label>
+            </div>
+
+            <div class="pos-grid two qty-unit-row">
+              <label class="pos-field">
+                <span>Cantidad</span>
+                <input name="cantidad" type="number" min="0.001" step="0.001" placeholder="12">
+              </label>
+              <fieldset class="unit-tiles">
+                <legend>Unidad</legend>
+                <label><input type="radio" name="unidad" value="kg" checked><span>KG</span></label>
+                <label><input type="radio" name="unidad" value="lt"><span>LT</span></label>
+                <label><input type="radio" name="unidad" value="unidad"><span>UN</span></label>
+                <select name="unidad_extra" aria-label="Mas unidades">
+                  <option value="">Mas</option>
+                  <option value="g">g</option>
+                  <option value="ml">ml</option>
+                  <option value="caja">caja</option>
+                  <option value="paquete">paquete</option>
+                </select>
+              </fieldset>
+            </div>
+
+            <label class="pos-field grams-field">
+              <span>Gramos</span>
+              <input name="gramos" type="number" min="0" step="1" inputmode="numeric" placeholder="Opcional">
+            </label>
+
+            <div class="pos-grid two date-lot-row">
+              <fieldset class="expiry-box">
+                <legend>Vencimiento</legend>
+                <input name="vence_dd" inputmode="numeric" maxlength="2" placeholder="DD">
+                <input name="vence_mm" inputmode="numeric" maxlength="2" placeholder="MM">
+                <input name="vence_yyyy" inputmode="numeric" maxlength="4" placeholder="AAAA">
+              </fieldset>
+              <label class="pos-field">
+                <span>Lote</span>
+                <input name="lote" type="text" placeholder="ABC123">
+              </label>
+            </div>
+
+            <details class="optional-note">
+              <summary>Observacion opcional</summary>
+              <textarea name="observaciones" rows="2" placeholder="Opcional"></textarea>
+            </details>
+
+            <button class="btn primary pos-add-btn" type="submit" id="operatorAddProductBtn">Agregar producto</button>
+          </form>
+
+          <div class="form-actions">
+            <button class="btn" type="button" id="operatorCancelEntry">Cancelar</button>
+            <button class="btn primary" type="button" id="sendPendingBtn">Enviar a revision</button>
+          </div>
+        </section>
+
+        <section class="panel operator-panel">
+          <div class="section-heading compact-heading">
+            <div>
+              <h2>Mis ingresos enviados</h2>
+              <p>Estado de tus ingresos pendientes.</p>
+            </div>
+          </div>
+          <div class="pending-list" id="operatorPendingList"></div>
+        </section>
+      </main>
+    </section>
+
+    <div class="app-shell" id="appShell" hidden>
+      <header class="header-topbar app-header">
+        <a class="logo-wrapper" href="./" aria-label="Jesunutri inicio">
+          <img class="header-logo" src="logo.png" alt="Jesunutri" width="360" height="120">
+        </a>
+        <div class="actions header-actions">
+          <button class="btn primary action-tile" type="button" id="bulkEntryBtn">Ingreso masivo</button>
+          <button class="btn use-stock-btn action-tile" type="button" id="useStockBtn">Stock consumido</button>
+          <button class="btn action-tile" type="button" id="labelsBtn">Etiquetas</button>
+          <button class="btn action-tile" type="button" id="adjustStockBtn">Ajuste inventario</button>
+          <button class="btn small logout-btn" type="button" id="logoutBtn">Salir</button>
+        </div>
+      </header>
+
+      <div class="error-box" id="errorBox" hidden></div>
+      <div class="install-hint" id="installHint" hidden>
+        <span>Para instalar en tablet: Chrome -> menu -> Agregar a pantalla principal.</span>
+        <button class="btn install-btn" type="button" id="installAppBtn" hidden>Instalar app</button>
+      </div>
+
+      <main>
+        <section class="dashboard-grid" aria-label="Resumen de inventario">
+          <button class="metric-card dashboard-card" type="button" data-detail="total">
+            <span class="metric-label">Total insumos</span>
+            <strong id="totalItems">0</strong>
+            <small>Lotes con stock disponible</small>
+          </button>
+          <button class="metric-card dashboard-card warning" type="button" data-detail="soon">
+            <span class="metric-label">Proximos a vencer</span>
+            <strong id="soonItems">0</strong>
+            <small>Vencen en 20 dias o menos</small>
+          </button>
+          <button class="metric-card dashboard-card danger" type="button" data-detail="expired">
+            <span class="metric-label">Vencidos</span>
+            <strong id="expiredItems">0</strong>
+            <small>Requieren revision inmediata</small>
+          </button>
+          <button class="metric-card dashboard-card stock" type="button" data-detail="lowstock">
+            <span class="metric-label">Bajo stock</span>
+            <strong id="lowStockItems">0</strong>
+            <small>Bajo minimo configurado</small>
+          </button>
+        </section>
+
+        <section class="panel pending-admin-panel">
+          <div class="section-heading compact-heading">
+            <div>
+              <h2>Ingresos pendientes</h2>
+              <p>Ingresos enviados por operadores para revision.</p>
+            </div>
+            <span class="pill" id="pendingCount">0 pendientes</span>
+          </div>
+          <div class="internal-notice admin-notice" id="adminPendingNotice" hidden></div>
+          <div class="pending-list" id="adminPendingList"></div>
+        </section>
+
+        <section class="panel critical-panel">
+          <div class="section-heading compact-heading">
+            <div>
+              <h2>Productos criticos</h2>
+              <p>Insumos que no pueden faltar en operacion.</p>
+            </div>
+            <button class="btn small" type="button" id="criticalViewBtn">Vista criticos</button>
+          </div>
+          <div class="critical-list" id="criticalProductsList"></div>
+        </section>
+
+        <section class="panel compact-critical-panel" id="compactCriticalPanel" hidden>
+          <div class="section-heading compact-heading">
+            <div>
+              <h2>Vista criticos</h2>
+              <p>Revision ultra rapida de productos que no pueden faltar.</p>
+            </div>
+          </div>
+          <div class="compact-critical-list" id="compactCriticalList"></div>
+        </section>
+
+        <section class="panel alerts-panel">
+          <div class="section-heading">
+            <div>
+              <h2>Alertas de vencimiento</h2>
+              <p>Lotes vencidos o con fecha de vencimiento dentro de los proximos 20 dias.</p>
+            </div>
+            <span class="pill" id="alertCount">0 alertas</span>
+          </div>
+          <div class="alerts-list" id="alertsList"></div>
+        </section>
+
+        <section class="panel inventory-panel">
+          <div class="section-heading table-heading">
+            <div>
+              <h2>Inventario</h2>
+              <p id="inventorySourceText">Cargando inventario desde Supabase.</p>
+            </div>
+            <label class="search-box">
+              <span>Buscar</span>
+              <input id="searchInput" type="search" placeholder="Nombre de insumo">
+            </label>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Insumo</th>
+                  <th>Cantidad</th>
+                  <th>Unidad</th>
+                  <th>Vencimiento</th>
+                  <th>Mes</th>
+                  <th>Dias</th>
+                  <th>Lote</th>
+                  <th>Estado</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="inventoryTable"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel history-panel">
+          <div class="section-heading table-heading">
+            <div>
+              <h2>Historial</h2>
+              <p>Movimientos de inventario registrados.</p>
+            </div>
+            <div class="history-filters">
+              <input id="historyProductFilter" type="search" placeholder="Producto">
+              <select id="historyTypeFilter">
+                <option value="">Todos</option>
+                <option value="ingreso">ingreso</option>
+                <option value="consumo">consumo</option>
+                <option value="ajuste_manual">ajuste_manual</option>
+                <option value="merma">merma</option>
+                <option value="vencimiento">vencimiento</option>
+                <option value="eliminacion">eliminacion</option>
+              </select>
+              <input id="historyFromFilter" type="date">
+              <input id="historyToFilter" type="date">
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Producto</th>
+                  <th>Lote</th>
+                  <th>Tipo</th>
+                  <th>Cantidad</th>
+                  <th>Unidad</th>
+                  <th>Motivo</th>
+                  <th>Observacion</th>
+                </tr>
+              </thead>
+              <tbody id="historyTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel analytics-panel">
+          <div class="section-heading compact-heading">
+            <div>
+              <h2>Indicadores</h2>
+              <p>Ultimos 30 dias.</p>
+            </div>
+          </div>
+          <div class="analytics-grid" id="analyticsGrid"></div>
+        </section>
+
+        <section class="panel tools-panel">
+          <div class="section-heading compact-heading">
+            <div>
+              <h2>Herramientas</h2>
+              <p>Opciones secundarias para exportar, respaldar e imprimir.</p>
+            </div>
+          </div>
+          <div class="actions tools-actions">
+            <button class="btn" type="button" id="exportBtn">Exportar</button>
+            <button class="btn" type="button" id="backupBtn">Backup CSV</button>
+          </div>
+        </section>
+      </main>
+
+      <footer class="app-footer">
+        Con cariño para mi Jesu. Atte. Sebastian Urrea.
+      </footer>
+    </div>
+
+    <datalist id="productSuggestions"></datalist>
+
+    <div class="modal-backdrop" id="entryModal" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="entryModalTitle">
+        <form id="entryForm" class="entry-form">
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">Inventario</p>
+              <h2 id="entryModalTitle">Nuevo ingreso</h2>
+            </div>
+            <div class="modal-tools">
+              <label class="compact-date">
+                <span>Recepcion</span>
+                <input name="fecha_recepcion" type="date" required>
+              </label>
+              <button class="icon-btn" type="button" id="closeEntryModal" aria-label="Cerrar">x</button>
+            </div>
+          </div>
+
+          <label>
+            <span>Nombre del producto</span>
+            <input name="nombre" type="text" list="productSuggestions" autocomplete="off" required placeholder="Ej: Harina fuerza">
+          </label>
+
+          <div class="form-grid">
+            <label>
+              <span>Cantidad</span>
+              <input name="cantidad" type="number" min="0.001" step="0.001" required placeholder="0">
+            </label>
+            <label>
+              <span>Unidad</span>
+              <select name="unidad" required>
+                <option value="kg">kg</option>
+                <option value="g">g</option>
+                <option value="lt">lt</option>
+                <option value="ml">ml</option>
+                <option value="unidad">unidad</option>
+                <option value="caja">caja</option>
+                <option value="paquete">paquete</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            <span>Gramos</span>
+            <input name="gramos" type="number" min="0" step="1" inputmode="numeric" placeholder="Opcional">
+          </label>
+
+          <label>
+            <span>Fecha vencimiento</span>
+            <input name="fecha_vencimiento" type="date">
+            <small id="entryMonthPreview" class="month-preview"></small>
+          </label>
+
+          <label class="check-row">
+            <input name="critico" type="checkbox">
+            <span>Producto critico</span>
+          </label>
+
+          <label>
+            <span>Lote</span>
+            <input name="lote" type="text" placeholder="Opcional">
+          </label>
+
+          <label>
+            <span>Observaciones</span>
+            <textarea name="observaciones" rows="3" placeholder="Notas del ingreso"></textarea>
+          </label>
+
+          <div class="form-actions">
+            <button class="btn" type="button" id="cancelEntry">Cancelar</button>
+            <button class="btn primary" type="submit" id="saveEntryBtn">Guardar ingreso</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="editModal" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle">
+        <form id="editForm" class="entry-form">
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">Inventario</p>
+              <h2 id="editModalTitle">Editar ingreso</h2>
+              <p class="modal-copy" id="editProductName"></p>
+            </div>
+            <div class="modal-tools">
+              <label class="compact-date">
+                <span>Recepcion</span>
+                <input name="fecha_recepcion" type="date" required>
+              </label>
+              <button class="icon-btn" type="button" id="closeEditModal" aria-label="Cerrar">x</button>
+            </div>
+          </div>
+
+          <input name="lote_id" type="hidden">
+          <input name="producto_id" type="hidden">
+          <input name="cantidad_actual" type="hidden">
+
+          <label>
+            <span>Nombre del producto</span>
+            <input name="nombre" type="text" list="productSuggestions" autocomplete="off" required>
+          </label>
+
+          <div class="form-grid">
+            <label>
+              <span>Cantidad</span>
+              <input name="cantidad" type="number" min="0" step="0.001" required>
+            </label>
+            <label>
+              <span>Unidad</span>
+              <select name="unidad" required>
+                <option value="kg">kg</option>
+                <option value="g">g</option>
+                <option value="lt">lt</option>
+                <option value="ml">ml</option>
+                <option value="unidad">unidad</option>
+                <option value="caja">caja</option>
+                <option value="paquete">paquete</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            <span>Fecha vencimiento</span>
+            <input name="fecha_vencimiento" type="date">
+            <small id="editMonthPreview" class="month-preview"></small>
+          </label>
+
+          <label>
+            <span>Lote</span>
+            <input name="lote" type="text">
+          </label>
+
+          <label>
+            <span>Observaciones</span>
+            <textarea name="observaciones" rows="3"></textarea>
+          </label>
+
+          <div class="form-actions">
+            <button class="btn" type="button" id="cancelEdit">Cancelar</button>
+            <button class="btn primary" type="submit" id="saveEditBtn">Guardar cambios</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="bulkModal" hidden>
+      <section class="modal bulk-modal" role="dialog" aria-modal="true" aria-labelledby="bulkModalTitle">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Inventario</p>
+            <h2 id="bulkModalTitle">Ingreso masivo</h2>
+          </div>
+          <div class="modal-tools">
+            <div class="receipt-display pos-receipt">Recepcion: <strong id="bulkReceiptDisplay"></strong></div>
+            <input id="bulkReceiptDate" type="date" hidden>
+          </div>
+        </div>
+
+        <div class="bulk-error-list" id="bulkErrorList" hidden></div>
+
+        <details class="pos-summary" id="bulkProductsSummary">
+          <summary>
+            <span id="bulkProductsCount">Productos ingresados (0)</span>
+            <div class="pos-chip-list" id="bulkProductsChips"></div>
+          </summary>
+          <div class="pos-added-list" id="bulkProductsList"></div>
+        </details>
+
+        <form class="pos-form" id="bulkProductForm">
+          <div class="pos-product-row">
+            <label class="pos-field product-field">
+              <span>Producto</span>
+              <input name="nombre" type="text" list="productSuggestions" autocomplete="off" placeholder="Coca cola">
+            </label>
+            <label class="critical-toggle">
+              <input name="critico" type="checkbox">
+              <span>Crítico</span>
+            </label>
+          </div>
+
+          <div class="pos-grid two qty-unit-row">
+            <label class="pos-field">
+              <span>Cantidad</span>
+              <input name="cantidad" type="number" min="0.001" step="0.001" placeholder="12">
+            </label>
+            <fieldset class="unit-tiles">
+              <legend>Unidad</legend>
+              <label><input type="radio" name="unidad" value="kg" checked><span>KG</span></label>
+              <label><input type="radio" name="unidad" value="lt"><span>LT</span></label>
+              <label><input type="radio" name="unidad" value="unidad"><span>UN</span></label>
+              <select name="unidad_extra" aria-label="Mas unidades">
+                <option value="">Mas</option>
+                <option value="g">g</option>
+                <option value="ml">ml</option>
+                <option value="caja">caja</option>
+                <option value="paquete">paquete</option>
+              </select>
+            </fieldset>
+          </div>
+
+          <label class="pos-field grams-field">
+            <span>Gramos</span>
+            <input name="gramos" type="number" min="0" step="1" inputmode="numeric" placeholder="Opcional">
+          </label>
+
+          <div class="pos-grid two date-lot-row">
+            <fieldset class="expiry-box">
+              <legend>Vencimiento</legend>
+              <input name="vence_dd" inputmode="numeric" maxlength="2" placeholder="DD">
+              <input name="vence_mm" inputmode="numeric" maxlength="2" placeholder="MM">
+              <input name="vence_yyyy" inputmode="numeric" maxlength="4" placeholder="AAAA">
+            </fieldset>
+            <label class="pos-field">
+              <span>Lote</span>
+              <input name="lote" type="text" placeholder="ABC123">
+            </label>
+          </div>
+
+          <details class="optional-note">
+            <summary>Observacion opcional</summary>
+            <textarea name="observaciones" rows="2" placeholder="Opcional"></textarea>
+          </details>
+
+          <button class="btn primary pos-add-btn" type="submit" id="bulkAddProductBtn">Agregar producto</button>
+        </form>
+
+        <div class="form-actions">
+          <button class="btn" type="button" id="cancelBulk">Cancelar</button>
+          <button class="btn primary" type="button" id="saveBulkBtn">Guardar ingreso</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="useModal" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="useModalTitle">
+        <form id="useForm" class="entry-form">
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">Salida de stock</p>
+              <h2 id="useModalTitle">Registrar uso</h2>
+              <p class="modal-copy">El sistema descuenta automaticamente por FIFO.</p>
+            </div>
+            <button class="icon-btn" type="button" id="closeUseModal" aria-label="Cerrar">x</button>
+          </div>
+
+          <label>
+            <span>Producto</span>
+            <input name="nombre" type="text" list="productSuggestions" autocomplete="off" required placeholder="Ej: Harina fuerza">
+          </label>
+
+          <div class="form-grid">
+            <label>
+              <span>Cantidad usada</span>
+              <input name="cantidad" type="number" min="0.001" step="0.001" required placeholder="0">
+            </label>
+            <label>
+              <span>Unidad</span>
+              <select name="unidad" required>
+                <option value="kg">kg</option>
+                <option value="g">g</option>
+                <option value="lt">lt</option>
+                <option value="ml">ml</option>
+                <option value="unidad">unidad</option>
+                <option value="caja">caja</option>
+                <option value="paquete">paquete</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            <span>Motivo/observacion</span>
+            <textarea name="observacion" rows="2" placeholder="Opcional"></textarea>
+          </label>
+
+          <label class="check-row">
+            <input name="usar_lote_especifico" type="checkbox">
+            <span>Usar lote especifico</span>
+          </label>
+
+          <div class="manual-lot-panel" id="manualLotPanel" hidden>
+            <label>
+              <span>Lote especifico</span>
+              <select name="lote_especifico"></select>
+            </label>
+            <label>
+              <span>Motivo desviacion FIFO</span>
+              <select name="motivo_desviacion">
+                <option value="">Seleccionar motivo</option>
+                <option value="lote recomendado no encontrado">lote recomendado no encontrado</option>
+                <option value="envase abierto">envase abierto</option>
+                <option value="lote dañado">lote dañado</option>
+                <option value="ubicacion fisica distinta">ubicacion fisica distinta</option>
+                <option value="instruccion de supervisor">instruccion de supervisor</option>
+                <option value="otro">otro</option>
+              </select>
+            </label>
+            <div class="fifo-warning" id="fifoDeviationWarning" hidden>Estas usando un lote distinto al recomendado.</div>
+          </div>
+
+          <div class="fifo-summary">
+            <h3>Se descontara desde estos lotes:</h3>
+            <div id="fifoSummaryList" class="fifo-summary-list">
+              <div class="empty">Selecciona producto y cantidad para calcular FIFO.</div>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn" type="button" id="cancelUse">Cancelar</button>
+            <button class="btn primary" type="submit" id="confirmUseBtn">Confirmar uso</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="adjustModal" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="adjustModalTitle">
+        <form id="adjustForm" class="entry-form">
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">Inventario</p>
+              <h2 id="adjustModalTitle">Ajuste inventario</h2>
+              <p class="modal-copy">Corrige stock real contado sin editar cantidades directas.</p>
+            </div>
+            <button class="icon-btn" type="button" id="closeAdjustModal" aria-label="Cerrar">x</button>
+          </div>
+
+          <label>
+            <span>Producto</span>
+            <input name="nombre" type="text" list="productSuggestions" autocomplete="off" required placeholder="Ej: Harina fuerza">
+          </label>
+
+          <div class="form-grid">
+            <label>
+              <span>Lote</span>
+              <select name="lote_id" id="adjustLotSelect" required></select>
+            </label>
+            <label>
+              <span>Unidad</span>
+              <select name="unidad" required>
+                <option value="kg">kg</option>
+                <option value="g">g</option>
+                <option value="lt">lt</option>
+                <option value="ml">ml</option>
+                <option value="unidad">unidad</option>
+                <option value="caja">caja</option>
+                <option value="paquete">paquete</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="form-grid">
+            <label>
+              <span>Stock actual del sistema</span>
+              <input name="stock_sistema" id="adjustSystemStock" type="number" readonly>
+            </label>
+            <label>
+              <span>Stock real contado</span>
+              <input name="stock_real" type="number" min="0" step="0.001" required placeholder="0">
+            </label>
+          </div>
+
+          <label>
+            <span>Motivo</span>
+            <select name="motivo" required>
+              <option value="conteo fisico">conteo fisico</option>
+              <option value="diferencia por consumo no registrado">diferencia por consumo no registrado</option>
+              <option value="merma">merma</option>
+              <option value="error ingreso anterior">error ingreso anterior</option>
+              <option value="correccion supervisora">correccion supervisora</option>
+              <option value="otro">otro</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Observacion</span>
+            <textarea name="observacion" rows="3" placeholder="Detalle opcional del ajuste"></textarea>
+          </label>
+
+          <div class="form-actions">
+            <button class="btn" type="button" id="cancelAdjust">Cancelar</button>
+            <button class="btn primary" type="submit" id="saveAdjustBtn">Guardar ajuste</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="exportModal" hidden>
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Datos</p>
+            <h2 id="exportModalTitle">Exportar CSV</h2>
+          </div>
+          <button class="icon-btn" type="button" id="closeExportModal" aria-label="Cerrar">x</button>
+        </div>
+        <div class="entry-form">
+          <label>
+            <span>Contenido</span>
+            <select id="exportType">
+              <option value="inventario">Inventario actual</option>
+              <option value="criticos">Productos criticos</option>
+              <option value="alertas">Alertas de vencimiento</option>
+              <option value="historial">Historial movimientos</option>
+            </select>
+          </label>
+          <div class="form-actions">
+            <button class="btn" type="button" id="cancelExport">Cancelar</button>
+            <button class="btn primary" type="button" id="confirmExportBtn">Exportar</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="labelsModal" hidden>
+      <section class="modal labels-modal" role="dialog" aria-modal="true" aria-labelledby="labelsModalTitle">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Inventario</p>
+            <h2 id="labelsModalTitle">Etiquetas imprimibles</h2>
+            <p class="modal-copy">Selecciona los lotes y genera una vista lista para imprimir.</p>
+          </div>
+          <button class="icon-btn" type="button" id="closeLabelsModal" aria-label="Cerrar">x</button>
+        </div>
+        <div class="label-list" id="labelsList"></div>
+        <div class="form-actions">
+          <button class="btn" type="button" id="cancelLabels">Cancelar</button>
+          <button class="btn primary" type="button" id="printLabelsBtn">Generar etiquetas</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="pendingReviewModal" hidden>
+      <section class="modal pending-review-modal" role="dialog" aria-modal="true" aria-labelledby="pendingReviewTitle">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Revision</p>
+            <h2 id="pendingReviewTitle">Ingreso pendiente</h2>
+            <p class="modal-copy" id="pendingReviewMeta"></p>
+          </div>
+          <button class="icon-btn" type="button" id="closePendingReviewModal" aria-label="Cerrar">x</button>
+        </div>
+
+        <div class="bulk-error-list" id="pendingReviewErrorList" hidden></div>
+
+        <label class="operator-observation reject-reason-field">
+          <span>Motivo rechazo</span>
+          <textarea id="pendingRejectReason" rows="2" placeholder="Obligatorio si se rechaza"></textarea>
+        </label>
+
+        <div class="bulk-table-wrap">
+          <table class="bulk-table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Cantidad</th>
+                <th>Unidad</th>
+                <th>Fecha vencimiento</th>
+                <th>Mes</th>
+                <th>Lote</th>
+                <th>Critico</th>
+                <th>Observaciones</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="pendingReviewTableBody"></tbody>
+          </table>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn" type="button" id="addPendingReviewRow">Agregar fila</button>
+          <button class="btn danger-btn" type="button" id="rejectPendingBtn">Rechazar</button>
+          <button class="btn" type="button" id="cancelPendingReview">Cancelar</button>
+          <button class="btn primary" type="button" id="approvePendingBtn">Aprobar ingreso</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="productSettingsModal" hidden>
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="productSettingsTitle">
+        <form id="productSettingsForm" class="entry-form">
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">Producto maestro</p>
+              <h2 id="productSettingsTitle">Configurar producto</h2>
+              <p class="modal-copy" id="productSettingsName"></p>
+            </div>
+            <button class="icon-btn" type="button" id="closeProductSettingsModal" aria-label="Cerrar">x</button>
+          </div>
+
+          <input name="producto_id" type="hidden">
+
+          <div class="form-grid">
+            <label>
+              <span>Stock minimo</span>
+              <input name="stock_minimo" type="number" min="0" step="0.001" required>
+            </label>
+            <label>
+              <span>Unidad</span>
+              <select name="unidad_default" required>
+                <option value="kg">kg</option>
+                <option value="g">g</option>
+                <option value="lt">lt</option>
+                <option value="ml">ml</option>
+                <option value="unidad">unidad</option>
+                <option value="caja">caja</option>
+                <option value="paquete">paquete</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            <span>Consumo promedio diario</span>
+            <input name="consumo_promedio_diario" type="number" min="0" step="0.001" required>
+          </label>
+
+          <label class="check-row">
+            <input name="critico" type="checkbox">
+            <span>Producto critico</span>
+          </label>
+
+          <div class="form-actions">
+            <button class="btn danger-btn" type="button" id="pauseProductBtn">Pausar producto</button>
+            <button class="btn" type="button" id="cancelProductSettings">Cancelar</button>
+            <button class="btn primary" type="submit" id="saveProductSettingsBtn">Guardar</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="detailModal" hidden>
+      <section class="modal detail-modal" role="dialog" aria-modal="true" aria-labelledby="detailModalTitle">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Detalle</p>
+            <h2 id="detailModalTitle">Detalle</h2>
+          </div>
+          <button class="icon-btn" type="button" id="closeDetailModal" aria-label="Cerrar">x</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Insumo</th>
+                <th>Cantidad</th>
+                <th>Unidad</th>
+                <th>Vencimiento</th>
+                <th>Mes</th>
+                <th>Dias</th>
+                <th>Lote</th>
+                <th>Observaciones</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody id="detailTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+
+    <div class="modal-backdrop system-modal-backdrop" id="systemModal" hidden>
+      <section class="modal system-modal" role="dialog" aria-modal="true" aria-labelledby="systemModalTitle">
+        <div class="system-modal-icon" id="systemModalIcon">!</div>
+        <div class="system-modal-content">
+          <h2 id="systemModalTitle">Confirmar accion</h2>
+          <p id="systemModalMessage"></p>
+          <div class="form-actions system-modal-actions">
+            <button class="btn" type="button" id="systemModalCancel">Cancelar</button>
+            <button class="btn danger-action" type="button" id="systemModalConfirm">Eliminar</button>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="script.js?v=6"></script>
+  </body>
+</html>
+
+
+
+
