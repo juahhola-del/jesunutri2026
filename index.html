@@ -83,7 +83,7 @@
                 <input name="gramos" type="text" maxlength="3" inputmode="numeric" pattern="[0-9]{0,3}" placeholder="000">
               </label>
               <label class="critical-toggle" tabindex="0">
-                <input name="critico" type="checkbox">
+                <input name="critico" type="checkbox" tabindex="-1">
                 <span>Crítico</span>
               </label>
             </div>
@@ -123,7 +123,7 @@
 
             <details class="optional-note">
               <summary>Observacion opcional</summary>
-              <textarea name="observaciones" rows="2" placeholder="Opcional"></textarea>
+              <textarea name="observaciones" rows="2" placeholder="Opcional" tabindex="-1"></textarea>
             </details>
 
             <button class="btn primary pos-add-btn" type="submit" id="operatorAddProductBtn">Agregar producto</button>
@@ -519,7 +519,7 @@
               <input name="gramos" type="text" maxlength="3" inputmode="numeric" pattern="[0-9]{0,3}" placeholder="000">
             </label>
             <label class="critical-toggle" tabindex="0">
-              <input name="critico" type="checkbox">
+              <input name="critico" type="checkbox" tabindex="-1">
               <span>Crítico</span>
             </label>
           </div>
@@ -559,7 +559,7 @@
 
           <details class="optional-note">
             <summary>Observacion opcional</summary>
-            <textarea name="observaciones" rows="2" placeholder="Opcional"></textarea>
+            <textarea name="observaciones" rows="2" placeholder="Opcional" tabindex="-1"></textarea>
           </details>
 
           <button class="btn primary pos-add-btn" type="submit" id="bulkAddProductBtn">Agregar producto</button>
