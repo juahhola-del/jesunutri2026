@@ -82,7 +82,7 @@
                 <span>Grs</span>
                 <input name="gramos" type="text" maxlength="3" inputmode="numeric" pattern="[0-9]{0,3}" placeholder="000">
               </label>
-              <label class="critical-toggle">
+              <label class="critical-toggle" tabindex="0">
                 <input name="critico" type="checkbox">
                 <span>Crítico</span>
               </label>
@@ -95,10 +95,10 @@
               </label>
               <fieldset class="unit-tiles" tabindex="0">
                 <legend>Unidad</legend>
-                <label><input type="radio" name="unidad" value="kg" checked><span>KG</span></label>
-                <label><input type="radio" name="unidad" value="lt"><span>LT</span></label>
-                <label><input type="radio" name="unidad" value="unidad"><span>UN</span></label>
-                <select name="unidad_extra" aria-label="Mas unidades">
+                <label><input type="radio" name="unidad" value="kg" tabindex="-1" checked><span>KG</span></label>
+                <label><input type="radio" name="unidad" value="lt" tabindex="-1"><span>LT</span></label>
+                <label><input type="radio" name="unidad" value="unidad" tabindex="-1"><span>UN</span></label>
+                <select name="unidad_extra" aria-label="Mas unidades" tabindex="-1">
                   <option value="">Mas</option>
                   <option value="g">g</option>
                   <option value="ml">ml</option>
@@ -518,7 +518,7 @@
               <span>Grs</span>
               <input name="gramos" type="text" maxlength="3" inputmode="numeric" pattern="[0-9]{0,3}" placeholder="000">
             </label>
-            <label class="critical-toggle">
+            <label class="critical-toggle" tabindex="0">
               <input name="critico" type="checkbox">
               <span>Crítico</span>
             </label>
@@ -531,10 +531,10 @@
             </label>
             <fieldset class="unit-tiles" tabindex="0">
               <legend>Unidad</legend>
-              <label><input type="radio" name="unidad" value="kg" checked><span>KG</span></label>
-              <label><input type="radio" name="unidad" value="lt"><span>LT</span></label>
-              <label><input type="radio" name="unidad" value="unidad"><span>UN</span></label>
-              <select name="unidad_extra" aria-label="Mas unidades">
+              <label><input type="radio" name="unidad" value="kg" tabindex="-1" checked><span>KG</span></label>
+              <label><input type="radio" name="unidad" value="lt" tabindex="-1"><span>LT</span></label>
+              <label><input type="radio" name="unidad" value="unidad" tabindex="-1"><span>UN</span></label>
+              <select name="unidad_extra" aria-label="Mas unidades" tabindex="-1">
                 <option value="">Mas</option>
                 <option value="g">g</option>
                 <option value="ml">ml</option>
