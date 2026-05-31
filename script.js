@@ -1153,7 +1153,7 @@ function sanitizeGramsInput(input) {
 }
 
 function getFocusableFields(form) {
-  return [...form.querySelectorAll("input, select, textarea, button, fieldset[tabindex]")]
+  return [...form.querySelectorAll("input, select, textarea, button, fieldset[tabindex], label[tabindex]")]
     .filter((field) => !field.disabled && field.type !== "hidden" && field.tabIndex >= 0 && field.offsetParent !== null);
 }
 
@@ -1163,40 +1163,61 @@ function focusNextAfter(form, currentField) {
   if (index >= 0 && index < fields.length - 1) fields[index + 1].focus();
 }
 
+const QUICK_UNITS = ["kg", "lt", "unidad"];
+
+function selectNextQuickUnit(form, direction = 1) {
+  const current = form.querySelector('input[name="unidad"]:checked')?.value || QUICK_UNITS[0];
+  const currentIndex = QUICK_UNITS.includes(current) ? QUICK_UNITS.indexOf(current) : 0;
+  const nextUnit = QUICK_UNITS[(currentIndex + direction + QUICK_UNITS.length) % QUICK_UNITS.length];
+  setSelectedPosUnit(form, nextUnit);
+}
+
+function handleQuickUnitKeydown(form, unitPicker, event) {
+  if (event.key === "Tab") {
+    event.preventDefault();
+    event.stopPropagation();
+    selectNextQuickUnit(form, event.shiftKey ? -1 : 1);
+    unitPicker.focus();
+    return;
+  }
+
+  if (event.key.toLowerCase() === "q") {
+    event.preventDefault();
+    event.stopPropagation();
+    focusNextAfter(form, unitPicker);
+  }
+}
+
 function setupUnitKeyboard(form) {
   const unitPicker = form.querySelector(".unit-tiles");
   if (!unitPicker) return;
-  form.querySelectorAll('input[name="unidad"], select[name="unidad_extra"]').forEach((field) => {
-    field.tabIndex = -1;
-  });
-  form.querySelectorAll('input[name="unidad"]').forEach((input) => {
+  const quickUnitInputs = [...form.querySelectorAll('input[name="unidad"]')];
+  quickUnitInputs.forEach((input) => {
+    input.tabIndex = -1;
     input.addEventListener("change", () => {
       if (input.checked) form.elements.unidad_extra.value = "";
     });
+    input.addEventListener("keydown", (event) => handleQuickUnitKeydown(form, unitPicker, event));
+    input.closest("label")?.addEventListener("keydown", (event) => handleQuickUnitKeydown(form, unitPicker, event));
   });
+  form.elements.unidad_extra.tabIndex = -1;
   form.elements.unidad_extra.addEventListener("change", () => {
     if (!form.elements.unidad_extra.value) return;
-    form.querySelectorAll('input[name="unidad"]').forEach((input) => {
+    quickUnitInputs.forEach((input) => {
       input.checked = false;
     });
   });
 
-  unitPicker.addEventListener("keydown", (event) => {
-    if (event.key === "Tab") {
-      event.preventDefault();
-      const units = ["kg", "lt", "unidad"];
-      const current = form.querySelector('input[name="unidad"]:checked')?.value || units[0];
-      const direction = event.shiftKey ? -1 : 1;
-      const currentIndex = Math.max(0, units.indexOf(current));
-      const nextUnit = units[(currentIndex + direction + units.length) % units.length];
-      setSelectedPosUnit(form, nextUnit);
-      unitPicker.focus();
-      return;
-    }
+  unitPicker.addEventListener("keydown", (event) => handleQuickUnitKeydown(form, unitPicker, event));
+}
 
+function setupCriticalKeyboard(form) {
+  const criticalToggle = form.querySelector(".critical-toggle");
+  if (!criticalToggle) return;
+  criticalToggle.addEventListener("keydown", (event) => {
     if (event.key.toLowerCase() === "q") {
       event.preventDefault();
-      focusNextAfter(form, unitPicker);
+      form.elements.critico.checked = !form.elements.critico.checked;
     }
   });
 }
@@ -3200,6 +3221,7 @@ setupDateAutoAdvance(elements.operatorProductForm);
 });
 [elements.bulkProductForm, elements.operatorProductForm].forEach((form) => {
   setupUnitKeyboard(form);
+  setupCriticalKeyboard(form);
   form.elements.gramos.addEventListener("input", () => sanitizeGramsInput(form.elements.gramos));
 });
 elements.bulkProductForm.elements.nombre.addEventListener("input", () => {
@@ -3310,8 +3332,6 @@ if ("serviceWorker" in navigator) {
 
 updateInstallUi();
 checkInitialSession();
-
-
 
 
 
