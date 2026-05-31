@@ -1142,7 +1142,9 @@ function setSelectedPosUnit(form, unit) {
     main.checked = true;
     return;
   }
-  form.querySelector('input[name="unidad"][value="kg"]').checked = true;
+  form.querySelectorAll('input[name="unidad"]').forEach((input) => {
+    input.checked = false;
+  });
   form.elements.unidad_extra.value = unit || "";
 }
 
@@ -1167,12 +1169,23 @@ function setupUnitKeyboard(form) {
   form.querySelectorAll('input[name="unidad"], select[name="unidad_extra"]').forEach((field) => {
     field.tabIndex = -1;
   });
+  form.querySelectorAll('input[name="unidad"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      if (input.checked) form.elements.unidad_extra.value = "";
+    });
+  });
+  form.elements.unidad_extra.addEventListener("change", () => {
+    if (!form.elements.unidad_extra.value) return;
+    form.querySelectorAll('input[name="unidad"]').forEach((input) => {
+      input.checked = false;
+    });
+  });
 
   unitPicker.addEventListener("keydown", (event) => {
     if (event.key === "Tab") {
       event.preventDefault();
-      const units = UNIT_OPTIONS;
-      const current = getSelectedPosUnit(form) || units[0];
+      const units = ["kg", "lt", "unidad"];
+      const current = form.querySelector('input[name="unidad"]:checked')?.value || units[0];
       const direction = event.shiftKey ? -1 : 1;
       const currentIndex = Math.max(0, units.indexOf(current));
       const nextUnit = units[(currentIndex + direction + units.length) % units.length];
@@ -3297,6 +3310,8 @@ if ("serviceWorker" in navigator) {
 
 updateInstallUi();
 checkInitialSession();
+
+
 
 
 
