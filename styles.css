@@ -337,6 +337,7 @@ button, input, select, textarea { font: inherit; }
 .unit-tiles:focus-within,
 .unit-tiles select:focus,
 .optional-note textarea:focus,
+.critical-toggle:focus,
 .critical-toggle:focus-within {
   border-color: var(--yellow);
   box-shadow: 0 0 0 3px rgba(242, 201, 76, 0.22);
