@@ -158,6 +158,7 @@ const elements = {
   bulkErrorList: document.getElementById("bulkErrorList"),
   bulkReceiptDate: document.getElementById("bulkReceiptDate"),
   bulkReceiptDisplay: document.getElementById("bulkReceiptDisplay"),
+  legacyInventoryFile: document.getElementById("legacyInventoryFile"),
   bulkProductForm: document.getElementById("bulkProductForm"),
   bulkProductsSummary: document.getElementById("bulkProductsSummary"),
   bulkProductsCount: document.getElementById("bulkProductsCount"),
@@ -1143,6 +1144,48 @@ function setSelectedPosUnit(form, unit) {
   }
   form.querySelector('input[name="unidad"][value="kg"]').checked = true;
   form.elements.unidad_extra.value = unit || "";
+}
+
+function sanitizeGramsInput(input) {
+  input.value = input.value.replace(/\D/g, "").slice(0, 3);
+}
+
+function getFocusableFields(form) {
+  return [...form.querySelectorAll("input, select, textarea, button, fieldset[tabindex]")]
+    .filter((field) => !field.disabled && field.type !== "hidden" && field.tabIndex >= 0 && field.offsetParent !== null);
+}
+
+function focusNextAfter(form, currentField) {
+  const fields = getFocusableFields(form);
+  const index = fields.indexOf(currentField);
+  if (index >= 0 && index < fields.length - 1) fields[index + 1].focus();
+}
+
+function setupUnitKeyboard(form) {
+  const unitPicker = form.querySelector(".unit-tiles");
+  if (!unitPicker) return;
+  form.querySelectorAll('input[name="unidad"], select[name="unidad_extra"]').forEach((field) => {
+    field.tabIndex = -1;
+  });
+
+  unitPicker.addEventListener("keydown", (event) => {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const units = UNIT_OPTIONS;
+      const current = getSelectedPosUnit(form) || units[0];
+      const direction = event.shiftKey ? -1 : 1;
+      const currentIndex = Math.max(0, units.indexOf(current));
+      const nextUnit = units[(currentIndex + direction + units.length) % units.length];
+      setSelectedPosUnit(form, nextUnit);
+      unitPicker.focus();
+      return;
+    }
+
+    if (event.key.toLowerCase() === "q") {
+      event.preventDefault();
+      focusNextAfter(form, unitPicker);
+    }
+  });
 }
 
 function getPosFormPayload(form, receiptDate) {
@@ -2209,6 +2252,150 @@ function closeBulkModal() {
   elements.bulkModal.hidden = true;
 }
 
+function parseDelimitedText(text, delimiter = ";") {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"') {
+      if (quoted && next === '"') {
+        cell += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+
+    if (char === delimiter && !quoted) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell);
+      if (row.some((value) => value.trim())) rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell);
+  if (row.some((value) => value.trim())) rows.push(row);
+  return rows;
+}
+
+function normalizeLegacyHeader(header) {
+  return normalize(header.replace(/^\ufeff/, "")).replaceAll(" ", "_");
+}
+
+function buildLegacyObservation(row) {
+  const parts = [];
+  if (row.observaciones) parts.push(row.observaciones.trim());
+  if (row.estado) parts.push(`Estado version antigua: ${row.estado.trim()}`);
+  return parts.filter(Boolean).join("\n") || null;
+}
+
+function legacyInventoryRowToPayload(row, index) {
+  const nombre = (row.producto || row.nombre || "").trim();
+  const cantidad = Number(String(row.cantidad || "").replace(",", "."));
+  const unidad = (row.unidad || "kg").trim().toLowerCase();
+  const fechaRecepcion = parseDateInput(row.fecha_recepcion || "") || formatIsoDate(new Date());
+  const fechaVencimiento = row.fecha_vencimiento ? parseDateInput(row.fecha_vencimiento) : null;
+  const lote = normalizeLotValue(row.lote || "");
+  const errors = [];
+
+  if (!nombre) errors.push("producto obligatorio");
+  if (!cantidad || cantidad <= 0) errors.push("cantidad debe ser mayor que cero");
+  if (!UNIT_OPTIONS.includes(unidad)) errors.push(`unidad invalida (${unidad || "vacia"})`);
+  if (!isValidIsoDate(fechaRecepcion)) errors.push("fecha recepcion invalida");
+  if (fechaVencimiento && !isValidIsoDate(fechaVencimiento)) errors.push("fecha vencimiento invalida");
+  if (!lote) errors.push("lote obligatorio");
+
+  if (errors.length) {
+    throw new Error(`Fila ${index + 2}: ${errors.join(", ")}`);
+  }
+
+  return {
+    nombre,
+    nombreNormalizado: normalize(nombre),
+    cantidad,
+    unidad,
+    fechaRecepcion,
+    fechaVencimiento,
+    critico: false,
+    lote,
+    observaciones: buildLegacyObservation(row)
+  };
+}
+
+function parseLegacyInventoryCsv(text) {
+  const table = parseDelimitedText(text, ";");
+  if (table.length < 2) throw new Error("El CSV no tiene filas para importar.");
+
+  const headers = table[0].map(normalizeLegacyHeader);
+  const required = ["producto", "cantidad", "unidad", "fecha_recepcion", "fecha_vencimiento", "lote"];
+  const missing = required.filter((header) => !headers.includes(header));
+  if (missing.length) throw new Error(`Faltan columnas del CSV antiguo: ${missing.join(", ")}.`);
+
+  return table.slice(1).map((cells, rowIndex) => {
+    const row = {};
+    headers.forEach((header, cellIndex) => {
+      row[header] = (cells[cellIndex] || "").trim();
+    });
+    return legacyInventoryRowToPayload(row, rowIndex);
+  });
+}
+
+function readTextFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("No se pudo leer el archivo."));
+    reader.readAsText(file, "utf-8");
+  });
+}
+
+async function importLegacyInventoryFile(file) {
+  if (!file) return;
+  elements.bulkErrorList.hidden = true;
+  elements.bulkErrorList.innerHTML = "";
+
+  try {
+    const text = await readTextFile(file);
+    const rows = parseLegacyInventoryCsv(text);
+    if (!rows.length) throw new Error("No se encontraron productos en el CSV.");
+    state.bulkSessionRows = rows;
+    state.bulkEditingIndex = null;
+
+    const receiptDates = [...new Set(rows.map((row) => row.fechaRecepcion).filter(Boolean))];
+    if (receiptDates.length === 1) {
+      elements.bulkReceiptDate.value = receiptDates[0];
+      elements.bulkReceiptDisplay.textContent = formatReceiptDisplay(receiptDates[0]);
+    }
+
+    elements.bulkProductsSummary.open = true;
+    clearPosForm(elements.bulkProductForm);
+    renderPosSession("bulk");
+    showToastSuccess(`CSV antiguo cargado: ${rows.length} productos.`);
+  } catch (error) {
+    elements.bulkErrorList.hidden = false;
+    elements.bulkErrorList.innerHTML = `<div>${escapeHtml(error.message)}</div>`;
+  } finally {
+    elements.legacyInventoryFile.value = "";
+  }
+}
+
 function isBulkRowEmpty(row) {
   return BULK_COLUMNS
     .filter((column) => column !== "critico")
@@ -2806,6 +2993,9 @@ elements.editForm.addEventListener("submit", async (event) => {
 
 document.getElementById("bulkEntryBtn").addEventListener("click", openBulkModal);
 document.getElementById("cancelBulk").addEventListener("click", closeBulkModal);
+elements.legacyInventoryFile.addEventListener("change", (event) => {
+  importLegacyInventoryFile(event.target.files?.[0]);
+});
 elements.bulkProductForm.addEventListener("submit", (event) => {
   event.preventDefault();
   addOrUpdatePosRow("bulk");
@@ -2995,6 +3185,10 @@ setupDateAutoAdvance(elements.operatorProductForm);
 [elements.entryForm, elements.editForm, elements.bulkProductForm, elements.operatorProductForm].forEach((form) => {
   bindLotUppercase(form.elements.lote);
 });
+[elements.bulkProductForm, elements.operatorProductForm].forEach((form) => {
+  setupUnitKeyboard(form);
+  form.elements.gramos.addEventListener("input", () => sanitizeGramsInput(form.elements.gramos));
+});
 elements.bulkProductForm.elements.nombre.addEventListener("input", () => {
   const product = findProductByName(elements.bulkProductForm.elements.nombre.value);
   if (product?.unidad_default) setSelectedPosUnit(elements.bulkProductForm, product.unidad_default);
@@ -3103,14 +3297,6 @@ if ("serviceWorker" in navigator) {
 
 updateInstallUi();
 checkInitialSession();
-
-
-
-
-
-
-
-
 
 
 
