@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color-scheme: dark;
   --bg: #090d14;
   --panel: #111827;
@@ -271,7 +271,7 @@ button, input, select, textarea { font: inherit; }
 
 .pos-product-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 70px auto;
   gap: 12px;
   align-items: end;
 }
@@ -320,6 +320,26 @@ button, input, select, textarea { font: inherit; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.grams-field {
+  width: 70px;
+}
+
+.grams-field input {
+  padding-inline: 8px;
+  text-align: center;
+}
+
+.pos-field input:focus,
+.expiry-box input:focus,
+.unit-tiles:focus,
+.unit-tiles:focus-within,
+.unit-tiles select:focus,
+.optional-note textarea:focus,
+.critical-toggle:focus-within {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 3px rgba(242, 201, 76, 0.22);
 }
 
 .critical-toggle {
@@ -393,6 +413,12 @@ button, input, select, textarea { font: inherit; }
   border-color: var(--blue);
   background: rgba(79, 140, 255, 0.24);
   color: #fff;
+}
+
+.unit-tiles:focus label:has(input:checked),
+.unit-tiles:focus-within label:has(input:checked) {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 3px rgba(242, 201, 76, 0.22);
 }
 
 .unit-tiles select {
@@ -578,6 +604,7 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   color: #0057d9;
 }
 .btn.small { min-height: 32px; padding: 0 10px; font-size: 0.78rem; }
+.file-import-btn { display: inline-flex; align-items: center; white-space: nowrap; }
 .btn.danger-btn { border-color: rgba(239, 83, 80, 0.42); color: #ffc4c2; }
 .btn.logout-btn {
   border-color: rgba(135, 146, 162, 0.28);
@@ -1337,7 +1364,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   .compact-critical-item { grid-template-columns: 1fr 1fr; }
   .alert-card { grid-template-columns: 1fr; align-items: start; }
   .pos-summary summary { grid-template-columns: minmax(0, 1fr) auto; }
-  .pos-product-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .pos-product-row { grid-template-columns: minmax(0, 1fr) 64px auto; }
   .qty-unit-row { grid-template-columns: 68px minmax(0, 1fr); }
   .date-lot-row {
     grid-template-columns: max-content minmax(130px, 170px);
@@ -1464,7 +1491,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   }
 
   .pos-product-row {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 54px auto;
     gap: 7px;
   }
 
@@ -1477,6 +1504,10 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
     min-height: 46px;
     padding-inline: 10px;
     font-size: 0.72rem;
+  }
+
+  .grams-field {
+    width: 54px;
   }
 
   .qty-unit-row {
@@ -1651,12 +1682,16 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
     overflow: auto;
   }
   .pos-product-row {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 54px auto;
     gap: 8px;
   }
   .critical-toggle {
     min-height: 46px;
     padding-inline: 10px;
+  }
+
+  .grams-field {
+    width: 54px;
   }
   .qty-unit-row {
     grid-template-columns: 58px minmax(0, 1fr);
