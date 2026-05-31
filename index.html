@@ -78,6 +78,10 @@
                 <span>Producto</span>
                 <input name="nombre" type="text" list="productSuggestions" autocomplete="off" placeholder="Coca cola">
               </label>
+              <label class="pos-field grams-field">
+                <span>Grs</span>
+                <input name="gramos" type="text" maxlength="3" inputmode="numeric" pattern="[0-9]{0,3}" placeholder="000">
+              </label>
               <label class="critical-toggle">
                 <input name="critico" type="checkbox">
                 <span>Crítico</span>
@@ -89,7 +93,7 @@
                 <span>Cantidad</span>
                 <input name="cantidad" type="number" min="0.001" step="0.001" placeholder="12">
               </label>
-              <fieldset class="unit-tiles">
+              <fieldset class="unit-tiles" tabindex="0">
                 <legend>Unidad</legend>
                 <label><input type="radio" name="unidad" value="kg" checked><span>KG</span></label>
                 <label><input type="radio" name="unidad" value="lt"><span>LT</span></label>
@@ -103,11 +107,6 @@
                 </select>
               </fieldset>
             </div>
-
-            <label class="pos-field grams-field">
-              <span>Gramos</span>
-              <input name="gramos" type="number" min="0" step="1" inputmode="numeric" placeholder="Opcional">
-            </label>
 
             <div class="pos-grid two date-lot-row">
               <fieldset class="expiry-box">
@@ -515,6 +514,10 @@
               <span>Producto</span>
               <input name="nombre" type="text" list="productSuggestions" autocomplete="off" placeholder="Coca cola">
             </label>
+            <label class="pos-field grams-field">
+              <span>Grs</span>
+              <input name="gramos" type="text" maxlength="3" inputmode="numeric" pattern="[0-9]{0,3}" placeholder="000">
+            </label>
             <label class="critical-toggle">
               <input name="critico" type="checkbox">
               <span>Crítico</span>
@@ -526,7 +529,7 @@
               <span>Cantidad</span>
               <input name="cantidad" type="number" min="0.001" step="0.001" placeholder="12">
             </label>
-            <fieldset class="unit-tiles">
+            <fieldset class="unit-tiles" tabindex="0">
               <legend>Unidad</legend>
               <label><input type="radio" name="unidad" value="kg" checked><span>KG</span></label>
               <label><input type="radio" name="unidad" value="lt"><span>LT</span></label>
@@ -540,11 +543,6 @@
               </select>
             </fieldset>
           </div>
-
-          <label class="pos-field grams-field">
-            <span>Gramos</span>
-            <input name="gramos" type="number" min="0" step="1" inputmode="numeric" placeholder="Opcional">
-          </label>
 
           <div class="pos-grid two date-lot-row">
             <fieldset class="expiry-box">
@@ -920,8 +918,6 @@
     <script src="script.js?v=6"></script>
   </body>
 </html>
-
-
 
 
 
