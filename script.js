@@ -3225,6 +3225,8 @@ setupDateAutoAdvance(elements.operatorProductForm);
 [elements.bulkProductForm, elements.operatorProductForm].forEach((form) => {
   setupUnitKeyboard(form);
   setupCriticalKeyboard(form);
+  form.querySelector(".optional-note summary")?.setAttribute("tabindex", "-1");
+  form.elements.observaciones.tabIndex = -1;
   form.elements.gramos.addEventListener("input", () => sanitizeGramsInput(form.elements.gramos));
 });
 elements.bulkProductForm.elements.nombre.addEventListener("input", () => {
@@ -3335,11 +3337,6 @@ if ("serviceWorker" in navigator) {
 
 updateInstallUi();
 checkInitialSession();
-
-
-
-
-
 
 
 
