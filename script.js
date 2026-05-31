@@ -1222,6 +1222,17 @@ function setupCriticalKeyboard(form) {
   });
 }
 
+function setupOptionalObservationTab(form) {
+  const optionalNote = form.querySelector(".optional-note");
+  if (!optionalNote) return;
+  form.elements.lote.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab" || event.shiftKey) return;
+    event.preventDefault();
+    optionalNote.open = true;
+    form.elements.observaciones.focus();
+  });
+}
+
 function getPosFormPayload(form, receiptDate) {
   const nombre = form.elements.nombre.value.trim();
   const cantidad = Number(form.elements.cantidad.value);
@@ -1336,6 +1347,7 @@ function addOrUpdatePosRow(kind) {
     ctx.errorList.innerHTML = "";
     clearPosForm(ctx.form);
     renderPosSession(kind);
+    requestAnimationFrame(() => ctx.form.elements.nombre.focus());
   } catch (error) {
     ctx.errorList.hidden = false;
     ctx.errorList.innerHTML = `<div>${escapeHtml(error.message)}</div>`;
@@ -1363,6 +1375,7 @@ function clearPosForm(form) {
   form.querySelector('input[name="unidad"][value="kg"]').checked = true;
   form.elements.unidad_extra.value = "";
   form.elements.gramos.value = "";
+  form.querySelector(".optional-note")?.removeAttribute("open");
   form.elements.nombre.focus();
 }
 
@@ -2278,8 +2291,9 @@ function createBulkInput(name, type = "text", value = "") {
 }
 
 function openBulkModal() {
-  resetPosSession("bulk");
   elements.bulkModal.hidden = false;
+  resetPosSession("bulk");
+  requestAnimationFrame(() => elements.bulkProductForm.elements.nombre.focus());
 }
 
 function closeBulkModal() {
@@ -3222,6 +3236,7 @@ setupDateAutoAdvance(elements.operatorProductForm);
 [elements.bulkProductForm, elements.operatorProductForm].forEach((form) => {
   setupUnitKeyboard(form);
   setupCriticalKeyboard(form);
+  setupOptionalObservationTab(form);
   form.elements.gramos.addEventListener("input", () => sanitizeGramsInput(form.elements.gramos));
 });
 elements.bulkProductForm.elements.nombre.addEventListener("input", () => {
@@ -3332,6 +3347,13 @@ if ("serviceWorker" in navigator) {
 
 updateInstallUi();
 checkInitialSession();
+
+
+
+
+
+
+
 
 
 
