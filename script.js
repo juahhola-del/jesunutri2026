@@ -1222,17 +1222,6 @@ function setupCriticalKeyboard(form) {
   });
 }
 
-function setupOptionalObservationTab(form) {
-  const optionalNote = form.querySelector(".optional-note");
-  if (!optionalNote) return;
-  form.elements.lote.addEventListener("keydown", (event) => {
-    if (event.key !== "Tab" || event.shiftKey) return;
-    event.preventDefault();
-    optionalNote.open = true;
-    form.elements.observaciones.focus();
-  });
-}
-
 function getPosFormPayload(form, receiptDate) {
   const nombre = form.elements.nombre.value.trim();
   const cantidad = Number(form.elements.cantidad.value);
@@ -3236,7 +3225,6 @@ setupDateAutoAdvance(elements.operatorProductForm);
 [elements.bulkProductForm, elements.operatorProductForm].forEach((form) => {
   setupUnitKeyboard(form);
   setupCriticalKeyboard(form);
-  setupOptionalObservationTab(form);
   form.elements.gramos.addEventListener("input", () => sanitizeGramsInput(form.elements.gramos));
 });
 elements.bulkProductForm.elements.nombre.addEventListener("input", () => {
@@ -3347,11 +3335,6 @@ if ("serviceWorker" in navigator) {
 
 updateInstallUi();
 checkInitialSession();
-
-
-
-
-
 
 
 
