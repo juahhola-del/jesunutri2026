@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Jesunutri">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=11">
+    <link rel="stylesheet" href="styles.css?v=12">
   </head>
   <body>
     <section class="app-splash" id="appSplash">
@@ -409,7 +409,8 @@
                 <option value="ignored">Ignorados</option>
                 <option value="inconsistencies">Inconsistencias PAC</option>
               </select>
-              <button class="btn primary" type="button" id="clinicalAcceptHighConfidenceBtn">Aceptar sugerencias altas</button>
+              <button class="btn primary" type="button" id="clinicalAcceptHighConfidenceBtn">Preseleccionar sugerencias &gt;80%</button>
+              <button class="btn" type="button" id="clinicalLinkReviewedBtn">Vincular seleccionados revisados</button>
               <button class="btn" type="button" data-clinical-export="conciliacion_pendientes">Exportar pendientes</button>
               <button class="btn" type="button" id="clinicalCreateMissingProductsBtn">Crear productos faltantes desde PAC</button>
             </div>
@@ -1235,7 +1236,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="script.js?v=11"></script>
+    <script src="script.js?v=12"></script>
   </body>
 </html>
 

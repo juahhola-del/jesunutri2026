@@ -287,6 +287,7 @@ const elements = {
   clinicalBudgetTableBody: document.getElementById("clinicalBudgetTableBody"),
   clinicalReconcileFilter: document.getElementById("clinicalReconcileFilter"),
   clinicalAcceptHighConfidenceBtn: document.getElementById("clinicalAcceptHighConfidenceBtn"),
+  clinicalLinkReviewedBtn: document.getElementById("clinicalLinkReviewedBtn"),
   clinicalCreateMissingProductsBtn: document.getElementById("clinicalCreateMissingProductsBtn"),
   clinicalReconcileSummary: document.getElementById("clinicalReconcileSummary"),
   clinicalPacInconsistencyList: document.getElementById("clinicalPacInconsistencyList"),
@@ -902,17 +903,13 @@ function getClinicalLinkForPacRow(row) {
   );
 }
 
-function getClinicalLinkedProductByPacRow(row, { allowSuggestion = true } = {}) {
+function getClinicalLinkedProductByPacRow(row) {
   const link = getClinicalLinkForPacRow(row);
   if (link?.ignored) return null;
   const linked = link?.productoId ? findProductById(link.productoId) : null;
   if (linked) return linked;
   if (row.productoId) return findProductById(row.productoId);
-  if (allowSuggestion) {
-    const suggestion = suggestClinicalProductForPacRow(row);
-    if (suggestion.product && suggestion.confidence >= 88) return suggestion.product;
-  }
-  return findProductByName(row.producto);
+  return null;
 }
 
 function buildClinicalProductLink(row, product, status = "vinculado", confidence = 100, method = "manual") {
@@ -1821,9 +1818,13 @@ function getClinicalReconciliationRows() {
       status = "vinculado";
       confidence = Number(link.matchConfidence || 100);
       method = link.matchMethod || "manual";
-    } else if (suggestion.product && suggestion.confidence >= 55) {
+    } else if (suggestion.product && suggestion.confidence >= 80) {
       product = suggestion.product;
-      status = suggestion.confidence >= 88 ? "sugerido" : "conflicto";
+      status = "sugerido";
+    } else if (suggestion.product && suggestion.confidence >= 65) {
+      status = "conflicto";
+      confidence = suggestion.confidence;
+      method = suggestion.method;
     }
 
     return {
@@ -1877,7 +1878,7 @@ function renderClinicalReconciliation() {
 
   elements.clinicalReconcileTableBody.innerHTML = filteredRows.length
     ? filteredRows.map((row) => {
-        const productName = row.linkedProduct?.nombre || row.suggestedProduct?.nombre || "";
+        const productName = row.status === "vinculado" || row.status === "sugerido" ? (row.linkedProduct?.nombre || row.suggestedProduct?.nombre || "") : "";
         return `
           <tr>
             <td>${escapeHtml(row.codigo || "-")}</td>
@@ -1892,11 +1893,10 @@ function renderClinicalReconciliation() {
             <td>${formatNumber(row.confidence)}% ${escapeHtml(row.method || "")}</td>
             <td>
               <div class="clinical-row-actions">
-                <button class="btn small" type="button" data-link-manual="${escapeHtml(row.id)}">Vincular</button>
-                ${row.status === "sugerido" || row.status === "conflicto" ? `<button class="btn small" type="button" data-link-accept="${escapeHtml(row.id)}">Aceptar</button>` : ""}
+                <button class="btn small" type="button" data-link-manual="${escapeHtml(row.id)}">Vincular seleccionado</button>
+                <button class="btn small" type="button" data-link-create-product="${escapeHtml(row.id)}">Crear producto</button>
                 <button class="btn small" type="button" data-link-unlink="${escapeHtml(row.id)}">Desvincular</button>
                 <button class="btn small" type="button" data-link-ignore="${escapeHtml(row.id)}">Ignorar</button>
-                <button class="btn small" type="button" data-link-create-product="${escapeHtml(row.id)}">Crear</button>
               </div>
             </td>
           </tr>
@@ -1967,23 +1967,29 @@ async function linkClinicalPacRowToProduct(row, product, status = "vinculado", c
   renderClinicalSupply();
 }
 
-async function acceptClinicalSuggestion(row) {
-  const suggestion = suggestClinicalProductForPacRow(row);
-  if (!suggestion.product) {
-    showToastError("No hay sugerencia para aceptar.");
-    return;
-  }
-  await linkClinicalPacRowToProduct(row, suggestion.product, "vinculado", suggestion.confidence, suggestion.method);
-  showToastSuccess("Sugerencia aceptada.");
+function preselectHighConfidenceClinicalSuggestions() {
+  state.clinicalSupply.reconcileFilter = "suggested";
+  saveClinicalSupplyState();
+  renderClinicalSupply();
+  const count = getClinicalReconciliationRows().filter((row) => row.status === "sugerido").length;
+  showToastSuccess(`${count} sugerencias preseleccionadas para revision.`);
 }
 
-async function acceptHighConfidenceClinicalSuggestions() {
-  const rows = getClinicalReconciliationRows().filter((row) => row.status === "sugerido" && row.suggestedProduct && row.confidence >= 88);
-  for (const row of rows) {
-    await linkClinicalPacRowToProduct(row, row.suggestedProduct, "vinculado", row.confidence, row.method);
+async function linkReviewedClinicalSelections() {
+  const inputs = [...elements.clinicalReconcileTableBody.querySelectorAll("[data-link-input]")];
+  let linked = 0;
+  for (const input of inputs) {
+    const row = getClinicalPacRowById(input.dataset.linkInput);
+    const product = findProductByName(input.value || "");
+    if (!row || !product) continue;
+    const suggestion = suggestClinicalProductForPacRow(row);
+    const confidence = product.id === suggestion.product?.id ? suggestion.confidence : 100;
+    const method = product.id === suggestion.product?.id ? suggestion.method : "manual";
+    await linkClinicalPacRowToProduct(row, product, "vinculado", confidence, method);
+    linked += 1;
   }
   renderClinicalSupply();
-  showToastSuccess(`${rows.length} sugerencias aceptadas.`);
+  showToastSuccess(`${linked} productos vinculados manualmente.`);
 }
 
 async function createMissingClinicalProductsFromPac() {
@@ -2005,13 +2011,12 @@ async function createMissingClinicalProductsFromPac() {
 
 async function handleClinicalReconciliationAction(target) {
   const manualId = target.dataset.linkManual;
-  const acceptId = target.dataset.linkAccept;
   const unlinkId = target.dataset.linkUnlink;
   const ignoreId = target.dataset.linkIgnore;
   const createId = target.dataset.linkCreateProduct;
   const recalcId = target.dataset.pacRecalcAnnual;
   const reviewId = target.dataset.pacReviewInconsistency;
-  const rowId = manualId || acceptId || unlinkId || ignoreId || createId || recalcId || reviewId;
+  const rowId = manualId || unlinkId || ignoreId || createId || recalcId || reviewId;
   if (!rowId) return false;
   const row = getClinicalPacRowById(rowId);
   if (!row) return true;
@@ -2025,10 +2030,6 @@ async function handleClinicalReconciliationAction(target) {
     }
     await linkClinicalPacRowToProduct(row, product);
     showToastSuccess("Producto vinculado.");
-    return true;
-  }
-  if (acceptId) {
-    await acceptClinicalSuggestion(row);
     return true;
   }
   if (unlinkId) {
@@ -2284,7 +2285,7 @@ function getClinicalRealOrderComparison(row, allRows) {
   const duplicateCode = row.codigo && allRows.filter((item) => item.codigo && item.codigo === row.codigo).length > 1;
   const duplicateProduct = row.producto && allRows.filter((item) => normalize(item.producto) === normalize(row.producto)).length > 1;
   const pacRow = state.clinicalSupply.pacRows.find((item) => (row.codigo && normalize(item.codigo) === normalize(row.codigo)) || normalize(item.producto) === normalize(row.producto));
-  const linkedProduct = pacRow ? getClinicalLinkedProductByPacRow(pacRow, { allowSuggestion: false }) : null;
+  const linkedProduct = pacRow ? getClinicalLinkedProductByPacRow(pacRow) : null;
   const product = linkedProduct || (row.productoId && findProductById(row.productoId)) || findProductByName(row.producto);
   const orderRow = (getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows())
     .find((item) => normalize(item.producto) === normalize(row.producto) || (row.codigo && normalize(item.codigo) === normalize(row.codigo)));
@@ -5416,7 +5417,7 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  const reconciliationAction = event.target.closest("[data-link-manual], [data-link-accept], [data-link-unlink], [data-link-ignore], [data-link-create-product], [data-pac-recalc-annual], [data-pac-review-inconsistency]");
+  const reconciliationAction = event.target.closest("[data-link-manual], [data-link-unlink], [data-link-ignore], [data-link-create-product], [data-pac-recalc-annual], [data-pac-review-inconsistency]");
   if (reconciliationAction) {
     handleClinicalReconciliationAction(reconciliationAction).catch((error) => showError("No se pudo actualizar conciliacion", error));
     return;
@@ -5822,7 +5823,17 @@ elements.clinicalReconcileFilter.addEventListener("change", (event) => {
   renderClinicalReconciliation();
 });
 elements.clinicalAcceptHighConfidenceBtn.addEventListener("click", () => {
-  acceptHighConfidenceClinicalSuggestions().catch((error) => showError("No se pudieron aceptar sugerencias", error));
+  preselectHighConfidenceClinicalSuggestions();
+});
+elements.clinicalLinkReviewedBtn.addEventListener("click", async () => {
+  const confirmed = await showModalConfirm({
+    title: "Vincular seleccionados",
+    message: "Se vincularan solo los productos visibles que tengan un producto de inventario seleccionado en el campo de busqueda.",
+    confirmText: "Vincular",
+    variant: "warning"
+  });
+  if (!confirmed) return;
+  linkReviewedClinicalSelections().catch((error) => showError("No se pudieron vincular seleccionados", error));
 });
 elements.clinicalCreateMissingProductsBtn.addEventListener("click", async () => {
   const confirmed = await showModalConfirm({
