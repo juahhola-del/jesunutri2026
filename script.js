@@ -64,14 +64,24 @@ const CLINICAL_ORDER_STATUS = {
   approved: "aprobado",
   exported: "exportado"
 };
+const CLINICAL_DEMAND_LIMITS = {
+  totalPatients: 1000,
+  dietQuantity: 1000,
+  enteralItems: 500,
+  supplyItems: 5000,
+  supplyQuantity: 5000
+};
 const CLINICAL_DEMAND_DIET_KEYWORDS = [
-  "liviano",
-  "diabetico",
-  "vegetariano",
+  "regimen liviano",
+  "regimen diabetico",
+  "regimen comun",
   "sin residuos",
+  "diabetico",
+  "liviano",
+  "blando",
+  "vegetariano",
   "papilla",
   "gtt",
-  "blando",
   "hiposodico",
   "renal",
   "liquido"
@@ -169,6 +179,7 @@ const state = {
     dailyEnteralItems: [],
     dailySupplyItems: [],
     dailyImportErrors: [],
+    dailyBulkImportDiagnostics: null,
     history: {
       pacYears: [],
       monthlyOrders: [],
@@ -301,12 +312,19 @@ const elements = {
   clinicalDemandDate: document.getElementById("clinicalDemandDate"),
   clinicalDemandNotes: document.getElementById("clinicalDemandNotes"),
   clinicalDemandFile: document.getElementById("clinicalDemandFile"),
+  clinicalDemandMonthFile: document.getElementById("clinicalDemandMonthFile"),
+  clinicalDemandDuplicatePolicy: document.getElementById("clinicalDemandDuplicatePolicy"),
   clinicalDemandEditSelect: document.getElementById("clinicalDemandEditSelect"),
   clinicalDemandPatientsInput: document.getElementById("clinicalDemandPatientsInput"),
+  clinicalDemandEditNotes: document.getElementById("clinicalDemandEditNotes"),
   clinicalDemandDietName: document.getElementById("clinicalDemandDietName"),
   clinicalDemandDietQty: document.getElementById("clinicalDemandDietQty"),
   clinicalDemandDietNotes: document.getElementById("clinicalDemandDietNotes"),
   clinicalDemandSaveManualBtn: document.getElementById("clinicalDemandSaveManualBtn"),
+  clinicalDemandMarkReviewedBtn: document.getElementById("clinicalDemandMarkReviewedBtn"),
+  clinicalDemandBulkDiagnostic: document.getElementById("clinicalDemandBulkDiagnostic"),
+  clinicalDemandBulkDiagnosticMeta: document.getElementById("clinicalDemandBulkDiagnosticMeta"),
+  clinicalDemandBulkDiagnosticBody: document.getElementById("clinicalDemandBulkDiagnosticBody"),
   clinicalDemandDailySummary: document.getElementById("clinicalDemandDailySummary"),
   clinicalDemandMonthlySummary: document.getElementById("clinicalDemandMonthlySummary"),
   clinicalDemandWarnings: document.getElementById("clinicalDemandWarnings"),
@@ -1044,6 +1062,7 @@ function loadClinicalSupplyLocalState() {
       dailyEnteralItems: Array.isArray(saved.dailyEnteralItems) ? saved.dailyEnteralItems : [],
       dailySupplyItems: Array.isArray(saved.dailySupplyItems) ? saved.dailySupplyItems : [],
       dailyImportErrors: Array.isArray(saved.dailyImportErrors) ? saved.dailyImportErrors : [],
+      dailyBulkImportDiagnostics: saved.dailyBulkImportDiagnostics || null,
       history: { ...getClinicalDefaultHistory(), ...(saved.history || {}) }
     };
     return true;
@@ -1300,6 +1319,7 @@ function setupClinicalSupplyControls() {
   elements.clinicalPacFile.accept = accept;
   elements.clinicalRealOrderFile.accept = accept;
   if (elements.clinicalDemandFile) elements.clinicalDemandFile.accept = accept;
+  if (elements.clinicalDemandMonthFile) elements.clinicalDemandMonthFile.accept = accept;
 }
 
 function normalizeClinicalHeader(value) {
@@ -2750,6 +2770,7 @@ function getClinicalExportRows(type) {
     enterales_modulos: row.enteralTotal,
     insumos_detectados: row.supplyTotal,
     advertencias: row.warningCount,
+    lectura_sospechosa: row.suspiciousReading ? "si" : "no",
     observaciones: row.observations
   }));
   if (type === "demanda_dietas") return state.clinicalSupply.dailyDietCounts.map((row) => ({
@@ -2887,7 +2908,30 @@ function pushClinicalDemandWarning(collection, demandId, sheetName, message, row
   });
 }
 
-function inferClinicalDemandDate(sheets, fallbackDate) {
+function parseClinicalDemandDateFromText(text = "") {
+  const clean = String(text || "").replace(/\.[^.]+$/, "");
+  let match = clean.match(/(?:^|[^\d])(\d{1,2})[\s_.-](\d{1,2})[\s_.-](\d{2,4})(?:[^\d]|$)/);
+  if (match) {
+    const day = match[1].padStart(2, "0");
+    const month = match[2].padStart(2, "0");
+    const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+    const date = new Date(`${year}-${month}-${day}T00:00:00`);
+    if (!Number.isNaN(date.getTime()) && Number(date.getMonth()) + 1 === Number(month)) return `${year}-${month}-${day}`;
+  }
+  match = clean.match(/(?:^|[^\d])(\d{4})[\s_.-](\d{1,2})[\s_.-](\d{1,2})(?:[^\d]|$)/);
+  if (match) {
+    const year = match[1];
+    const month = match[2].padStart(2, "0");
+    const day = match[3].padStart(2, "0");
+    const date = new Date(`${year}-${month}-${day}T00:00:00`);
+    if (!Number.isNaN(date.getTime()) && Number(date.getMonth()) + 1 === Number(month)) return `${year}-${month}-${day}`;
+  }
+  return "";
+}
+
+function inferClinicalDemandDate(sheets, fallbackDate, fileName = "") {
+  const fileDate = parseClinicalDemandDateFromText(fileName);
+  if (fileDate) return fileDate;
   const datePattern = /(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/;
   for (const sheet of sheets) {
     for (const row of sheet.rows.slice(0, 20)) {
@@ -2900,21 +2944,36 @@ function inferClinicalDemandDate(sheets, fallbackDate) {
       return `${year}-${month}-${day}`;
     }
   }
-  return fallbackDate || formatIsoDate(new Date());
+  return fallbackDate || "";
 }
 
-function extractNumberNearDemandKeyword(row, keywordIndex) {
-  const sameCell = String(row[keywordIndex] || "").match(/(\d+(?:[.,]\d+)?)/);
-  if (sameCell) return parseClinicalNumber(sameCell[1]);
+function isClinicalLikelyDateOrCode(value = "") {
+  const text = String(value || "").trim();
+  return /\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b/.test(text) || /^\d{4,}$/.test(text);
+}
+
+function extractNumberNearDemandKeyword(row, keywordIndex, { max = Infinity } = {}) {
+  const sameText = String(row[keywordIndex] || "");
+  const sameCell = sameText.match(/(\d+(?:[.,]\d+)?)/);
+  if (sameCell && !isClinicalLikelyDateOrCode(sameText)) {
+    const value = parseClinicalNumber(sameCell[1]);
+    if (value <= max) return value;
+  }
   for (let index = keywordIndex + 1; index < Math.min(row.length, keywordIndex + 4); index += 1) {
+    if (isClinicalLikelyDateOrCode(row[index])) continue;
     const number = parseClinicalNumber(row[index]);
-    if (number > 0 || String(row[index] || "").trim() === "0") return number;
+    if ((number > 0 || String(row[index] || "").trim() === "0") && number <= max) return number;
   }
   for (let index = Math.max(0, keywordIndex - 3); index < keywordIndex; index += 1) {
+    if (isClinicalLikelyDateOrCode(row[index])) continue;
     const number = parseClinicalNumber(row[index]);
-    if (number > 0 || String(row[index] || "").trim() === "0") return number;
+    if ((number > 0 || String(row[index] || "").trim() === "0") && number <= max) return number;
   }
   return 0;
+}
+
+function getClinicalSuspiciousMessage(kind, value, limit) {
+  return `Lectura sospechosa, requiere revision manual: ${kind} ${formatNumber(value)} supera limite ${formatNumber(limit)}.`;
 }
 
 function extractClinicalDemand(sheetPayload, { file, demandDate, observations }) {
@@ -2924,6 +2983,7 @@ function extractClinicalDemand(sheetPayload, { file, demandDate, observations })
   const supplyItems = [];
   const errors = [];
   let totalPatients = 0;
+  let suspiciousReading = false;
 
   sheetPayload.forEach((sheet) => {
     const sheetKey = normalize(sheet.sheetName || "");
@@ -2932,16 +2992,31 @@ function extractClinicalDemand(sheetPayload, { file, demandDate, observations })
       const line = normalizedCells.join(" ");
       if (!line.trim()) return;
 
-      if (/total|usuarios|pacientes/.test(line)) {
-        const keywordIndex = normalizedCells.findIndex((cell) => /total|usuarios|pacientes/.test(cell));
-        const value = extractNumberNearDemandKeyword(row, Math.max(0, keywordIndex));
-        if (value > totalPatients) totalPatients = value;
+      if (/(total\s+(de\s+)?(pacientes|usuarios)|(pacientes|usuarios)\s+total)/.test(line)) {
+        const keywordIndex = normalizedCells.findIndex((cell) => /(total|pacientes|usuarios)/.test(cell));
+        const rawValue = extractNumberNearDemandKeyword(row, Math.max(0, keywordIndex), { max: Number.MAX_SAFE_INTEGER });
+        if (rawValue > CLINICAL_DEMAND_LIMITS.totalPatients) {
+          suspiciousReading = true;
+          pushClinicalDemandWarning(errors, demandId, sheet.sheetName, getClinicalSuspiciousMessage("pacientes", rawValue, CLINICAL_DEMAND_LIMITS.totalPatients), rowIndex + 1);
+        } else if (rawValue > totalPatients) {
+          totalPatients = rawValue;
+        }
       }
 
       CLINICAL_DEMAND_DIET_KEYWORDS.forEach((keyword) => {
-        const keywordIndex = normalizedCells.findIndex((cell) => cell.includes(keyword));
+        const keywordIndex = normalizedCells.findIndex((cell) => {
+          if (!cell.includes(keyword)) return false;
+          if (["liviano", "diabetico", "comun"].includes(keyword) && cell.includes(`regimen ${keyword}`)) return false;
+          return true;
+        });
         if (keywordIndex < 0) return;
-        const quantity = extractNumberNearDemandKeyword(row, keywordIndex);
+        const rawQuantity = extractNumberNearDemandKeyword(row, keywordIndex, { max: Number.MAX_SAFE_INTEGER });
+        if (rawQuantity > CLINICAL_DEMAND_LIMITS.dietQuantity) {
+          suspiciousReading = true;
+          pushClinicalDemandWarning(errors, demandId, sheet.sheetName, getClinicalSuspiciousMessage(`dieta ${keyword}`, rawQuantity, CLINICAL_DEMAND_LIMITS.dietQuantity), rowIndex + 1);
+          return;
+        }
+        const quantity = rawQuantity;
         if (!quantity && !/gtt|papilla/.test(keyword)) return;
         const dietType = keyword === "diabetico" ? "diabetico" : keyword;
         dietCounts.push({
@@ -2976,7 +3051,14 @@ function extractClinicalDemand(sheetPayload, { file, demandDate, observations })
 
       const looksSupply = CLINICAL_DEMAND_SUPPLY_KEYWORDS.some((keyword) => line.includes(keyword)) || CLINICAL_DEMAND_SUPPLY_KEYWORDS.some((keyword) => sheetKey.includes(keyword));
       if (looksSupply) {
-        const quantity = row.map(parseClinicalNumber).find((value) => value > 0) || 0;
+        const keywordIndex = normalizedCells.findIndex((cell) => CLINICAL_DEMAND_SUPPLY_KEYWORDS.some((keyword) => cell.includes(keyword)));
+        const rawQuantity = keywordIndex >= 0 ? extractNumberNearDemandKeyword(row, keywordIndex, { max: Number.MAX_SAFE_INTEGER }) : 0;
+        if (rawQuantity > CLINICAL_DEMAND_LIMITS.supplyQuantity) {
+          suspiciousReading = true;
+          pushClinicalDemandWarning(errors, demandId, sheet.sheetName, getClinicalSuspiciousMessage("insumo", rawQuantity, CLINICAL_DEMAND_LIMITS.supplyQuantity), rowIndex + 1);
+          return;
+        }
+        const quantity = rawQuantity;
         const product = row.find((cell) => cell && !/^\d+([.,]\d+)?$/.test(String(cell).trim())) || "Insumo detectado";
         supplyItems.push({
           id: `supply-${demandId}-${supplyItems.length}`,
@@ -2996,21 +3078,38 @@ function extractClinicalDemand(sheetPayload, { file, demandDate, observations })
   if (!enteralItems.length) pushClinicalDemandWarning(errors, demandId, "", "No se identificaron enterales, formulas o modulos.");
   if (!supplyItems.length) pushClinicalDemandWarning(errors, demandId, "", "No se identificaron calculos de pan, colaciones o insumos.");
   if (!totalPatients) pushClinicalDemandWarning(errors, demandId, "", "No se pudo identificar total de pacientes.");
+  if (!demandDate) pushClinicalDemandWarning(errors, demandId, "", "No se pudo reconocer fecha desde nombre ni desde ficha; requiere correccion manual.");
+  if (enteralItems.length > CLINICAL_DEMAND_LIMITS.enteralItems) {
+    suspiciousReading = true;
+    pushClinicalDemandWarning(errors, demandId, "", getClinicalSuspiciousMessage("enterales/modulos", enteralItems.length, CLINICAL_DEMAND_LIMITS.enteralItems));
+    enteralItems.length = 0;
+  }
+  if (supplyItems.length > CLINICAL_DEMAND_LIMITS.supplyItems) {
+    suspiciousReading = true;
+    pushClinicalDemandWarning(errors, demandId, "", getClinicalSuspiciousMessage("insumos", supplyItems.length, CLINICAL_DEMAND_LIMITS.supplyItems));
+    supplyItems.length = 0;
+  }
 
   const uniqueDietCounts = [...new Map(dietCounts.map((row) => [`${row.dietType}-${row.sourceSheet}-${row.observation}`, row])).values()];
+  const dietSpecialTotal = uniqueDietCounts.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+  if (dietSpecialTotal > CLINICAL_DEMAND_LIMITS.dietQuantity) {
+    suspiciousReading = true;
+    pushClinicalDemandWarning(errors, demandId, "", getClinicalSuspiciousMessage("dietas especiales", dietSpecialTotal, CLINICAL_DEMAND_LIMITS.dietQuantity));
+  }
   const demand = {
     id: demandId,
-    demandDate,
+    demandDate: demandDate || formatIsoDate(new Date()),
     filename: file?.name || "archivo sin nombre",
     uploadedBy: state.currentUser?.id || null,
     uploadedByName: state.currentUser?.nombre || state.currentUser?.email || "Local",
-    status: errors.length ? "con errores" : "cargada",
-    observations: observations || "",
-    totalPatients,
-    dietSpecialTotal: uniqueDietCounts.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
+    status: errors.length || suspiciousReading ? "con errores" : "cargada",
+    observations: [observations || "", suspiciousReading ? "Lectura sospechosa, requiere revision manual" : ""].filter(Boolean).join(" | "),
+    totalPatients: suspiciousReading && totalPatients > CLINICAL_DEMAND_LIMITS.totalPatients ? 0 : totalPatients,
+    dietSpecialTotal: suspiciousReading && dietSpecialTotal > CLINICAL_DEMAND_LIMITS.dietQuantity ? 0 : dietSpecialTotal,
     enteralTotal: enteralItems.length,
     supplyTotal: supplyItems.length,
     warningCount: errors.length,
+    suspiciousReading,
     createdAt: new Date().toISOString()
   };
 
@@ -3038,6 +3137,29 @@ function mergeClinicalDemandImport(parsed) {
     ...state.clinicalSupply.dailyImportErrors.filter((row) => row.demandId !== parsed.demand.id),
     ...parsed.errors
   ];
+}
+
+function getClinicalDemandDuplicate(date, excludeId = "") {
+  if (!date) return null;
+  return state.clinicalSupply.dailyDemands.find((row) => row.demandDate === date && String(row.id) !== String(excludeId)) || null;
+}
+
+function removeClinicalDemandLocal(demandId) {
+  state.clinicalSupply.dailyDemands = state.clinicalSupply.dailyDemands.filter((row) => String(row.id) !== String(demandId));
+  state.clinicalSupply.dailyDietCounts = state.clinicalSupply.dailyDietCounts.filter((row) => String(row.demandId) !== String(demandId));
+  state.clinicalSupply.dailyEnteralItems = state.clinicalSupply.dailyEnteralItems.filter((row) => String(row.demandId) !== String(demandId));
+  state.clinicalSupply.dailySupplyItems = state.clinicalSupply.dailySupplyItems.filter((row) => String(row.demandId) !== String(demandId));
+  state.clinicalSupply.dailyImportErrors = state.clinicalSupply.dailyImportErrors.filter((row) => String(row.demandId) !== String(demandId));
+}
+
+async function deleteClinicalDemandFromSupabase(demandId) {
+  if (!state.currentUser?.id || !/^[0-9a-f-]{36}$/i.test(String(demandId))) return;
+  const { error } = await supabaseClient
+    .from("clinical_daily_demands")
+    .delete()
+    .eq("id", demandId)
+    .eq("uploaded_by", state.currentUser.id);
+  if (error) throw error;
 }
 
 async function saveClinicalDemandToSupabase(parsed) {
@@ -3159,6 +3281,7 @@ async function loadClinicalDailyDemandFromSupabase() {
     enteralTotal: Number(row.enteral_total || 0),
     supplyTotal: Number(row.supply_total || 0),
     warningCount: Number(row.warning_count || 0),
+    suspiciousReading: row.status === "con errores" && /sospechosa/i.test(row.observations || ""),
     createdAt: row.created_at
   }));
   state.clinicalSupply.dailyDietCounts = (dietResult.data || []).map((row) => ({
@@ -3206,12 +3329,42 @@ async function loadClinicalDailyDemandFromSupabase() {
 async function importClinicalDemandFile(file) {
   if (!file) return;
   const sheets = await parseClinicalDemandWorkbook(file);
-  const demandDate = inferClinicalDemandDate(sheets, elements.clinicalDemandDate.value);
+  const demandDate = inferClinicalDemandDate(sheets, elements.clinicalDemandDate.value, file.name);
   const parsed = extractClinicalDemand(sheets, {
     file,
     demandDate,
     observations: elements.clinicalDemandNotes.value
   });
+  const duplicatePolicy = elements.clinicalDemandDuplicatePolicy?.value || "version";
+  const duplicate = getClinicalDemandDuplicate(parsed.demand.demandDate);
+  if (duplicate && duplicatePolicy === "skip") {
+    state.clinicalSupply.dailyBulkImportDiagnostics = {
+      createdAt: new Date().toISOString(),
+      rows: [{
+        file: file.name,
+        date: parsed.demand.demandDate,
+        status: "duplicado saltado",
+        patients: 0,
+        diets: 0,
+        enterals: 0,
+        supplies: 0,
+        warnings: 1
+      }]
+    };
+    saveClinicalSupplyState();
+    renderClinicalSupply();
+    showToastError("Ya existe una ficha para esa fecha. Se salto por configuracion.");
+    return;
+  }
+  if (duplicate && duplicatePolicy === "replace") {
+    try {
+      await deleteClinicalDemandFromSupabase(duplicate.id);
+    } catch (error) {
+      setClinicalSupabaseReady(false);
+      console.warn("Demanda duplicada eliminada solo localmente", error);
+    }
+    removeClinicalDemandLocal(duplicate.id);
+  }
 
   try {
     await saveClinicalDemandToSupabase(parsed);
@@ -3228,6 +3381,84 @@ async function importClinicalDemandFile(file) {
   showToastSuccess("Ficha diaria cargada.");
 }
 
+async function importClinicalDemandMonthFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const duplicatePolicy = elements.clinicalDemandDuplicatePolicy?.value || "skip";
+  const diagnostics = {
+    createdAt: new Date().toISOString(),
+    policy: duplicatePolicy,
+    rows: []
+  };
+
+  for (const file of files) {
+    const rowDiagnostic = {
+      file: file.name,
+      date: "",
+      status: "error",
+      patients: 0,
+      diets: 0,
+      enterals: 0,
+      supplies: 0,
+      warnings: 0
+    };
+    try {
+      const sheets = await parseClinicalDemandWorkbook(file);
+      const demandDate = inferClinicalDemandDate(sheets, elements.clinicalDemandDate.value, file.name);
+      const parsed = extractClinicalDemand(sheets, {
+        file,
+        demandDate,
+        observations: elements.clinicalDemandNotes.value
+      });
+      rowDiagnostic.date = demandDate;
+      const duplicate = getClinicalDemandDuplicate(parsed.demand.demandDate);
+      if (duplicate && duplicatePolicy === "skip") {
+        rowDiagnostic.status = "duplicado saltado";
+        rowDiagnostic.warnings = 1;
+        diagnostics.rows.push(rowDiagnostic);
+        continue;
+      }
+      if (duplicate && duplicatePolicy === "replace") {
+        try {
+          await deleteClinicalDemandFromSupabase(duplicate.id);
+        } catch (error) {
+          setClinicalSupabaseReady(false);
+          console.warn("Demanda duplicada eliminada solo localmente", error);
+        }
+        removeClinicalDemandLocal(duplicate.id);
+        rowDiagnostic.status = "reemplazado";
+      }
+
+      try {
+        await saveClinicalDemandToSupabase(parsed);
+        setClinicalSupabaseReady(true);
+      } catch (error) {
+        setClinicalSupabaseReady(false);
+        console.warn("Demanda diaria masiva guardada solo localmente", error);
+      }
+      mergeClinicalDemandImport(parsed);
+      rowDiagnostic.status = rowDiagnostic.status === "reemplazado" ? "reemplazado" : parsed.errors.length ? "con advertencias" : "importado";
+      rowDiagnostic.patients = parsed.demand.totalPatients;
+      rowDiagnostic.diets = parsed.demand.dietSpecialTotal;
+      rowDiagnostic.enterals = parsed.demand.enteralTotal;
+      rowDiagnostic.supplies = parsed.demand.supplyTotal;
+      rowDiagnostic.warnings = parsed.demand.warningCount;
+    } catch (error) {
+      rowDiagnostic.status = "error";
+      rowDiagnostic.warnings = 1;
+      rowDiagnostic.error = error.message || "No se pudo procesar archivo.";
+    }
+    diagnostics.rows.push(rowDiagnostic);
+  }
+
+  state.clinicalSupply.dailyBulkImportDiagnostics = diagnostics;
+  state.clinicalSupply.history.dailyDemands = state.clinicalSupply.dailyDemands.slice(0, 20);
+  saveClinicalSupplyState();
+  renderClinicalSupply();
+  const imported = diagnostics.rows.filter((row) => ["importado", "reemplazado", "con advertencias"].includes(row.status)).length;
+  showToastSuccess(`Importacion mensual procesada: ${imported}/${files.length} fichas.`);
+}
+
 async function saveClinicalDemandManualEdit() {
   const demand = getClinicalDemandSelected();
   if (!demand) {
@@ -3235,6 +3466,8 @@ async function saveClinicalDemandManualEdit() {
     return;
   }
   demand.totalPatients = parseClinicalNumber(elements.clinicalDemandPatientsInput.value);
+  demand.observations = elements.clinicalDemandEditNotes?.value || "";
+  if (demand.totalPatients > 0 && demand.totalPatients <= CLINICAL_DEMAND_LIMITS.totalPatients) demand.suspiciousReading = false;
   const dietType = normalize(elements.clinicalDemandDietName.value);
   const quantity = parseClinicalNumber(elements.clinicalDemandDietQty.value);
   let manualDietRow = null;
@@ -3259,7 +3492,7 @@ async function saveClinicalDemandManualEdit() {
   }
   const dietRows = state.clinicalSupply.dailyDietCounts.filter((row) => row.demandId === demand.id);
   demand.dietSpecialTotal = dietRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
-  demand.status = demand.warningCount ? "con errores" : "revisada";
+  demand.status = demand.suspiciousReading || demand.warningCount ? "con errores" : "revisada";
   try {
     if (state.currentUser?.id && /^[0-9a-f-]{36}$/i.test(String(demand.id))) {
       const { error } = await supabaseClient
@@ -3296,15 +3529,54 @@ async function saveClinicalDemandManualEdit() {
   showToastSuccess("Demanda diaria actualizada localmente.");
 }
 
+async function markClinicalDemandReviewed() {
+  const demand = getClinicalDemandSelected();
+  if (!demand) {
+    showToastError("Selecciona una ficha diaria.");
+    return;
+  }
+  demand.status = "revisada";
+  demand.suspiciousReading = false;
+  demand.observations = elements.clinicalDemandEditNotes?.value || demand.observations || "";
+  try {
+    if (state.currentUser?.id && /^[0-9a-f-]{36}$/i.test(String(demand.id))) {
+      const { error } = await supabaseClient
+        .from("clinical_daily_demands")
+        .update({
+          status: "revisada",
+          observations: demand.observations || null,
+          total_patients: Number(demand.totalPatients || 0),
+          diet_special_total: Number(demand.dietSpecialTotal || 0)
+        })
+        .eq("id", demand.id);
+      if (error) throw error;
+    }
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Revision de demanda guardada solo localmente", error);
+    showToastError("Revision guardada localmente; Supabase no disponible.");
+  }
+  saveClinicalSupplyState();
+  renderClinicalDemand();
+  showToastSuccess("Ficha marcada como revisada.");
+}
+
 function renderClinicalDemand() {
   const selected = getClinicalDemandSelected();
   const monthDemands = getClinicalDemandCurrentMonthDemands();
   const latest = selected || monthDemands[0] || state.clinicalSupply.dailyDemands[0] || null;
-  const monthPatientValues = monthDemands.map((row) => Number(row.totalPatients || 0)).filter((value) => value > 0);
-  const maxDemand = monthDemands.reduce((best, row) => Number(row.totalPatients || 0) > Number(best?.totalPatients || 0) ? row : best, null);
+  const reliableMonthDemands = monthDemands.filter((row) => !row.suspiciousReading && Number(row.totalPatients || 0) > 0 && Number(row.totalPatients || 0) <= CLINICAL_DEMAND_LIMITS.totalPatients);
+  const monthPatientValues = reliableMonthDemands.map((row) => Number(row.totalPatients || 0)).filter((value) => value > 0);
+  const maxDemand = reliableMonthDemands.reduce((best, row) => Number(row.totalPatients || 0) > Number(best?.totalPatients || 0) ? row : best, null);
+  const minDemand = reliableMonthDemands.reduce((best, row) => !best || Number(row.totalPatients || 0) < Number(best.totalPatients || 0) ? row : best, null);
+  const daysInMonth = getClinicalMonthDays();
+  const loadedDays = new Set(monthDemands.map((row) => row.demandDate).filter(Boolean)).size;
+  const missingDays = Math.max(0, daysInMonth - loadedDays);
+  const warningDays = monthDemands.filter((row) => Number(row.warningCount || 0) > 0 || row.suspiciousReading).length;
+  const pendingReview = monthDemands.filter((row) => row.status !== "revisada").length;
   const dietTotals = new Map();
   state.clinicalSupply.dailyDietCounts
-    .filter((row) => monthDemands.some((demand) => demand.id === row.demandId))
+    .filter((row) => reliableMonthDemands.some((demand) => demand.id === row.demandId))
     .forEach((row) => dietTotals.set(row.dietType, (dietTotals.get(row.dietType) || 0) + Number(row.quantity || 0)));
   const topDiet = [...dietTotals.entries()].sort((a, b) => b[1] - a[1])[0];
 
@@ -3314,6 +3586,7 @@ function renderClinicalDemand() {
     : '<option value="">Sin fichas</option>';
   if (latest) elements.clinicalDemandEditSelect.value = latest.id;
   elements.clinicalDemandPatientsInput.value = latest?.totalPatients || "";
+  if (elements.clinicalDemandEditNotes) elements.clinicalDemandEditNotes.value = latest?.observations || "";
 
   renderClinicalSummary(elements.clinicalDemandDailySummary, [
     { title: "Fecha", caption: "Ficha seleccionada", value: latest ? formatDisplayDate(latest.demandDate) : "-" },
@@ -3324,11 +3597,17 @@ function renderClinicalDemand() {
 
   const average = monthPatientValues.length ? monthPatientValues.reduce((sum, value) => sum + value, 0) / monthPatientValues.length : 0;
   renderClinicalSummary(elements.clinicalDemandMonthlySummary, [
-    { title: "Promedio diario", caption: MONTHS[state.clinicalSupply.monthIndex].label, value: formatNumber(average) },
+    { title: "Fichas cargadas", caption: "Dias con ficha", value: formatNumber(loadedDays) },
+    { title: "Dias faltantes", caption: MONTHS[state.clinicalSupply.monthIndex].label, value: formatNumber(missingDays) },
+    { title: "Promedio pacientes", caption: "Solo lecturas confiables", value: formatNumber(average) },
     { title: "Maximo diario", caption: maxDemand ? formatDisplayDate(maxDemand.demandDate) : "Sin datos", value: formatNumber(maxDemand?.totalPatients || 0) },
+    { title: "Minimo diario", caption: minDemand ? formatDisplayDate(minDemand.demandDate) : "Sin datos", value: formatNumber(minDemand?.totalPatients || 0) },
     { title: "Dieta frecuente", caption: topDiet?.[0] || "Sin datos", value: formatNumber(topDiet?.[1] || 0) },
-    { title: "Fichas del mes", caption: "Demanda real", value: formatNumber(monthDemands.length) }
+    { title: "Dias con advertencias", caption: "Requieren revision", value: formatNumber(warningDays) },
+    { title: "Pendientes revision", caption: "No revisadas", value: formatNumber(pendingReview) }
   ]);
+
+  renderClinicalDemandBulkDiagnostics();
 
   const currentWarnings = latest ? state.clinicalSupply.dailyImportErrors.filter((row) => row.demandId === latest.id) : [];
   elements.clinicalDemandWarnings.hidden = !currentWarnings.length;
@@ -3374,6 +3653,29 @@ function renderClinicalDemand() {
       </div>
     `).join("")
     : '<div class="empty compact-empty">Sin enterales ni insumos detectados.</div>';
+}
+
+function renderClinicalDemandBulkDiagnostics() {
+  if (!elements.clinicalDemandBulkDiagnostic) return;
+  const diagnostics = state.clinicalSupply.dailyBulkImportDiagnostics;
+  elements.clinicalDemandBulkDiagnostic.hidden = !diagnostics;
+  if (!diagnostics) return;
+  const rows = Array.isArray(diagnostics.rows) ? diagnostics.rows : [];
+  elements.clinicalDemandBulkDiagnosticMeta.textContent = `${formatNumber(rows.length)} archivos - ${diagnostics.policy || "sin politica"}`;
+  elements.clinicalDemandBulkDiagnosticBody.innerHTML = rows.length
+    ? rows.map((row) => `
+      <tr class="${row.status === "error" ? "row-invalid" : ""}">
+        <td><strong>${escapeHtml(row.file || "-")}</strong></td>
+        <td>${row.date ? formatDisplayDate(row.date) : "-"}</td>
+        <td>${escapeHtml(row.status || "-")}</td>
+        <td>${formatNumber(row.patients || 0)}</td>
+        <td>${formatNumber(row.diets || 0)}</td>
+        <td>${formatNumber(row.enterals || 0)}</td>
+        <td>${formatNumber(row.supplies || 0)}</td>
+        <td>${escapeHtml(row.error || formatNumber(row.warnings || 0))}</td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="8" class="empty">Sin diagnostico mensual.</td></tr>';
 }
 
 async function importClinicalPacFile(file) {
@@ -6105,8 +6407,18 @@ elements.clinicalDemandFile.addEventListener("change", async (event) => {
     event.target.value = "";
   }
 });
+elements.clinicalDemandMonthFile.addEventListener("change", async (event) => {
+  try {
+    await importClinicalDemandMonthFiles(event.target.files);
+  } catch (error) {
+    showError("No se pudo importar mes completo", error);
+  } finally {
+    event.target.value = "";
+  }
+});
 elements.clinicalDemandEditSelect.addEventListener("change", renderClinicalDemand);
 elements.clinicalDemandSaveManualBtn.addEventListener("click", saveClinicalDemandManualEdit);
+elements.clinicalDemandMarkReviewedBtn.addEventListener("click", markClinicalDemandReviewed);
 elements.clinicalClearPacBtn.addEventListener("click", async () => {
   const confirmed = await showModalConfirm({
     title: "Limpiar PAC",

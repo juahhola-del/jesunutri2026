@@ -872,6 +872,10 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   margin-top: 12px;
 }
 
+.clinical-demand-form .wide-field {
+  grid-column: 1 / -1;
+}
+
 .clinical-demand-form label {
   display: grid;
   gap: 6px;

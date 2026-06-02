@@ -481,11 +481,20 @@
                     Importar ficha Excel/CSV
                     <input id="clinicalDemandFile" type="file" accept=".xlsx,.xls,.csv,.txt" hidden>
                   </label>
+                  <label class="btn file-import-btn">
+                    Importar mes completo
+                    <input id="clinicalDemandMonthFile" type="file" accept=".xlsx,.xls,.csv,.txt" multiple hidden>
+                  </label>
+                  <select id="clinicalDemandDuplicatePolicy" class="clinical-select">
+                    <option value="skip">Saltar duplicados</option>
+                    <option value="replace">Reemplazar duplicados</option>
+                    <option value="version">Crear version nueva</option>
+                  </select>
                 </div>
               </article>
               <article class="clinical-card">
                 <h3>Correccion manual</h3>
-                <p>Agrega una dieta o ajusta el total de pacientes de la ficha seleccionada.</p>
+                <p>Ajusta pacientes, dietas, observaciones y revision de la ficha seleccionada.</p>
                 <div class="clinical-demand-form">
                   <label>
                     <span>Ficha</span>
@@ -494,6 +503,10 @@
                   <label>
                     <span>Total pacientes</span>
                     <input id="clinicalDemandPatientsInput" type="number" min="0" step="1" placeholder="0">
+                  </label>
+                  <label class="wide-field">
+                    <span>Observaciones ficha</span>
+                    <textarea id="clinicalDemandEditNotes" rows="2" placeholder="Opcional"></textarea>
                   </label>
                   <label>
                     <span>Tipo dieta</span>
@@ -510,9 +523,36 @@
                 </div>
                 <div class="clinical-actions">
                   <button class="btn primary" type="button" id="clinicalDemandSaveManualBtn">Guardar ajuste</button>
+                  <button class="btn" type="button" id="clinicalDemandMarkReviewedBtn">Marcar ficha como revisada</button>
                 </div>
               </article>
             </div>
+            <section class="clinical-import-diagnostic" id="clinicalDemandBulkDiagnostic" hidden>
+              <div class="clinical-diagnostic-header">
+                <div>
+                  <h3>Diagnostico importacion masiva</h3>
+                  <p>Fichas diarias del mes</p>
+                </div>
+                <span id="clinicalDemandBulkDiagnosticMeta"></span>
+              </div>
+              <div class="table-wrap">
+                <table class="clinical-table diagnostic-table">
+                  <thead>
+                    <tr>
+                      <th>Archivo</th>
+                      <th>Fecha detectada</th>
+                      <th>Estado</th>
+                      <th>Pacientes</th>
+                      <th>Dietas</th>
+                      <th>Enterales/modulos</th>
+                      <th>Insumos</th>
+                      <th>Advertencias</th>
+                    </tr>
+                  </thead>
+                  <tbody id="clinicalDemandBulkDiagnosticBody"></tbody>
+                </table>
+              </div>
+            </section>
             <div class="clinical-summary-grid" id="clinicalDemandDailySummary"></div>
             <div class="clinical-summary-grid" id="clinicalDemandMonthlySummary"></div>
             <div class="bulk-error-list clinical-validation-list" id="clinicalDemandWarnings" hidden></div>
