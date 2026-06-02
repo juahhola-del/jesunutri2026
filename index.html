@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="es">
   <head>
     <meta charset="utf-8">
@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Jesunutri">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=6">
+    <link rel="stylesheet" href="styles.css?v=9">
   </head>
   <body>
     <section class="app-splash" id="appSplash">
@@ -155,6 +155,7 @@
         <div class="actions header-actions">
           <button class="btn primary action-tile" type="button" id="bulkEntryBtn">Ingreso masivo</button>
           <button class="btn use-stock-btn action-tile" type="button" id="useStockBtn">Stock consumido</button>
+          <button class="btn supply-btn action-tile" type="button" id="clinicalSupplyBtn">Abastecimiento clinico</button>
           <button class="btn action-tile" type="button" id="labelsBtn">Etiquetas</button>
           <button class="btn action-tile" type="button" id="adjustStockBtn">Ajuste inventario</button>
           <button class="btn small logout-btn" type="button" id="logoutBtn">Salir</button>
@@ -233,6 +234,281 @@
             <span class="pill" id="alertCount">0 alertas</span>
           </div>
           <div class="alerts-list" id="alertsList"></div>
+        </section>
+
+        <section class="panel clinical-supply-panel" id="clinicalSupplyPanel">
+          <div class="section-heading table-heading">
+            <div>
+              <p class="eyebrow">Nuevo modulo</p>
+              <h2>Abastecimiento clinico</h2>
+              <p>PAC anual, pedido mensual, quiebres, presupuesto y reportes usando inventario actual.</p>
+            </div>
+            <div class="clinical-controls">
+              <label>
+                <span>Ano PAC</span>
+                <input id="clinicalPacYear" type="number" min="2020" max="2100" step="1">
+              </label>
+              <label>
+                <span>Mes pedido</span>
+                <select id="clinicalOrderMonth"></select>
+              </label>
+            </div>
+          </div>
+
+          <div class="clinical-tabs" role="tablist" aria-label="Abastecimiento clinico">
+            <button class="clinical-tab active" type="button" data-clinical-tab="pac">PAC Anual</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="pedido">Pedido Mensual</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="quiebres">Proyeccion de Quiebres</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="presupuesto">Presupuesto</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="demanda">Demanda Diaria</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="reportes">Reportes</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="historial">Historial</button>
+          </div>
+
+          <section class="clinical-view active" id="clinicalViewPac">
+            <div class="clinical-card-grid">
+              <article class="clinical-card">
+                <h3>Cargar PAC anual</h3>
+                <p>Importa un Excel/CSV con codigo, producto, categoria, cantidad anual, meses y precio unitario.</p>
+                <div class="clinical-actions">
+                  <label class="btn file-import-btn">
+                    Importar Excel/CSV
+                    <input id="clinicalPacFile" type="file" accept=".xlsx,.xls,.csv,.txt" hidden>
+                  </label>
+                  <button class="btn" type="button" id="clinicalClearPacBtn">Limpiar PAC</button>
+                </div>
+              </article>
+              <article class="clinical-card">
+                <h3>Presupuesto PAC</h3>
+                <div class="clinical-budget-fields">
+                  <label>
+                    <span>Aprobado</span>
+                    <input id="clinicalBudgetApproved" type="number" min="0" step="1" placeholder="0">
+                  </label>
+                  <label>
+                    <span>Solicitado</span>
+                    <input id="clinicalBudgetRequested" type="number" min="0" step="1" placeholder="0">
+                  </label>
+                </div>
+              </article>
+            </div>
+            <div class="clinical-summary-grid" id="clinicalPacSummary"></div>
+            <div class="bulk-error-list clinical-validation-list" id="clinicalPacValidation" hidden></div>
+            <div class="table-wrap">
+              <table class="clinical-table">
+                <thead>
+                  <tr>
+                    <th>Codigo</th>
+                    <th>Producto</th>
+                    <th>Categoria</th>
+                    <th>Anual</th>
+                    <th>Mes seleccionado</th>
+                    <th>Precio unitario</th>
+                    <th>Total valorizado</th>
+                    <th>Validacion</th>
+                  </tr>
+                </thead>
+                <tbody id="clinicalPacTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="clinical-view" id="clinicalViewPedido">
+            <div class="clinical-toolbar">
+              <button class="btn primary" type="button" id="clinicalGenerateOrderBtn">Generar pedido sugerido</button>
+              <button class="btn" type="button" id="clinicalSaveOrderBtn">Guardar pedido</button>
+              <button class="btn" type="button" id="clinicalExportOrderBtn">Exportar pedido</button>
+              <label class="btn file-import-btn">
+                Importar pedido real
+                <input id="clinicalRealOrderFile" type="file" accept=".xlsx,.xls,.csv,.txt" hidden>
+              </label>
+            </div>
+            <div class="clinical-summary-grid" id="clinicalOrderSummary"></div>
+            <div class="table-wrap">
+              <table class="clinical-table order-table">
+                <thead>
+                  <tr>
+                    <th>Codigo</th>
+                    <th>Producto</th>
+                    <th>Categoria</th>
+                    <th>Stock actual</th>
+                    <th>Stock minimo</th>
+                    <th>Consumo diario</th>
+                    <th>Consumo mensual</th>
+                    <th>PAC mensual</th>
+                    <th>Sugerido</th>
+                    <th>Final</th>
+                    <th>Precio</th>
+                    <th>Total</th>
+                    <th>Riesgo</th>
+                    <th>Observacion</th>
+                  </tr>
+                </thead>
+                <tbody id="clinicalOrderTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="clinical-view" id="clinicalViewQuiebres">
+            <div class="clinical-summary-grid" id="clinicalBreakSummary"></div>
+            <div class="table-wrap">
+              <table class="clinical-table">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th>Stock actual</th>
+                    <th>Pedido final</th>
+                    <th>Consumo diario</th>
+                    <th>Dias cobertura</th>
+                    <th>Fecha quiebre</th>
+                    <th>Critico</th>
+                    <th>Reemplazable</th>
+                    <th>Semaforo</th>
+                    <th>Observacion</th>
+                  </tr>
+                </thead>
+                <tbody id="clinicalBreakTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="clinical-view" id="clinicalViewPresupuesto">
+            <div class="clinical-summary-grid" id="clinicalBudgetSummary"></div>
+            <div class="table-wrap">
+              <table class="clinical-table">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th>PAC mensual</th>
+                    <th>Pedido final</th>
+                    <th>Precio</th>
+                    <th>Total pedido</th>
+                    <th>Diferencia PAC</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody id="clinicalBudgetTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="clinical-view" id="clinicalViewDemanda">
+            <div class="clinical-card-grid">
+              <article class="clinical-card">
+                <h3>Cargar ficha diaria</h3>
+                <p>Importa Excel/CSV de nutricion. Se guardan los datos detectados y las advertencias.</p>
+                <div class="clinical-demand-form">
+                  <label>
+                    <span>Fecha ficha</span>
+                    <input id="clinicalDemandDate" type="date">
+                  </label>
+                  <label>
+                    <span>Observaciones</span>
+                    <textarea id="clinicalDemandNotes" rows="2" placeholder="Opcional"></textarea>
+                  </label>
+                </div>
+                <div class="clinical-actions">
+                  <label class="btn file-import-btn">
+                    Importar ficha Excel/CSV
+                    <input id="clinicalDemandFile" type="file" accept=".xlsx,.xls,.csv,.txt" hidden>
+                  </label>
+                </div>
+              </article>
+              <article class="clinical-card">
+                <h3>Correccion manual</h3>
+                <p>Agrega una dieta o ajusta el total de pacientes de la ficha seleccionada.</p>
+                <div class="clinical-demand-form">
+                  <label>
+                    <span>Ficha</span>
+                    <select id="clinicalDemandEditSelect"></select>
+                  </label>
+                  <label>
+                    <span>Total pacientes</span>
+                    <input id="clinicalDemandPatientsInput" type="number" min="0" step="1" placeholder="0">
+                  </label>
+                  <label>
+                    <span>Tipo dieta</span>
+                    <input id="clinicalDemandDietName" type="text" placeholder="Ej: blando">
+                  </label>
+                  <label>
+                    <span>Cantidad</span>
+                    <input id="clinicalDemandDietQty" type="number" min="0" step="1" placeholder="0">
+                  </label>
+                  <label>
+                    <span>Observacion</span>
+                    <input id="clinicalDemandDietNotes" type="text" placeholder="Opcional">
+                  </label>
+                </div>
+                <div class="clinical-actions">
+                  <button class="btn primary" type="button" id="clinicalDemandSaveManualBtn">Guardar ajuste</button>
+                </div>
+              </article>
+            </div>
+            <div class="clinical-summary-grid" id="clinicalDemandDailySummary"></div>
+            <div class="clinical-summary-grid" id="clinicalDemandMonthlySummary"></div>
+            <div class="bulk-error-list clinical-validation-list" id="clinicalDemandWarnings" hidden></div>
+            <div class="table-wrap">
+              <table class="clinical-table demand-table">
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Archivo</th>
+                    <th>Pacientes</th>
+                    <th>Dietas especiales</th>
+                    <th>Enterales/modulos</th>
+                    <th>Insumos</th>
+                    <th>Estado</th>
+                    <th>Advertencias</th>
+                  </tr>
+                </thead>
+                <tbody id="clinicalDemandTableBody"></tbody>
+              </table>
+            </div>
+            <div class="clinical-card-grid">
+              <article class="clinical-card">
+                <h3>Dietas detectadas</h3>
+                <div class="clinical-history-list" id="clinicalDemandDietList"></div>
+              </article>
+              <article class="clinical-card">
+                <h3>Enterales, modulos e insumos</h3>
+                <div class="clinical-history-list" id="clinicalDemandItemList"></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="clinical-view" id="clinicalViewReportes">
+            <div class="clinical-report-grid">
+              <button class="btn" type="button" data-clinical-export="pac">Exportar PAC anual</button>
+              <button class="btn" type="button" data-clinical-export="pedido">Exportar pedido mensual</button>
+              <button class="btn" type="button" data-clinical-export="quiebres">Exportar quiebres</button>
+              <button class="btn" type="button" data-clinical-export="criticos">Exportar productos criticos</button>
+              <button class="btn" type="button" data-clinical-export="bajo_stock">Exportar bajo stock</button>
+              <button class="btn" type="button" data-clinical-export="presupuesto">Exportar presupuesto</button>
+              <button class="btn" type="button" data-clinical-export="demanda_diaria">Exportar demanda diaria</button>
+              <button class="btn" type="button" data-clinical-export="demanda_dietas">Exportar resumen por dieta</button>
+              <button class="btn" type="button" data-clinical-export="demanda_enterales">Exportar enterales/modulos</button>
+              <button class="btn" type="button" data-clinical-export="demanda_insumos">Exportar insumos calculados</button>
+              <button class="btn" type="button" data-clinical-export="demanda_errores">Exportar errores demanda</button>
+            </div>
+          </section>
+
+          <section class="clinical-view" id="clinicalViewHistorial">
+            <div class="clinical-summary-grid" id="clinicalHistorySummary"></div>
+            <div class="clinical-card-grid">
+              <article class="clinical-card">
+                <h3>PAC cargados</h3>
+                <div class="clinical-history-list" id="clinicalPacHistory"></div>
+              </article>
+              <article class="clinical-card">
+                <h3>Pedidos mensuales</h3>
+                <div class="clinical-history-list" id="clinicalOrderHistory"></div>
+              </article>
+              <article class="clinical-card">
+                <h3>Importaciones reales</h3>
+                <div class="clinical-history-list" id="clinicalRealImportHistory"></div>
+              </article>
+            </div>
+          </section>
         </section>
 
         <section class="panel inventory-panel">
@@ -915,7 +1191,8 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="script.js?v=6"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="script.js?v=9"></script>
   </body>
 </html>
 

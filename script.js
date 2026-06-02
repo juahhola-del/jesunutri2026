@@ -1,4 +1,4 @@
-const SUPABASE_URL = "https://kfobwrcxvqygmfvvccfl.supabase.co";
+﻿const SUPABASE_URL = "https://kfobwrcxvqygmfvvccfl.supabase.co";
 
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmb2J3cmN4dnF5Z21mdnZjY2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMzY0MTQsImV4cCI6MjA5NTgxMjQxNH0.hgGBTlCDtz3gbBTxnwmikVEtM6FFzRI1pL5BzgRFTPI";
@@ -29,6 +29,55 @@ const MONTHS = [
   { label: "Noviembre", className: "month-11", color: "#6B3E00" },
   { label: "Diciembre", className: "month-12", color: "#BFC7D5" }
 ];
+const CLINICAL_SUPPLY_STORAGE_KEY = "jesunutri_clinical_supply_v1";
+const CLINICAL_MONTH_FIELDS = [
+  "enero",
+  "febrero",
+  "marzo",
+  "abril",
+  "mayo",
+  "junio",
+  "julio",
+  "agosto",
+  "septiembre",
+  "octubre",
+  "noviembre",
+  "diciembre"
+];
+const CLINICAL_DB_MONTH_FIELDS = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december"
+];
+const CLINICAL_ORDER_STATUS = {
+  draft: "borrador",
+  generated: "generado",
+  approved: "aprobado",
+  exported: "exportado"
+};
+const CLINICAL_DEMAND_DIET_KEYWORDS = [
+  "liviano",
+  "diabetico",
+  "vegetariano",
+  "sin residuos",
+  "papilla",
+  "gtt",
+  "blando",
+  "hiposodico",
+  "renal",
+  "liquido"
+];
+const CLINICAL_DEMAND_ENTERAL_KEYWORDS = ["enteral", "formula", "modulo", "gtt", "volumen", "horario", "paciente", "via oral"];
+const CLINICAL_DEMAND_SUPPLY_KEYWORDS = ["pan", "once", "desayuno", "colacion", "menu", "preparacion", "insumo"];
 
 const formatIsoDate = (date) => date.toISOString().slice(0, 10);
 
@@ -98,7 +147,32 @@ const state = {
   lowStockProducts: [],
   deferredInstallPrompt: null,
   currentUser: null,
-  usingFallback: false
+  usingFallback: false,
+  clinicalSupply: {
+    activeTab: "pac",
+    pacYear: new Date().getFullYear(),
+    monthIndex: new Date().getMonth(),
+    budgetApproved: 0,
+    budgetRequested: 0,
+    pacYearId: null,
+    currentOrderId: null,
+    lastRealImportId: null,
+    isSupabaseReady: false,
+    pacRows: [],
+    orderRows: [],
+    realOrderRows: [],
+    dailyDemands: [],
+    dailyDietCounts: [],
+    dailyEnteralItems: [],
+    dailySupplyItems: [],
+    dailyImportErrors: [],
+    history: {
+      pacYears: [],
+      monthlyOrders: [],
+      realImports: [],
+      dailyDemands: []
+    }
+  }
 };
 
 const elements = {
@@ -188,6 +262,46 @@ const elements = {
   saveProductSettingsBtn: document.getElementById("saveProductSettingsBtn"),
   installAppBtn: document.getElementById("installAppBtn"),
   installHint: document.getElementById("installHint"),
+  clinicalSupplyBtn: document.getElementById("clinicalSupplyBtn"),
+  clinicalSupplyPanel: document.getElementById("clinicalSupplyPanel"),
+  clinicalPacYear: document.getElementById("clinicalPacYear"),
+  clinicalOrderMonth: document.getElementById("clinicalOrderMonth"),
+  clinicalPacFile: document.getElementById("clinicalPacFile"),
+  clinicalRealOrderFile: document.getElementById("clinicalRealOrderFile"),
+  clinicalClearPacBtn: document.getElementById("clinicalClearPacBtn"),
+  clinicalBudgetApproved: document.getElementById("clinicalBudgetApproved"),
+  clinicalBudgetRequested: document.getElementById("clinicalBudgetRequested"),
+  clinicalPacSummary: document.getElementById("clinicalPacSummary"),
+  clinicalPacValidation: document.getElementById("clinicalPacValidation"),
+  clinicalPacTableBody: document.getElementById("clinicalPacTableBody"),
+  clinicalGenerateOrderBtn: document.getElementById("clinicalGenerateOrderBtn"),
+  clinicalSaveOrderBtn: document.getElementById("clinicalSaveOrderBtn"),
+  clinicalExportOrderBtn: document.getElementById("clinicalExportOrderBtn"),
+  clinicalOrderSummary: document.getElementById("clinicalOrderSummary"),
+  clinicalOrderTableBody: document.getElementById("clinicalOrderTableBody"),
+  clinicalBreakSummary: document.getElementById("clinicalBreakSummary"),
+  clinicalBreakTableBody: document.getElementById("clinicalBreakTableBody"),
+  clinicalBudgetSummary: document.getElementById("clinicalBudgetSummary"),
+  clinicalBudgetTableBody: document.getElementById("clinicalBudgetTableBody"),
+  clinicalDemandDate: document.getElementById("clinicalDemandDate"),
+  clinicalDemandNotes: document.getElementById("clinicalDemandNotes"),
+  clinicalDemandFile: document.getElementById("clinicalDemandFile"),
+  clinicalDemandEditSelect: document.getElementById("clinicalDemandEditSelect"),
+  clinicalDemandPatientsInput: document.getElementById("clinicalDemandPatientsInput"),
+  clinicalDemandDietName: document.getElementById("clinicalDemandDietName"),
+  clinicalDemandDietQty: document.getElementById("clinicalDemandDietQty"),
+  clinicalDemandDietNotes: document.getElementById("clinicalDemandDietNotes"),
+  clinicalDemandSaveManualBtn: document.getElementById("clinicalDemandSaveManualBtn"),
+  clinicalDemandDailySummary: document.getElementById("clinicalDemandDailySummary"),
+  clinicalDemandMonthlySummary: document.getElementById("clinicalDemandMonthlySummary"),
+  clinicalDemandWarnings: document.getElementById("clinicalDemandWarnings"),
+  clinicalDemandTableBody: document.getElementById("clinicalDemandTableBody"),
+  clinicalDemandDietList: document.getElementById("clinicalDemandDietList"),
+  clinicalDemandItemList: document.getElementById("clinicalDemandItemList"),
+  clinicalHistorySummary: document.getElementById("clinicalHistorySummary"),
+  clinicalPacHistory: document.getElementById("clinicalPacHistory"),
+  clinicalOrderHistory: document.getElementById("clinicalOrderHistory"),
+  clinicalRealImportHistory: document.getElementById("clinicalRealImportHistory"),
   pendingReviewModal: document.getElementById("pendingReviewModal"),
   pendingReviewTitle: document.getElementById("pendingReviewTitle"),
   pendingReviewMeta: document.getElementById("pendingReviewMeta"),
@@ -261,6 +375,14 @@ function formatDays(days) {
 function formatNumber(value) {
   const number = Number(value || 0);
   return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat("es-CL", {
+    style: "currency",
+    currency: "CLP",
+    maximumFractionDigits: 0
+  }).format(Number(value || 0));
 }
 
 function isStandaloneMode() {
@@ -424,6 +546,8 @@ async function loadAuthorizedUser(authUser) {
 
 async function startAuthenticatedApp(session) {
   await withTimeout(loadAuthorizedUser(session.user), 12000, "No se pudo validar el usuario. Revisa internet o permisos RLS.");
+  await loadClinicalSupplyState();
+  setupClinicalSupplyControls();
   if (isAdmin()) {
     showAdminApp();
     try {
@@ -718,6 +842,1763 @@ function getProductLots(productId) {
 
 function getProductStockTotal(productId) {
   return getProductLots(productId).reduce((sum, lot) => sum + Number(lot.cantidad || 0), 0);
+}
+
+function getClinicalStorageKey() {
+  const userId = state.currentUser?.id || "local";
+  return `${CLINICAL_SUPPLY_STORAGE_KEY}_${userId}`;
+}
+
+function getClinicalDefaultHistory() {
+  return { pacYears: [], monthlyOrders: [], realImports: [], dailyDemands: [] };
+}
+
+function loadClinicalSupplyLocalState() {
+  try {
+    const raw = window.localStorage.getItem(getClinicalStorageKey());
+    if (!raw) return false;
+    const saved = JSON.parse(raw);
+    state.clinicalSupply = {
+      ...state.clinicalSupply,
+      ...saved,
+      pacRows: Array.isArray(saved.pacRows) ? saved.pacRows : [],
+      orderRows: Array.isArray(saved.orderRows) ? saved.orderRows : [],
+      realOrderRows: Array.isArray(saved.realOrderRows) ? saved.realOrderRows : [],
+      dailyDemands: Array.isArray(saved.dailyDemands) ? saved.dailyDemands : [],
+      dailyDietCounts: Array.isArray(saved.dailyDietCounts) ? saved.dailyDietCounts : [],
+      dailyEnteralItems: Array.isArray(saved.dailyEnteralItems) ? saved.dailyEnteralItems : [],
+      dailySupplyItems: Array.isArray(saved.dailySupplyItems) ? saved.dailySupplyItems : [],
+      dailyImportErrors: Array.isArray(saved.dailyImportErrors) ? saved.dailyImportErrors : [],
+      history: { ...getClinicalDefaultHistory(), ...(saved.history || {}) }
+    };
+    return true;
+  } catch (error) {
+    console.warn("No se pudo cargar abastecimiento clinico local", error);
+    return false;
+  }
+}
+
+function saveClinicalSupplyLocalState() {
+  window.localStorage.setItem(getClinicalStorageKey(), JSON.stringify(state.clinicalSupply));
+}
+
+function saveClinicalSupplyState() {
+  saveClinicalSupplyLocalState();
+}
+
+function setClinicalSupabaseReady(ready) {
+  state.clinicalSupply.isSupabaseReady = Boolean(ready);
+}
+
+function getClinicalMonthDbPayload(row) {
+  return Object.fromEntries(CLINICAL_MONTH_FIELDS.map((field, index) => [CLINICAL_DB_MONTH_FIELDS[index], Number(row[field] || 0)]));
+}
+
+function applyClinicalDbMonths(target, source) {
+  CLINICAL_MONTH_FIELDS.forEach((field, index) => {
+    target[field] = Number(source?.[CLINICAL_DB_MONTH_FIELDS[index]] || 0);
+  });
+  return target;
+}
+
+function mapClinicalPacItemFromDb(row) {
+  return applyClinicalDbMonths({
+    id: row.id,
+    codigo: row.code || "",
+    producto: row.product || "",
+    categoria: row.category || "",
+    cantidadAnual: Number(row.annual_quantity || 0),
+    precioUnitario: Number(row.unit_price || 0),
+    totalValorizado: Number(row.total_valued || 0),
+    productoId: row.product_id || null,
+    validations: Array.isArray(row.validations) ? row.validations : []
+  }, row);
+}
+
+function mapClinicalOrderItemFromDb(row, order) {
+  const monthIndex = Number(order?.month || state.clinicalSupply.monthIndex + 1) - 1;
+  return {
+    id: row.id,
+    orderId: row.monthly_order_id,
+    orderKey: `${order?.year || state.clinicalSupply.pacYear}-${monthIndex + 1}`,
+    pacRowId: row.pac_item_id || row.id,
+    codigo: row.code || "",
+    producto: row.product || "",
+    categoria: row.category || "",
+    productoId: row.product_id || null,
+    stockActual: Number(row.stock_current_snapshot || 0),
+    stockMinimo: Number(row.stock_min_snapshot || 0),
+    consumoPromedioDiario: Number(row.avg_daily_consumption_snapshot || 0),
+    consumoEsperadoMensual: Number(row.expected_monthly_consumption || 0),
+    pacMensual: Number(row.pac_monthly || 0),
+    pedidoSugerido: Number(row.suggested_order || 0),
+    pedidoFinal: Number(row.final_order || 0),
+    precioUnitario: Number(row.unit_price || 0),
+    total: Number(row.total || 0),
+    riesgo: row.risk || "bajo",
+    observacion: row.observation || ""
+  };
+}
+
+function mapClinicalRealItemFromDb(row) {
+  return {
+    id: row.id,
+    importId: row.real_order_import_id,
+    codigo: row.code || "",
+    producto: row.product || "",
+    productoId: row.product_id || null,
+    pacRowId: row.pac_item_id || null,
+    orderItemId: row.monthly_order_item_id || null,
+    cantidad: Number(row.quantity || 0),
+    precioUnitario: Number(row.unit_price || 0),
+    total: Number(row.total || 0),
+    comparison: row.comparison || {},
+    validations: Array.isArray(row.validations) ? row.validations : []
+  };
+}
+
+function getClinicalPacTotal() {
+  return state.clinicalSupply.pacRows.reduce((sum, row) => sum + Number(row.totalValorizado || 0), 0);
+}
+
+function getClinicalOrderTotal(rows = getClinicalCurrentOrderRows()) {
+  return rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+}
+
+function getClinicalPacValidationErrorsForRow(row) {
+  return getClinicalPacValidations().find((item) => item.rowId === row.id)?.errors || [];
+}
+
+async function loadClinicalHistoryFromSupabase() {
+  if (!state.currentUser?.id) return;
+  const [pacResult, orderResult, importResult, demandResult] = await Promise.all([
+    supabaseClient
+      .from("clinical_pac_years")
+      .select("id,year,approved_budget,requested_budget,total_valued,created_at,updated_at")
+      .eq("created_by", state.currentUser.id)
+      .order("year", { ascending: false })
+      .limit(12),
+    supabaseClient
+      .from("clinical_monthly_orders")
+      .select("id,year,month,status,total_valued,created_at,updated_at,pac_year_id")
+      .eq("created_by", state.currentUser.id)
+      .order("updated_at", { ascending: false })
+      .limit(20),
+    supabaseClient
+      .from("clinical_real_order_imports")
+      .select("id,year,month,filename,row_count,created_at,pac_year_id,monthly_order_id")
+      .eq("imported_by", state.currentUser.id)
+      .order("created_at", { ascending: false })
+      .limit(20),
+    supabaseClient
+      .from("clinical_daily_demands")
+      .select("id,demand_date,filename,status,total_patients,warning_count,created_at")
+      .eq("uploaded_by", state.currentUser.id)
+      .order("demand_date", { ascending: false })
+      .limit(20)
+  ]);
+
+  if (pacResult.error) throw pacResult.error;
+  if (orderResult.error) throw orderResult.error;
+  if (importResult.error) throw importResult.error;
+  if (demandResult.error) console.warn("Historial de demanda diaria no disponible", demandResult.error);
+
+  state.clinicalSupply.history = {
+    pacYears: pacResult.data || [],
+    monthlyOrders: orderResult.data || [],
+    realImports: importResult.data || [],
+    dailyDemands: demandResult.error ? (state.clinicalSupply.history?.dailyDemands || []) : (demandResult.data || [])
+  };
+}
+
+async function loadClinicalCurrentOrderFromSupabase(pacYearId) {
+  const month = Number(state.clinicalSupply.monthIndex) + 1;
+  const { data: order, error } = await supabaseClient
+    .from("clinical_monthly_orders")
+    .select("id,year,month,status,total_valued,pac_year_id")
+    .eq("year", state.clinicalSupply.pacYear)
+    .eq("month", month)
+    .eq("created_by", state.currentUser.id)
+    .maybeSingle();
+
+  if (error) throw error;
+  const orderKey = getClinicalSavedOrderKey();
+  state.clinicalSupply.currentOrderId = order?.id || null;
+  state.clinicalSupply.orderRows = state.clinicalSupply.orderRows.filter((row) => row.orderKey !== orderKey);
+
+  if (!order) return;
+
+  const { data: items, error: itemError } = await supabaseClient
+    .from("clinical_monthly_order_items")
+    .select("*")
+    .eq("monthly_order_id", order.id)
+    .order("created_at", { ascending: true });
+
+  if (itemError) throw itemError;
+  state.clinicalSupply.orderRows.push(...(items || []).map((item) => mapClinicalOrderItemFromDb(item, order)));
+
+  const { data: importRows, error: importError } = await supabaseClient
+    .from("clinical_real_order_imports")
+    .select("id")
+    .eq("year", state.clinicalSupply.pacYear)
+    .eq("month", month)
+    .eq("imported_by", state.currentUser.id)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (importError) throw importError;
+  const importId = importRows?.[0]?.id || null;
+  state.clinicalSupply.lastRealImportId = importId;
+  state.clinicalSupply.realOrderRows = [];
+  if (!importId) return;
+
+  const { data: realItems, error: realError } = await supabaseClient
+    .from("clinical_real_order_items")
+    .select("*")
+    .eq("real_order_import_id", importId)
+    .order("created_at", { ascending: true });
+
+  if (realError) throw realError;
+  state.clinicalSupply.realOrderRows = (realItems || []).map(mapClinicalRealItemFromDb);
+}
+
+async function loadClinicalSupplyState({ useLocal = true } = {}) {
+  if (useLocal) loadClinicalSupplyLocalState();
+  if (!state.currentUser?.id) return;
+
+  try {
+    const { data: pacYear, error } = await supabaseClient
+      .from("clinical_pac_years")
+      .select("id,year,approved_budget,requested_budget,total_valued,created_at")
+      .eq("year", state.clinicalSupply.pacYear)
+      .eq("created_by", state.currentUser.id)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    state.clinicalSupply.pacRows = [];
+    state.clinicalSupply.pacYearId = pacYear?.id || null;
+    if (pacYear) {
+      state.clinicalSupply.budgetApproved = Number(pacYear.approved_budget || 0);
+      state.clinicalSupply.budgetRequested = Number(pacYear.requested_budget || 0);
+      const { data: items, error: itemError } = await supabaseClient
+        .from("clinical_pac_items")
+        .select("*")
+        .eq("pac_year_id", pacYear.id)
+        .order("created_at", { ascending: true });
+      if (itemError) throw itemError;
+      state.clinicalSupply.pacRows = (items || []).map(mapClinicalPacItemFromDb);
+    }
+
+    await loadClinicalCurrentOrderFromSupabase(pacYear?.id || null);
+    await loadClinicalHistoryFromSupabase();
+    try {
+      await loadClinicalDailyDemandFromSupabase();
+    } catch (demandError) {
+      console.warn("Demanda diaria en respaldo local", demandError);
+    }
+    setClinicalSupabaseReady(true);
+    saveClinicalSupplyLocalState();
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Abastecimiento clinico usara respaldo local", error);
+    showToastError("Abastecimiento clinico en respaldo local.");
+  }
+}
+
+function setupClinicalSupplyControls() {
+  elements.clinicalOrderMonth.innerHTML = MONTHS
+    .map((month, index) => `<option value="${index}">${month.label}</option>`)
+    .join("");
+  elements.clinicalPacYear.value = state.clinicalSupply.pacYear;
+  elements.clinicalOrderMonth.value = state.clinicalSupply.monthIndex;
+  elements.clinicalBudgetApproved.value = state.clinicalSupply.budgetApproved || "";
+  elements.clinicalBudgetRequested.value = state.clinicalSupply.budgetRequested || "";
+  const hasSheetJs = Boolean(window.XLSX);
+  const accept = hasSheetJs ? ".xlsx,.xls,.csv,.txt" : ".csv,.txt";
+  elements.clinicalPacFile.accept = accept;
+  elements.clinicalRealOrderFile.accept = accept;
+  if (elements.clinicalDemandFile) elements.clinicalDemandFile.accept = accept;
+}
+
+function normalizeClinicalHeader(value) {
+  return normalize(value)
+    .replaceAll(".", "")
+    .replaceAll("_", " ")
+    .replaceAll("-", " ");
+}
+
+function getClinicalFieldName(header) {
+  const clean = normalizeClinicalHeader(header);
+  const map = {
+    codigo: "codigo",
+    cod: "codigo",
+    sku: "codigo",
+    producto: "producto",
+    nombre: "producto",
+    insumo: "producto",
+    categoria: "categoria",
+    rubro: "categoria",
+    "cantidad anual": "cantidadAnual",
+    anual: "cantidadAnual",
+    "total anual": "cantidadAnual",
+    precio: "precioUnitario",
+    "precio unitario": "precioUnitario",
+    "valor unitario": "precioUnitario",
+    total: "totalValorizado",
+    "total valorizado": "totalValorizado",
+    valorizado: "totalValorizado"
+  };
+  const monthIndex = CLINICAL_MONTH_FIELDS.findIndex((month) => clean === month || clean.startsWith(month.slice(0, 3)));
+  if (monthIndex >= 0) return CLINICAL_MONTH_FIELDS[monthIndex];
+  return map[clean] || clean.replace(/\s+(.)/g, (_, letter) => letter.toUpperCase());
+}
+
+function parseClinicalNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const text = String(value ?? "").trim();
+  if (!text) return 0;
+  const clean = text
+    .replace(/\$/g, "")
+    .replace(/\s/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+  const number = Number(clean);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function getClinicalProductByPacRow(row) {
+  return (row.productoId && findProductById(row.productoId)) || findProductByName(row.producto);
+}
+
+function getClinicalMonthValue(row, monthIndex = state.clinicalSupply.monthIndex) {
+  return Number(row[CLINICAL_MONTH_FIELDS[monthIndex]] || 0);
+}
+
+function getClinicalMonthDays(year = state.clinicalSupply.pacYear, monthIndex = state.clinicalSupply.monthIndex) {
+  return new Date(Number(year), Number(monthIndex) + 1, 0).getDate();
+}
+
+function getClinicalMonthEndDate(year = state.clinicalSupply.pacYear, monthIndex = state.clinicalSupply.monthIndex) {
+  return new Date(Number(year), Number(monthIndex) + 1, 0);
+}
+
+function addClinicalDays(days) {
+  if (!Number.isFinite(days)) return "";
+  const date = getToday();
+  date.setDate(date.getDate() + Math.max(0, Math.floor(days)));
+  return formatIsoDate(date);
+}
+
+function normalizeClinicalPacRow(rawRow, index) {
+  const row = {};
+  Object.entries(rawRow || {}).forEach(([key, value]) => {
+    row[getClinicalFieldName(key)] = value;
+  });
+
+  const normalized = {
+    id: `pac-${Date.now()}-${index}`,
+    codigo: String(row.codigo ?? "").trim(),
+    producto: String(row.producto ?? "").trim(),
+    categoria: String(row.categoria ?? "").trim(),
+    cantidadAnual: parseClinicalNumber(row.cantidadAnual),
+    precioUnitario: parseClinicalNumber(row.precioUnitario),
+    totalValorizado: parseClinicalNumber(row.totalValorizado)
+  };
+
+  CLINICAL_MONTH_FIELDS.forEach((field) => {
+    normalized[field] = parseClinicalNumber(row[field]);
+  });
+
+  if (!normalized.cantidadAnual) {
+    normalized.cantidadAnual = CLINICAL_MONTH_FIELDS.reduce((sum, field) => sum + Number(normalized[field] || 0), 0);
+  }
+  if (!normalized.totalValorizado) {
+    normalized.totalValorizado = normalized.cantidadAnual * normalized.precioUnitario;
+  }
+  return normalized;
+}
+
+function getClinicalPacValidations() {
+  const rows = state.clinicalSupply.pacRows;
+  const codeCount = new Map();
+  const productCount = new Map();
+
+  rows.forEach((row) => {
+    if (row.codigo) codeCount.set(row.codigo, (codeCount.get(row.codigo) || 0) + 1);
+    if (row.producto) {
+      const key = normalize(row.producto);
+      productCount.set(key, (productCount.get(key) || 0) + 1);
+    }
+  });
+
+  return rows.map((row) => {
+    const errors = [];
+    const monthlySum = CLINICAL_MONTH_FIELDS.reduce((sum, field) => sum + Number(row[field] || 0), 0);
+    const expectedTotal = Number(row.cantidadAnual || 0) * Number(row.precioUnitario || 0);
+    if (row.codigo && codeCount.get(row.codigo) > 1) errors.push("Codigo duplicado");
+    if (row.producto && productCount.get(normalize(row.producto)) > 1) errors.push("Producto duplicado");
+    if (!getClinicalProductByPacRow(row)) errors.push("Producto PAC no existe en inventario");
+    if (Math.abs(monthlySum - Number(row.cantidadAnual || 0)) > 0.01) errors.push("Cantidad anual distinta a suma mensual");
+    if (Math.abs(expectedTotal - Number(row.totalValorizado || 0)) > 1) errors.push("Total valorizado incorrecto");
+    if (!Number(row.precioUnitario || 0)) errors.push("Precio vacio");
+    return { rowId: row.id, errors };
+  });
+}
+
+function getClinicalSavedOrderKey() {
+  return `${state.clinicalSupply.pacYear}-${Number(state.clinicalSupply.monthIndex) + 1}`;
+}
+
+function getClinicalCurrentOrderRows() {
+  return state.clinicalSupply.orderRows.filter((row) => row.orderKey === getClinicalSavedOrderKey());
+}
+
+function getClinicalRealOrderByProduct(row) {
+  const key = normalize(row.producto);
+  return state.clinicalSupply.realOrderRows.find((real) => normalize(real.producto) === key || (row.codigo && real.codigo === row.codigo));
+}
+
+function buildClinicalOrderRows() {
+  const days = getClinicalMonthDays();
+  const existingRows = new Map(getClinicalCurrentOrderRows().map((row) => [row.pacRowId, row]));
+  const orderKey = getClinicalSavedOrderKey();
+
+  return state.clinicalSupply.pacRows.map((pacRow) => {
+    const product = getClinicalProductByPacRow(pacRow);
+    const stockActual = product ? getProductStockTotal(product.id) : 0;
+    const stockMinimo = Number(product?.stock_minimo || 0);
+    const consumoPromedioDiario = Number(product?.consumo_promedio_diario || 0);
+    const consumoEsperadoMensual = Number((consumoPromedioDiario * days).toFixed(3));
+    const pacMensual = getClinicalMonthValue(pacRow);
+    const pedidoSugerido = Math.max(0, Number((consumoEsperadoMensual + stockMinimo - stockActual).toFixed(3)));
+    const existing = existingRows.get(pacRow.id);
+    const pedidoFinal = Number(existing?.pedidoFinal ?? pedidoSugerido);
+    const real = getClinicalRealOrderByProduct(pacRow);
+    const total = Number((pedidoFinal * Number(pacRow.precioUnitario || 0)).toFixed(0));
+    let riesgo = "bajo";
+    const observationParts = [];
+
+    if (!product) {
+      riesgo = "alto";
+      observationParts.push("No existe en inventario");
+    }
+    if (product?.critico && pedidoFinal <= 0 && stockActual < stockMinimo) {
+      riesgo = "alto";
+      observationParts.push("Critico bajo minimo");
+    } else if (pedidoSugerido > pacMensual && pacMensual > 0) {
+      riesgo = "medio";
+      observationParts.push("Sugerido sobre PAC mensual");
+    }
+    if (real) {
+      observationParts.push(`Pedido real: ${formatNumber(real.cantidad)}`);
+      if (Math.abs(Number(real.cantidad || 0) - pedidoSugerido) > 0.01) observationParts.push("Difiere del sugerido");
+      if (pacMensual > 0 && Number(real.cantidad || 0) > pacMensual) observationParts.push("Real sobre PAC");
+    }
+
+    return {
+      ...existing,
+      orderKey,
+      pacRowId: pacRow.id,
+      codigo: pacRow.codigo,
+      producto: pacRow.producto,
+      categoria: pacRow.categoria,
+      productoId: product?.id || null,
+      stockActual,
+      stockMinimo,
+      consumoPromedioDiario,
+      consumoEsperadoMensual,
+      pacMensual,
+      pedidoSugerido,
+      pedidoFinal,
+      precioUnitario: Number(pacRow.precioUnitario || 0),
+      total,
+      riesgo,
+      observacion: existing?.observacion || observationParts.join(". ")
+    };
+  });
+}
+
+function getClinicalBreakRows() {
+  const monthEnd = getClinicalMonthEndDate();
+  const rows = getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows();
+  return rows.map((row) => {
+    const product = findProductById(row.productoId);
+    const stockConPedido = Number(row.stockActual || 0) + Number(row.pedidoFinal || 0);
+    const consumo = Number(row.consumoPromedioDiario || 0);
+    const diasCobertura = consumo > 0 ? stockConPedido / consumo : null;
+    const fechaQuiebre = diasCobertura == null ? "" : addClinicalDays(diasCobertura);
+    const llegaFinMes = diasCobertura == null || new Date(`${fechaQuiebre}T00:00:00`) >= monthEnd;
+    let semaforo = "verde";
+    let observacion = "Llega a fin de mes.";
+    const reemplazable = !Boolean(product?.critico);
+
+    if (diasCobertura != null && !llegaFinMes) {
+      semaforo = "rojo";
+      observacion = "No llega a fin de mes.";
+    } else if (diasCobertura != null && diasCobertura <= getClinicalMonthDays() + 2) {
+      semaforo = "amarillo";
+      observacion = "Llega justo.";
+    }
+    if (product?.critico && !reemplazable && semaforo === "rojo") {
+      semaforo = "negro";
+      observacion = "Critico no reemplazable con quiebre proyectado.";
+    }
+
+    return {
+      ...row,
+      diasCobertura,
+      fechaQuiebre,
+      critico: Boolean(product?.critico),
+      reemplazable,
+      semaforo,
+      observacionQuiebre: observacion
+    };
+  });
+}
+
+function getClinicalBudgetRows() {
+  const rows = getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows();
+  return rows.map((row) => {
+    const diff = Number(row.pedidoFinal || 0) - Number(row.pacMensual || 0);
+    let estado = "Segun PAC";
+    if (diff > 0.01) estado = "Sobre PAC";
+    if (diff < -0.01) estado = "Bajo PAC / recortado";
+    return { ...row, diferenciaPac: diff, estadoPresupuesto: estado };
+  });
+}
+
+function renderClinicalSummary(container, cards) {
+  container.innerHTML = cards
+    .map((card) => `
+      <article class="clinical-summary-card">
+        <h3>${escapeHtml(card.title)}</h3>
+        <span>${escapeHtml(card.caption || "")}</span>
+        <strong>${escapeHtml(card.value)}</strong>
+      </article>
+    `)
+    .join("");
+}
+
+function renderClinicalSupply() {
+  setupClinicalSupplyControls();
+  document.querySelectorAll(".clinical-tab").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.clinicalTab === state.clinicalSupply.activeTab);
+  });
+  document.querySelectorAll(".clinical-view").forEach((view) => view.classList.remove("active"));
+  document.getElementById(`clinicalView${state.clinicalSupply.activeTab[0].toUpperCase()}${state.clinicalSupply.activeTab.slice(1)}`)?.classList.add("active");
+
+  renderClinicalPac();
+  renderClinicalOrder();
+  renderClinicalBreaks();
+  renderClinicalBudget();
+  renderClinicalDemand();
+  renderClinicalHistory();
+}
+
+function renderClinicalPac() {
+  const rows = state.clinicalSupply.pacRows;
+  const validations = getClinicalPacValidations();
+  const validationMap = new Map(validations.map((item) => [item.rowId, item.errors]));
+  const totalPac = rows.reduce((sum, row) => sum + Number(row.totalValorizado || 0), 0);
+  const monthTotal = rows.reduce((sum, row) => sum + getClinicalMonthValue(row) * Number(row.precioUnitario || 0), 0);
+  const errors = validations.flatMap((item) => item.errors);
+
+  renderClinicalSummary(elements.clinicalPacSummary, [
+    { title: "Productos PAC", caption: "Filas cargadas", value: formatNumber(rows.length) },
+    { title: "Total valorizado", caption: "Anual", value: formatCurrency(totalPac) },
+    { title: "Mes seleccionado", caption: MONTHS[state.clinicalSupply.monthIndex].label, value: formatCurrency(monthTotal) },
+    { title: "Diferencia presupuesto", caption: "Solicitado - aprobado", value: formatCurrency(Number(state.clinicalSupply.budgetRequested || 0) - Number(state.clinicalSupply.budgetApproved || 0)) }
+  ]);
+
+  elements.clinicalPacValidation.hidden = !errors.length;
+  elements.clinicalPacValidation.innerHTML = errors.length
+    ? [...new Set(errors)].map((error) => `<div>${escapeHtml(error)}</div>`).join("")
+    : "";
+
+  elements.clinicalPacTableBody.innerHTML = rows.length
+    ? rows.map((row) => {
+        const rowErrors = validationMap.get(row.id) || [];
+        return `
+          <tr class="${rowErrors.length ? "row-invalid" : ""}">
+            <td>${escapeHtml(row.codigo || "-")}</td>
+            <td><strong>${escapeHtml(row.producto || "-")}</strong></td>
+            <td>${escapeHtml(row.categoria || "-")}</td>
+            <td>${formatNumber(row.cantidadAnual)}</td>
+            <td>${formatNumber(getClinicalMonthValue(row))}</td>
+            <td>${formatCurrency(row.precioUnitario)}</td>
+            <td>${formatCurrency(row.totalValorizado)}</td>
+            <td>${rowErrors.length ? escapeHtml(rowErrors.join(". ")) : "OK"}</td>
+          </tr>
+        `;
+      }).join("")
+    : '<tr><td colspan="8" class="empty">Carga un PAC anual para comenzar.</td></tr>';
+}
+
+function renderClinicalOrder() {
+  const rows = getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows();
+  const total = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const suggested = rows.reduce((sum, row) => sum + Number(row.pedidoSugerido || 0), 0);
+  const final = rows.reduce((sum, row) => sum + Number(row.pedidoFinal || 0), 0);
+
+  renderClinicalSummary(elements.clinicalOrderSummary, [
+    { title: "Pedido valorizado", caption: "Final", value: formatCurrency(total) },
+    { title: "Sugerido", caption: "Unidades totales", value: formatNumber(suggested) },
+    { title: "Pedido final", caption: "Editable", value: formatNumber(final) },
+    { title: "Presupuesto disponible", caption: "Aprobado menos usado", value: formatCurrency(Number(state.clinicalSupply.budgetApproved || 0) - total) }
+  ]);
+
+  elements.clinicalOrderTableBody.innerHTML = rows.length
+    ? rows.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.codigo || "-")}</td>
+        <td><strong>${escapeHtml(row.producto)}</strong></td>
+        <td>${escapeHtml(row.categoria || "-")}</td>
+        <td>${formatNumber(row.stockActual)}</td>
+        <td>${formatNumber(row.stockMinimo)}</td>
+        <td>${formatNumber(row.consumoPromedioDiario)}</td>
+        <td>${formatNumber(row.consumoEsperadoMensual)}</td>
+        <td>${formatNumber(row.pacMensual)}</td>
+        <td>${formatNumber(row.pedidoSugerido)}</td>
+        <td><input class="clinical-final-input" type="number" min="0" step="0.001" value="${Number(row.pedidoFinal || 0)}" data-clinical-final="${escapeHtml(row.pacRowId)}"></td>
+        <td>${formatCurrency(row.precioUnitario)}</td>
+        <td>${formatCurrency(row.total)}</td>
+        <td><span class="clinical-risk ${escapeHtml(row.riesgo)}">${escapeHtml(row.riesgo)}</span></td>
+        <td>${escapeHtml(row.observacion || "-")}</td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="14" class="empty">Carga un PAC para generar el pedido mensual.</td></tr>';
+}
+
+function renderClinicalBreaks() {
+  const rows = getClinicalBreakRows();
+  const highRisk = rows.filter((row) => ["rojo", "negro"].includes(row.semaforo)).length;
+  renderClinicalSummary(elements.clinicalBreakSummary, [
+    { title: "Productos evaluados", caption: "Mes activo", value: formatNumber(rows.length) },
+    { title: "Riesgo alto", caption: "Rojo o negro", value: formatNumber(highRisk) },
+    { title: "Criticos", caption: "No pueden faltar", value: formatNumber(rows.filter((row) => row.critico).length) },
+    { title: "Llega a fin de mes", caption: "Semaforo verde", value: formatNumber(rows.filter((row) => row.semaforo === "verde").length) }
+  ]);
+
+  elements.clinicalBreakTableBody.innerHTML = rows.length
+    ? rows.map((row) => `
+      <tr>
+        <td><strong>${escapeHtml(row.producto)}</strong></td>
+        <td>${formatNumber(row.stockActual)}</td>
+        <td>${formatNumber(row.pedidoFinal)}</td>
+        <td>${formatNumber(row.consumoPromedioDiario)}</td>
+        <td>${row.diasCobertura == null ? "Sin consumo" : formatNumber(row.diasCobertura)}</td>
+        <td>${row.fechaQuiebre ? formatDisplayDate(row.fechaQuiebre) : "-"}</td>
+        <td>${row.critico ? "Si" : "No"}</td>
+        <td>${row.reemplazable ? "Si" : "No"}</td>
+        <td><span class="clinical-light ${escapeHtml(row.semaforo)}">${escapeHtml(row.semaforo)}</span></td>
+        <td>${escapeHtml(row.observacionQuiebre)}</td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="10" class="empty">Genera un pedido mensual para proyectar quiebres.</td></tr>';
+}
+
+function renderClinicalBudget() {
+  const rows = getClinicalBudgetRows();
+  const used = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const approved = Number(state.clinicalSupply.budgetApproved || 0);
+  renderClinicalSummary(elements.clinicalBudgetSummary, [
+    { title: "Aprobado anual", caption: "PAC", value: formatCurrency(approved) },
+    { title: "Usado", caption: "Pedido mensual", value: formatCurrency(used) },
+    { title: "Disponible", caption: "Aprobado - pedido", value: formatCurrency(approved - used) },
+    { title: "Sobre PAC", caption: "Productos", value: formatNumber(rows.filter((row) => row.diferenciaPac > 0.01).length) }
+  ]);
+
+  elements.clinicalBudgetTableBody.innerHTML = rows.length
+    ? rows.map((row) => `
+      <tr>
+        <td><strong>${escapeHtml(row.producto)}</strong></td>
+        <td>${formatNumber(row.pacMensual)}</td>
+        <td>${formatNumber(row.pedidoFinal)}</td>
+        <td>${formatCurrency(row.precioUnitario)}</td>
+        <td>${formatCurrency(row.total)}</td>
+        <td>${formatNumber(row.diferenciaPac)}</td>
+        <td>${escapeHtml(row.estadoPresupuesto)}</td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="7" class="empty">Sin pedido mensual valorizado.</td></tr>';
+}
+
+function renderClinicalHistoryList(container, rows, emptyMessage, mapper) {
+  if (!container) return;
+  container.innerHTML = rows.length
+    ? rows.map((row) => {
+        const item = mapper(row);
+        return `
+          <div class="clinical-history-item">
+            <strong>${escapeHtml(item.title)}</strong>
+            <span>${escapeHtml(item.meta)}</span>
+            <span>${escapeHtml(item.detail)}</span>
+          </div>
+        `;
+      }).join("")
+    : `<div class="empty compact-empty">${escapeHtml(emptyMessage)}</div>`;
+}
+
+function renderClinicalHistory() {
+  const history = state.clinicalSupply.history || getClinicalDefaultHistory();
+  renderClinicalSummary(elements.clinicalHistorySummary, [
+    { title: "PAC guardados", caption: "Supabase", value: formatNumber(history.pacYears.length) },
+    { title: "Pedidos", caption: "Mensuales", value: formatNumber(history.monthlyOrders.length) },
+    { title: "Fichas diarias", caption: "Demanda real", value: formatNumber((history.dailyDemands || []).length) },
+    { title: "Persistencia", caption: "Fuente actual", value: state.clinicalSupply.isSupabaseReady ? "Supabase" : "Local" }
+  ]);
+  renderClinicalHistoryList(elements.clinicalPacHistory, history.pacYears, "Sin PAC guardados.", (row) => ({
+    title: `PAC ${row.year}`,
+    meta: `${formatCurrency(row.total_valued)} total - aprobado ${formatCurrency(row.approved_budget)}`,
+    detail: `Actualizado ${formatDateTime(row.updated_at || row.created_at)}`
+  }));
+  renderClinicalHistoryList(elements.clinicalOrderHistory, history.monthlyOrders, "Sin pedidos guardados.", (row) => ({
+    title: `${MONTHS[Number(row.month || 1) - 1]?.label || "Mes"} ${row.year}`,
+    meta: `${formatCurrency(row.total_valued)} - ${CLINICAL_ORDER_STATUS[row.status] || row.status}`,
+    detail: `Actualizado ${formatDateTime(row.updated_at || row.created_at)}`
+  }));
+  renderClinicalHistoryList(elements.clinicalRealImportHistory, history.realImports, "Sin importaciones reales.", (row) => ({
+    title: `${MONTHS[Number(row.month || 1) - 1]?.label || "Mes"} ${row.year}`,
+    meta: `${formatNumber(row.row_count)} filas - ${row.filename || "archivo sin nombre"}`,
+    detail: `Importado ${formatDateTime(row.created_at)}`
+  }));
+}
+
+async function ensureClinicalPacYearSaved({ replaceItems = false } = {}) {
+  if (!state.currentUser?.id) throw new Error("Usuario no autenticado.");
+  const totalPac = getClinicalPacTotal();
+  const payload = {
+    year: Number(state.clinicalSupply.pacYear),
+    approved_budget: Number(state.clinicalSupply.budgetApproved || 0),
+    requested_budget: Number(state.clinicalSupply.budgetRequested || 0),
+    total_valued: totalPac,
+    created_by: state.currentUser.id,
+    updated_at: new Date().toISOString()
+  };
+
+  const { data: pacYear, error } = await supabaseClient
+    .from("clinical_pac_years")
+    .upsert(payload, { onConflict: "year,created_by" })
+    .select("id")
+    .single();
+
+  if (error) throw error;
+  state.clinicalSupply.pacYearId = pacYear.id;
+
+  if (replaceItems) {
+    const { error: deleteError } = await supabaseClient
+      .from("clinical_pac_items")
+      .delete()
+      .eq("pac_year_id", pacYear.id);
+    if (deleteError) throw deleteError;
+
+    const itemPayload = state.clinicalSupply.pacRows.map((row) => {
+      const product = getClinicalProductByPacRow(row);
+      const validations = getClinicalPacValidationErrorsForRow(row);
+      return {
+        pac_year_id: pacYear.id,
+        code: row.codigo || null,
+        product: row.producto || "",
+        category: row.categoria || null,
+        annual_quantity: Number(row.cantidadAnual || 0),
+        ...getClinicalMonthDbPayload(row),
+        unit_price: Number(row.precioUnitario || 0),
+        total_valued: Number(row.totalValorizado || 0),
+        product_id: product?.id || null,
+        validations
+      };
+    });
+
+    if (itemPayload.length) {
+      const { data: insertedItems, error: insertError } = await supabaseClient
+        .from("clinical_pac_items")
+        .insert(itemPayload)
+        .select("*");
+      if (insertError) throw insertError;
+      state.clinicalSupply.pacRows = (insertedItems || []).map(mapClinicalPacItemFromDb);
+    }
+  }
+
+  await saveClinicalBudgetSnapshot();
+  await loadClinicalHistoryFromSupabase();
+  setClinicalSupabaseReady(true);
+  saveClinicalSupplyLocalState();
+  return pacYear.id;
+}
+
+async function saveClinicalBudgetSnapshot(monthlyOrderId = state.clinicalSupply.currentOrderId, rows = getClinicalCurrentOrderRows()) {
+  if (!state.currentUser?.id || !state.clinicalSupply.pacYearId) return;
+  const orderTotal = getClinicalOrderTotal(rows);
+  const approved = Number(state.clinicalSupply.budgetApproved || 0);
+  const requested = Number(state.clinicalSupply.budgetRequested || 0);
+  const pacTotal = getClinicalPacTotal();
+  const { error } = await supabaseClient
+    .from("clinical_budget_snapshots")
+    .insert({
+      pac_year_id: state.clinicalSupply.pacYearId,
+      monthly_order_id: monthlyOrderId || null,
+      year: Number(state.clinicalSupply.pacYear),
+      month: Number(state.clinicalSupply.monthIndex) + 1,
+      approved_budget: approved,
+      requested_budget: requested,
+      pac_total_valued: pacTotal,
+      order_total_valued: orderTotal,
+      available_budget: approved - orderTotal,
+      snapshot_data: {
+        phase2_ready: {
+          daily_demand_by_nutrition_sheet: null,
+          diet_type_consumption: null,
+          patient_diet_projection: null,
+          nutrition_replacements: null,
+          advanced_budget_simulator: null
+        },
+        items: rows.map((row) => ({
+          product_id: row.productoId || null,
+          code: row.codigo || null,
+          product: row.producto,
+          pac_monthly: Number(row.pacMensual || 0),
+          final_order: Number(row.pedidoFinal || 0),
+          total: Number(row.total || 0)
+        }))
+      },
+      created_by: state.currentUser.id
+    });
+  if (error) throw error;
+}
+
+async function saveClinicalOrderToSupabase(rows, status = "generated") {
+  const pacYearId = await ensureClinicalPacYearSaved({ replaceItems: false });
+  const total = getClinicalOrderTotal(rows);
+  const month = Number(state.clinicalSupply.monthIndex) + 1;
+  const { data: order, error } = await supabaseClient
+    .from("clinical_monthly_orders")
+    .upsert({
+      year: Number(state.clinicalSupply.pacYear),
+      month,
+      pac_year_id: pacYearId,
+      status,
+      total_valued: total,
+      created_by: state.currentUser.id,
+      updated_at: new Date().toISOString()
+    }, { onConflict: "year,month,created_by" })
+    .select("id,year,month,status,total_valued,pac_year_id")
+    .single();
+
+  if (error) throw error;
+  state.clinicalSupply.currentOrderId = order.id;
+
+  const { error: deleteError } = await supabaseClient
+    .from("clinical_monthly_order_items")
+    .delete()
+    .eq("monthly_order_id", order.id);
+  if (deleteError) throw deleteError;
+
+  const itemPayload = rows.map((row) => ({
+    monthly_order_id: order.id,
+    pac_item_id: row.pacRowId && String(row.pacRowId).startsWith("pac-") ? null : row.pacRowId,
+    product_id: row.productoId || null,
+    code: row.codigo || null,
+    product: row.producto || "",
+    category: row.categoria || null,
+    stock_current_snapshot: Number(row.stockActual || 0),
+    stock_min_snapshot: Number(row.stockMinimo || 0),
+    avg_daily_consumption_snapshot: Number(row.consumoPromedioDiario || 0),
+    expected_monthly_consumption: Number(row.consumoEsperadoMensual || 0),
+    pac_monthly: Number(row.pacMensual || 0),
+    suggested_order: Number(row.pedidoSugerido || 0),
+    final_order: Number(row.pedidoFinal || 0),
+    unit_price: Number(row.precioUnitario || 0),
+    total: Number(row.total || 0),
+    risk: row.riesgo || null,
+    observation: row.observacion || null
+  }));
+
+  if (itemPayload.length) {
+    const { data: insertedItems, error: insertError } = await supabaseClient
+      .from("clinical_monthly_order_items")
+      .insert(itemPayload)
+      .select("*");
+    if (insertError) throw insertError;
+    const orderKey = getClinicalSavedOrderKey();
+    state.clinicalSupply.orderRows = [
+      ...state.clinicalSupply.orderRows.filter((row) => row.orderKey !== orderKey),
+      ...(insertedItems || []).map((item) => mapClinicalOrderItemFromDb(item, order))
+    ];
+  }
+
+  await saveClinicalBudgetSnapshot(order.id, rows);
+  await loadClinicalHistoryFromSupabase();
+  setClinicalSupabaseReady(true);
+  saveClinicalSupplyLocalState();
+  return order.id;
+}
+
+function getClinicalRealOrderComparison(row, allRows) {
+  const duplicateCode = row.codigo && allRows.filter((item) => item.codigo && item.codigo === row.codigo).length > 1;
+  const duplicateProduct = row.producto && allRows.filter((item) => normalize(item.producto) === normalize(row.producto)).length > 1;
+  const product = (row.productoId && findProductById(row.productoId)) || findProductByName(row.producto);
+  const pacRow = state.clinicalSupply.pacRows.find((item) => normalize(item.producto) === normalize(row.producto) || (row.codigo && item.codigo === row.codigo));
+  const orderRow = (getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows())
+    .find((item) => normalize(item.producto) === normalize(row.producto) || (row.codigo && item.codigo === row.codigo));
+  const validations = [];
+  if (duplicateCode) validations.push("Codigo duplicado");
+  if (duplicateProduct) validations.push("Producto duplicado");
+  if (!product) validations.push("Producto no encontrado");
+  if (!pacRow) validations.push("No existe en PAC");
+  if (!orderRow) validations.push("No existe en pedido sugerido");
+  if (pacRow && Number(row.cantidad || 0) > getClinicalMonthValue(pacRow)) validations.push("Real sobre PAC mensual");
+  if (orderRow && Math.abs(Number(row.cantidad || 0) - Number(orderRow.pedidoSugerido || 0)) > 0.01) validations.push("Difiere del sugerido");
+
+  return {
+    product,
+    pacRow,
+    orderRow,
+    validations,
+    comparison: {
+      pac_monthly: pacRow ? getClinicalMonthValue(pacRow) : null,
+      suggested_order: orderRow ? Number(orderRow.pedidoSugerido || 0) : null,
+      final_order: orderRow ? Number(orderRow.pedidoFinal || 0) : null,
+      existing_product: Boolean(product),
+      duplicate_code: Boolean(duplicateCode),
+      duplicate_product: Boolean(duplicateProduct)
+    }
+  };
+}
+
+async function saveClinicalRealOrderImportToSupabase(rows, filename = "") {
+  const pacYearId = await ensureClinicalPacYearSaved({ replaceItems: false });
+  const orderRows = getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows();
+  if (!state.clinicalSupply.currentOrderId) {
+    await saveClinicalOrderToSupabase(orderRows, "generated");
+  }
+  const { data: importRow, error } = await supabaseClient
+    .from("clinical_real_order_imports")
+    .insert({
+      year: Number(state.clinicalSupply.pacYear),
+      month: Number(state.clinicalSupply.monthIndex) + 1,
+      pac_year_id: pacYearId,
+      monthly_order_id: state.clinicalSupply.currentOrderId || null,
+      filename: filename || null,
+      row_count: rows.length,
+      imported_by: state.currentUser.id
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+
+  const itemPayload = rows.map((row) => {
+    const comparison = getClinicalRealOrderComparison(row, rows);
+    return {
+      real_order_import_id: importRow.id,
+      product_id: comparison.product?.id || null,
+      pac_item_id: comparison.pacRow?.id && !String(comparison.pacRow.id).startsWith("pac-") ? comparison.pacRow.id : null,
+      monthly_order_item_id: comparison.orderRow?.id || null,
+      code: row.codigo || null,
+      product: row.producto || "",
+      quantity: Number(row.cantidad || 0),
+      unit_price: Number(row.precioUnitario || 0),
+      total: Number(row.total || 0),
+      comparison: comparison.comparison,
+      validations: comparison.validations
+    };
+  });
+
+  if (itemPayload.length) {
+    const { data: insertedItems, error: insertError } = await supabaseClient
+      .from("clinical_real_order_items")
+      .insert(itemPayload)
+      .select("*");
+    if (insertError) throw insertError;
+    state.clinicalSupply.realOrderRows = (insertedItems || []).map(mapClinicalRealItemFromDb);
+  }
+
+  state.clinicalSupply.lastRealImportId = importRow.id;
+  await loadClinicalHistoryFromSupabase();
+  setClinicalSupabaseReady(true);
+  saveClinicalSupplyLocalState();
+}
+
+let clinicalBudgetSaveTimer = null;
+function scheduleClinicalPacMetadataSave() {
+  saveClinicalSupplyLocalState();
+  window.clearTimeout(clinicalBudgetSaveTimer);
+  clinicalBudgetSaveTimer = window.setTimeout(async () => {
+    if (!state.currentUser?.id) return;
+    try {
+      await ensureClinicalPacYearSaved({ replaceItems: false });
+    } catch (error) {
+      setClinicalSupabaseReady(false);
+      console.warn("No se pudo guardar presupuesto PAC en Supabase", error);
+    }
+  }, 700);
+}
+
+function commitClinicalCurrentOrder(rows) {
+  const orderKey = getClinicalSavedOrderKey();
+  state.clinicalSupply.orderRows = [
+    ...state.clinicalSupply.orderRows.filter((row) => row.orderKey !== orderKey),
+    ...rows
+  ];
+  saveClinicalSupplyState();
+}
+
+async function generateClinicalOrder() {
+  const rows = buildClinicalOrderRows();
+  commitClinicalCurrentOrder(rows);
+  try {
+    await saveClinicalOrderToSupabase(rows, "generated");
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Pedido clinico guardado solo localmente", error);
+    showToastError("Pedido guardado localmente; Supabase no disponible.");
+  }
+  renderClinicalSupply();
+  showToastSuccess("Pedido mensual generado.");
+}
+
+async function updateClinicalFinalOrder(pacRowId, value) {
+  const rows = getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows();
+  const updatedRows = rows.map((row) => {
+    if (row.pacRowId !== pacRowId) return row;
+    const pedidoFinal = Math.max(0, parseClinicalNumber(value));
+    return {
+      ...row,
+      pedidoFinal,
+      total: Number((pedidoFinal * Number(row.precioUnitario || 0)).toFixed(0))
+    };
+  });
+  commitClinicalCurrentOrder(updatedRows);
+  try {
+    await saveClinicalOrderToSupabase(updatedRows, "generated");
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Cambio de pedido final guardado solo localmente", error);
+  }
+  renderClinicalSupply();
+}
+
+function getClinicalExportRows(type) {
+  if (type === "pac") return state.clinicalSupply.pacRows.map((row) => ({
+    codigo: row.codigo,
+    producto: row.producto,
+    categoria: row.categoria,
+    cantidad_anual: row.cantidadAnual,
+    ...Object.fromEntries(CLINICAL_MONTH_FIELDS.map((field) => [field, row[field]])),
+    precio_unitario: row.precioUnitario,
+    total_valorizado: row.totalValorizado
+  }));
+  if (type === "pedido") return (getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows()).map((row) => ({
+    codigo: row.codigo,
+    producto: row.producto,
+    categoria: row.categoria,
+    stock_actual: row.stockActual,
+    stock_minimo: row.stockMinimo,
+    consumo_promedio_diario: row.consumoPromedioDiario,
+    consumo_esperado_mensual: row.consumoEsperadoMensual,
+    pac_mensual: row.pacMensual,
+    pedido_sugerido: row.pedidoSugerido,
+    pedido_final: row.pedidoFinal,
+    precio_unitario: row.precioUnitario,
+    total: row.total,
+    riesgo: row.riesgo,
+    observacion: row.observacion
+  }));
+  if (type === "quiebres") return getClinicalBreakRows().map((row) => ({
+    producto: row.producto,
+    stock_actual: row.stockActual,
+    pedido_final: row.pedidoFinal,
+    consumo_promedio_diario: row.consumoPromedioDiario,
+    dias_cobertura: row.diasCobertura == null ? "" : row.diasCobertura,
+    fecha_quiebre: row.fechaQuiebre,
+    critico: row.critico ? "si" : "no",
+    reemplazable: row.reemplazable ? "si" : "no",
+    semaforo: row.semaforo,
+    observacion: row.observacionQuiebre
+  }));
+  if (type === "presupuesto") return getClinicalBudgetRows().map((row) => ({
+    producto: row.producto,
+    pac_mensual: row.pacMensual,
+    pedido_final: row.pedidoFinal,
+    precio_unitario: row.precioUnitario,
+    total_pedido: row.total,
+    diferencia_pac: row.diferenciaPac,
+    estado: row.estadoPresupuesto
+  }));
+  if (type === "criticos") return getExportRows("criticos");
+  if (type === "bajo_stock") return getLowStockDetailItems().map((item) => ({
+    producto: item.nombre,
+    stock_actual: item.cantidad,
+    unidad: item.unidad,
+    observaciones: item.observaciones
+  }));
+  if (type === "demanda_diaria") return state.clinicalSupply.dailyDemands.map((row) => ({
+    fecha: row.demandDate,
+    archivo: row.filename,
+    usuario: row.uploadedByName,
+    estado: row.status,
+    total_pacientes: row.totalPatients,
+    dietas_especiales: row.dietSpecialTotal,
+    enterales_modulos: row.enteralTotal,
+    insumos_detectados: row.supplyTotal,
+    advertencias: row.warningCount,
+    observaciones: row.observations
+  }));
+  if (type === "demanda_dietas") return state.clinicalSupply.dailyDietCounts.map((row) => ({
+    fecha: row.demandDate,
+    tipo_dieta: row.dietType,
+    cantidad: row.quantity,
+    hoja_origen: row.sourceSheet,
+    observacion: row.observation
+  }));
+  if (type === "demanda_enterales") return state.clinicalSupply.dailyEnteralItems.map((row) => ({
+    fecha: row.demandDate,
+    paciente_referencia: row.patientRef,
+    producto_formula: row.product,
+    volumen: row.volume,
+    unidad: row.unit,
+    horario: row.schedule,
+    via: row.route,
+    observacion: row.observation
+  }));
+  if (type === "demanda_insumos") return state.clinicalSupply.dailySupplyItems.map((row) => ({
+    fecha: row.demandDate,
+    producto_insumo: row.product,
+    cantidad: row.quantity,
+    unidad: row.unit,
+    servicio: row.service,
+    observacion: row.observation
+  }));
+  if (type === "demanda_errores") return state.clinicalSupply.dailyImportErrors.map((row) => ({
+    ficha: row.demandId,
+    hoja: row.sheetName,
+    fila: row.rowNumber,
+    severidad: row.severity,
+    mensaje: row.message
+  }));
+  return [];
+}
+
+function exportClinicalReport(type) {
+  const filename = `jesunutri_abastecimiento_${type}_${state.clinicalSupply.pacYear}_${Number(state.clinicalSupply.monthIndex) + 1}.csv`;
+  downloadCsv(filename, getClinicalExportRows(type));
+  if (type === "pedido") {
+    saveClinicalOrderToSupabase(getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows(), "exported")
+      .catch((error) => console.warn("No se pudo marcar pedido clinico como exportado", error));
+  }
+}
+
+async function parseClinicalFile(file) {
+  if (!file) return [];
+  const extension = file.name.split(".").pop().toLowerCase();
+  if (["xlsx", "xls"].includes(extension)) {
+    if (!window.XLSX) {
+      throw new Error("La libreria Excel no esta cargada. Importa CSV/TXT o revisa la conexion para cargar SheetJS.");
+    }
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: "array" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    return XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  }
+  const text = await file.text();
+  const delimiter = text.includes(";") ? ";" : text.includes("\t") ? "\t" : ",";
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
+  const headers = (lines.shift() || "").split(delimiter).map((header) => header.trim());
+  return lines.map((line) => {
+    const cells = line.split(delimiter);
+    return Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+  });
+}
+
+async function parseClinicalDemandWorkbook(file) {
+  if (!file) return [];
+  const extension = file.name.split(".").pop().toLowerCase();
+  if (["xlsx", "xls"].includes(extension)) {
+    if (!window.XLSX) throw new Error("La libreria Excel no esta cargada. Importa CSV/TXT o revisa la conexion.");
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    return workbook.SheetNames.map((sheetName) => {
+      const matrix = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "" });
+      return { sheetName, rows: matrix.map((row) => row.map((cell) => String(cell ?? "").trim())) };
+    });
+  }
+
+  const text = await file.text();
+  const delimiter = text.includes(";") ? ";" : text.includes("\t") ? "\t" : ",";
+  const rows = text
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => line.split(delimiter).map((cell) => cell.trim()));
+  return [{ sheetName: file.name || "CSV", rows }];
+}
+
+function getClinicalDemandCurrentMonthDemands() {
+  const year = Number(state.clinicalSupply.pacYear);
+  const month = Number(state.clinicalSupply.monthIndex) + 1;
+  return state.clinicalSupply.dailyDemands.filter((row) => {
+    const [rowYear, rowMonth] = String(row.demandDate || "").split("-").map(Number);
+    return rowYear === year && rowMonth === month;
+  });
+}
+
+function getClinicalDemandSelectedId() {
+  return elements.clinicalDemandEditSelect?.value || state.clinicalSupply.dailyDemands[0]?.id || "";
+}
+
+function getClinicalDemandSelected() {
+  const id = getClinicalDemandSelectedId();
+  return state.clinicalSupply.dailyDemands.find((row) => String(row.id) === String(id)) || null;
+}
+
+function pushClinicalDemandWarning(collection, demandId, sheetName, message, rowNumber = null) {
+  collection.push({
+    id: `demand-error-${Date.now()}-${collection.length}`,
+    demandId,
+    sheetName,
+    rowNumber,
+    severity: "warning",
+    message
+  });
+}
+
+function inferClinicalDemandDate(sheets, fallbackDate) {
+  const datePattern = /(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/;
+  for (const sheet of sheets) {
+    for (const row of sheet.rows.slice(0, 20)) {
+      const text = row.join(" ");
+      const match = text.match(datePattern);
+      if (!match) continue;
+      const day = match[1].padStart(2, "0");
+      const month = match[2].padStart(2, "0");
+      const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+      return `${year}-${month}-${day}`;
+    }
+  }
+  return fallbackDate || formatIsoDate(new Date());
+}
+
+function extractNumberNearDemandKeyword(row, keywordIndex) {
+  const sameCell = String(row[keywordIndex] || "").match(/(\d+(?:[.,]\d+)?)/);
+  if (sameCell) return parseClinicalNumber(sameCell[1]);
+  for (let index = keywordIndex + 1; index < Math.min(row.length, keywordIndex + 4); index += 1) {
+    const number = parseClinicalNumber(row[index]);
+    if (number > 0 || String(row[index] || "").trim() === "0") return number;
+  }
+  for (let index = Math.max(0, keywordIndex - 3); index < keywordIndex; index += 1) {
+    const number = parseClinicalNumber(row[index]);
+    if (number > 0 || String(row[index] || "").trim() === "0") return number;
+  }
+  return 0;
+}
+
+function extractClinicalDemand(sheetPayload, { file, demandDate, observations }) {
+  const demandId = `demand-${Date.now()}`;
+  const dietCounts = [];
+  const enteralItems = [];
+  const supplyItems = [];
+  const errors = [];
+  let totalPatients = 0;
+
+  sheetPayload.forEach((sheet) => {
+    const sheetKey = normalize(sheet.sheetName || "");
+    sheet.rows.forEach((row, rowIndex) => {
+      const normalizedCells = row.map((cell) => normalize(cell));
+      const line = normalizedCells.join(" ");
+      if (!line.trim()) return;
+
+      if (/total|usuarios|pacientes/.test(line)) {
+        const keywordIndex = normalizedCells.findIndex((cell) => /total|usuarios|pacientes/.test(cell));
+        const value = extractNumberNearDemandKeyword(row, Math.max(0, keywordIndex));
+        if (value > totalPatients) totalPatients = value;
+      }
+
+      CLINICAL_DEMAND_DIET_KEYWORDS.forEach((keyword) => {
+        const keywordIndex = normalizedCells.findIndex((cell) => cell.includes(keyword));
+        if (keywordIndex < 0) return;
+        const quantity = extractNumberNearDemandKeyword(row, keywordIndex);
+        if (!quantity && !/gtt|papilla/.test(keyword)) return;
+        const dietType = keyword === "diabetico" ? "diabetico" : keyword;
+        dietCounts.push({
+          id: `diet-${demandId}-${dietCounts.length}`,
+          demandId,
+          demandDate,
+          dietType,
+          quantity,
+          sourceSheet: sheet.sheetName,
+          observation: `Fila ${rowIndex + 1}`
+        });
+      });
+
+      const looksEnteral = CLINICAL_DEMAND_ENTERAL_KEYWORDS.some((keyword) => line.includes(keyword)) || sheetKey.includes("enteral");
+      if (looksEnteral) {
+        const product = row.find((cell) => cell && !/^\d+([.,]\d+)?$/.test(String(cell).trim())) || "Registro enteral";
+        const volumeCell = row.find((cell) => /\d+\s*(cc|ml|lt|l|gr|g)/i.test(String(cell)));
+        const scheduleCell = row.find((cell) => /\b\d{1,2}[:.]\d{2}\b|\b\d{1,2}\s*h\b/i.test(String(cell)));
+        enteralItems.push({
+          id: `enteral-${demandId}-${enteralItems.length}`,
+          demandId,
+          demandDate,
+          patientRef: row.find((cell) => /paciente|cama|sala/i.test(String(cell))) || "",
+          product: product || "Formula/modulo",
+          volume: parseClinicalNumber(volumeCell || row.find((cell) => parseClinicalNumber(cell) > 0)),
+          unit: volumeCell ? String(volumeCell).replace(/[0-9.,\s]/g, "").trim() || "ml" : "",
+          schedule: scheduleCell || "",
+          route: line.includes("gtt") ? "GTT" : line.includes("oral") ? "via oral" : "",
+          observation: `${sheet.sheetName} fila ${rowIndex + 1}`
+        });
+      }
+
+      const looksSupply = CLINICAL_DEMAND_SUPPLY_KEYWORDS.some((keyword) => line.includes(keyword)) || CLINICAL_DEMAND_SUPPLY_KEYWORDS.some((keyword) => sheetKey.includes(keyword));
+      if (looksSupply) {
+        const quantity = row.map(parseClinicalNumber).find((value) => value > 0) || 0;
+        const product = row.find((cell) => cell && !/^\d+([.,]\d+)?$/.test(String(cell).trim())) || "Insumo detectado";
+        supplyItems.push({
+          id: `supply-${demandId}-${supplyItems.length}`,
+          demandId,
+          demandDate,
+          product,
+          quantity,
+          unit: "",
+          service: sheet.sheetName,
+          observation: `Fila ${rowIndex + 1}`
+        });
+      }
+    });
+  });
+
+  if (!dietCounts.length) pushClinicalDemandWarning(errors, demandId, "", "No se identificaron tipos de dieta.");
+  if (!enteralItems.length) pushClinicalDemandWarning(errors, demandId, "", "No se identificaron enterales, formulas o modulos.");
+  if (!supplyItems.length) pushClinicalDemandWarning(errors, demandId, "", "No se identificaron calculos de pan, colaciones o insumos.");
+  if (!totalPatients) pushClinicalDemandWarning(errors, demandId, "", "No se pudo identificar total de pacientes.");
+
+  const uniqueDietCounts = [...new Map(dietCounts.map((row) => [`${row.dietType}-${row.sourceSheet}-${row.observation}`, row])).values()];
+  const demand = {
+    id: demandId,
+    demandDate,
+    filename: file?.name || "archivo sin nombre",
+    uploadedBy: state.currentUser?.id || null,
+    uploadedByName: state.currentUser?.nombre || state.currentUser?.email || "Local",
+    status: errors.length ? "con errores" : "cargada",
+    observations: observations || "",
+    totalPatients,
+    dietSpecialTotal: uniqueDietCounts.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
+    enteralTotal: enteralItems.length,
+    supplyTotal: supplyItems.length,
+    warningCount: errors.length,
+    createdAt: new Date().toISOString()
+  };
+
+  return { demand, dietCounts: uniqueDietCounts, enteralItems, supplyItems, errors };
+}
+
+function mergeClinicalDemandImport(parsed) {
+  state.clinicalSupply.dailyDemands = [
+    parsed.demand,
+    ...state.clinicalSupply.dailyDemands.filter((row) => row.id !== parsed.demand.id)
+  ];
+  state.clinicalSupply.dailyDietCounts = [
+    ...state.clinicalSupply.dailyDietCounts.filter((row) => row.demandId !== parsed.demand.id),
+    ...parsed.dietCounts
+  ];
+  state.clinicalSupply.dailyEnteralItems = [
+    ...state.clinicalSupply.dailyEnteralItems.filter((row) => row.demandId !== parsed.demand.id),
+    ...parsed.enteralItems
+  ];
+  state.clinicalSupply.dailySupplyItems = [
+    ...state.clinicalSupply.dailySupplyItems.filter((row) => row.demandId !== parsed.demand.id),
+    ...parsed.supplyItems
+  ];
+  state.clinicalSupply.dailyImportErrors = [
+    ...state.clinicalSupply.dailyImportErrors.filter((row) => row.demandId !== parsed.demand.id),
+    ...parsed.errors
+  ];
+}
+
+async function saveClinicalDemandToSupabase(parsed) {
+  if (!state.currentUser?.id) throw new Error("Usuario no autenticado.");
+  const { data: demand, error } = await supabaseClient
+    .from("clinical_daily_demands")
+    .insert({
+      demand_date: parsed.demand.demandDate,
+      filename: parsed.demand.filename,
+      uploaded_by: state.currentUser.id,
+      status: parsed.demand.status,
+      observations: parsed.demand.observations || null,
+      total_patients: Number(parsed.demand.totalPatients || 0),
+      diet_special_total: Number(parsed.demand.dietSpecialTotal || 0),
+      enteral_total: Number(parsed.demand.enteralTotal || 0),
+      supply_total: Number(parsed.demand.supplyTotal || 0),
+      warning_count: Number(parsed.demand.warningCount || 0)
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+
+  parsed.demand.id = demand.id;
+  parsed.demand.createdAt = demand.created_at;
+  parsed.dietCounts.forEach((row) => { row.demandId = demand.id; });
+  parsed.enteralItems.forEach((row) => { row.demandId = demand.id; });
+  parsed.supplyItems.forEach((row) => { row.demandId = demand.id; });
+  parsed.errors.forEach((row) => { row.demandId = demand.id; });
+
+  const dietPayload = parsed.dietCounts.map((row) => ({
+    daily_demand_id: demand.id,
+    demand_date: row.demandDate,
+    diet_type: row.dietType,
+    quantity: Number(row.quantity || 0),
+    source_sheet: row.sourceSheet || null,
+    observation: row.observation || null
+  }));
+  if (dietPayload.length) {
+    const { error: dietError } = await supabaseClient.from("clinical_daily_diet_counts").insert(dietPayload);
+    if (dietError) throw dietError;
+  }
+
+  const enteralPayload = parsed.enteralItems.map((row) => ({
+    daily_demand_id: demand.id,
+    demand_date: row.demandDate,
+    patient_ref: row.patientRef || null,
+    product_formula: row.product || "",
+    volume: Number(row.volume || 0),
+    unit: row.unit || null,
+    schedule: row.schedule || null,
+    route: row.route || null,
+    observation: row.observation || null
+  }));
+  if (enteralPayload.length) {
+    const { error: enteralError } = await supabaseClient.from("clinical_daily_enteral_items").insert(enteralPayload);
+    if (enteralError) throw enteralError;
+  }
+
+  const supplyPayload = parsed.supplyItems.map((row) => ({
+    daily_demand_id: demand.id,
+    demand_date: row.demandDate,
+    product_supply: row.product || "",
+    quantity: Number(row.quantity || 0),
+    unit: row.unit || null,
+    service: row.service || null,
+    observation: row.observation || null
+  }));
+  if (supplyPayload.length) {
+    const { error: supplyError } = await supabaseClient.from("clinical_daily_supply_items").insert(supplyPayload);
+    if (supplyError) throw supplyError;
+  }
+
+  const errorPayload = parsed.errors.map((row) => ({
+    daily_demand_id: demand.id,
+    sheet_name: row.sheetName || null,
+    row_number: row.rowNumber,
+    severity: row.severity || "warning",
+    message: row.message || ""
+  }));
+  if (errorPayload.length) {
+    const { error: importError } = await supabaseClient.from("clinical_daily_import_errors").insert(errorPayload);
+    if (importError) throw importError;
+  }
+}
+
+async function loadClinicalDailyDemandFromSupabase() {
+  if (!state.currentUser?.id) return;
+  const { data: demands, error } = await supabaseClient
+    .from("clinical_daily_demands")
+    .select("*")
+    .eq("uploaded_by", state.currentUser.id)
+    .order("demand_date", { ascending: false })
+    .limit(90);
+  if (error) throw error;
+
+  const ids = (demands || []).map((row) => row.id);
+  const [dietResult, enteralResult, supplyResult, errorResult] = ids.length ? await Promise.all([
+    supabaseClient.from("clinical_daily_diet_counts").select("*").in("daily_demand_id", ids),
+    supabaseClient.from("clinical_daily_enteral_items").select("*").in("daily_demand_id", ids),
+    supabaseClient.from("clinical_daily_supply_items").select("*").in("daily_demand_id", ids),
+    supabaseClient.from("clinical_daily_import_errors").select("*").in("daily_demand_id", ids)
+  ]) : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }];
+
+  if (dietResult.error) throw dietResult.error;
+  if (enteralResult.error) throw enteralResult.error;
+  if (supplyResult.error) throw supplyResult.error;
+  if (errorResult.error) throw errorResult.error;
+
+  state.clinicalSupply.dailyDemands = (demands || []).map((row) => ({
+    id: row.id,
+    demandDate: row.demand_date,
+    filename: row.filename || "archivo sin nombre",
+    uploadedBy: row.uploaded_by,
+    uploadedByName: row.uploaded_by || "Supabase",
+    status: row.status || "cargada",
+    observations: row.observations || "",
+    totalPatients: Number(row.total_patients || 0),
+    dietSpecialTotal: Number(row.diet_special_total || 0),
+    enteralTotal: Number(row.enteral_total || 0),
+    supplyTotal: Number(row.supply_total || 0),
+    warningCount: Number(row.warning_count || 0),
+    createdAt: row.created_at
+  }));
+  state.clinicalSupply.dailyDietCounts = (dietResult.data || []).map((row) => ({
+    id: row.id,
+    demandId: row.daily_demand_id,
+    demandDate: row.demand_date,
+    dietType: row.diet_type,
+    quantity: Number(row.quantity || 0),
+    sourceSheet: row.source_sheet || "",
+    observation: row.observation || ""
+  }));
+  state.clinicalSupply.dailyEnteralItems = (enteralResult.data || []).map((row) => ({
+    id: row.id,
+    demandId: row.daily_demand_id,
+    demandDate: row.demand_date,
+    patientRef: row.patient_ref || "",
+    product: row.product_formula || "",
+    volume: Number(row.volume || 0),
+    unit: row.unit || "",
+    schedule: row.schedule || "",
+    route: row.route || "",
+    observation: row.observation || ""
+  }));
+  state.clinicalSupply.dailySupplyItems = (supplyResult.data || []).map((row) => ({
+    id: row.id,
+    demandId: row.daily_demand_id,
+    demandDate: row.demand_date,
+    product: row.product_supply || "",
+    quantity: Number(row.quantity || 0),
+    unit: row.unit || "",
+    service: row.service || "",
+    observation: row.observation || ""
+  }));
+  state.clinicalSupply.dailyImportErrors = (errorResult.data || []).map((row) => ({
+    id: row.id,
+    demandId: row.daily_demand_id,
+    sheetName: row.sheet_name || "",
+    rowNumber: row.row_number,
+    severity: row.severity || "warning",
+    message: row.message || ""
+  }));
+  state.clinicalSupply.history.dailyDemands = state.clinicalSupply.dailyDemands.slice(0, 20);
+}
+
+async function importClinicalDemandFile(file) {
+  if (!file) return;
+  const sheets = await parseClinicalDemandWorkbook(file);
+  const demandDate = inferClinicalDemandDate(sheets, elements.clinicalDemandDate.value);
+  const parsed = extractClinicalDemand(sheets, {
+    file,
+    demandDate,
+    observations: elements.clinicalDemandNotes.value
+  });
+
+  try {
+    await saveClinicalDemandToSupabase(parsed);
+    setClinicalSupabaseReady(true);
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Demanda diaria guardada solo localmente", error);
+    showToastError("Demanda diaria guardada localmente; Supabase no disponible.");
+  }
+  mergeClinicalDemandImport(parsed);
+  state.clinicalSupply.history.dailyDemands = state.clinicalSupply.dailyDemands.slice(0, 20);
+  saveClinicalSupplyState();
+  renderClinicalSupply();
+  showToastSuccess("Ficha diaria cargada.");
+}
+
+async function saveClinicalDemandManualEdit() {
+  const demand = getClinicalDemandSelected();
+  if (!demand) {
+    showToastError("Selecciona una ficha diaria.");
+    return;
+  }
+  demand.totalPatients = parseClinicalNumber(elements.clinicalDemandPatientsInput.value);
+  const dietType = normalize(elements.clinicalDemandDietName.value);
+  const quantity = parseClinicalNumber(elements.clinicalDemandDietQty.value);
+  let manualDietRow = null;
+  if (dietType) {
+    const existing = state.clinicalSupply.dailyDietCounts.find((row) => row.demandId === demand.id && normalize(row.dietType) === dietType);
+    if (existing) {
+      existing.quantity = quantity;
+      existing.observation = elements.clinicalDemandDietNotes.value || existing.observation || "Correccion manual";
+      manualDietRow = existing;
+    } else {
+      manualDietRow = {
+        id: `diet-manual-${Date.now()}`,
+        demandId: demand.id,
+        demandDate: demand.demandDate,
+        dietType,
+        quantity,
+        sourceSheet: "manual",
+        observation: elements.clinicalDemandDietNotes.value || "Correccion manual"
+      };
+      state.clinicalSupply.dailyDietCounts.push(manualDietRow);
+    }
+  }
+  const dietRows = state.clinicalSupply.dailyDietCounts.filter((row) => row.demandId === demand.id);
+  demand.dietSpecialTotal = dietRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+  demand.status = demand.warningCount ? "con errores" : "revisada";
+  try {
+    if (state.currentUser?.id && /^[0-9a-f-]{36}$/i.test(String(demand.id))) {
+      const { error } = await supabaseClient
+        .from("clinical_daily_demands")
+        .update({
+          total_patients: Number(demand.totalPatients || 0),
+          diet_special_total: Number(demand.dietSpecialTotal || 0),
+          status: demand.status,
+          observations: demand.observations || null
+        })
+        .eq("id", demand.id);
+      if (error) throw error;
+      if (manualDietRow && String(manualDietRow.id).startsWith("diet-manual-")) {
+        const { error: dietError } = await supabaseClient
+          .from("clinical_daily_diet_counts")
+          .insert({
+            daily_demand_id: demand.id,
+            demand_date: demand.demandDate,
+            diet_type: manualDietRow.dietType,
+            quantity: Number(manualDietRow.quantity || 0),
+            source_sheet: "manual",
+            observation: manualDietRow.observation || null
+          });
+        if (dietError) throw dietError;
+      }
+    }
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Correccion de demanda guardada solo localmente", error);
+    showToastError("Correccion guardada localmente; Supabase no disponible.");
+  }
+  saveClinicalSupplyState();
+  renderClinicalDemand();
+  showToastSuccess("Demanda diaria actualizada localmente.");
+}
+
+function renderClinicalDemand() {
+  const selected = getClinicalDemandSelected();
+  const monthDemands = getClinicalDemandCurrentMonthDemands();
+  const latest = selected || monthDemands[0] || state.clinicalSupply.dailyDemands[0] || null;
+  const monthPatientValues = monthDemands.map((row) => Number(row.totalPatients || 0)).filter((value) => value > 0);
+  const maxDemand = monthDemands.reduce((best, row) => Number(row.totalPatients || 0) > Number(best?.totalPatients || 0) ? row : best, null);
+  const dietTotals = new Map();
+  state.clinicalSupply.dailyDietCounts
+    .filter((row) => monthDemands.some((demand) => demand.id === row.demandId))
+    .forEach((row) => dietTotals.set(row.dietType, (dietTotals.get(row.dietType) || 0) + Number(row.quantity || 0)));
+  const topDiet = [...dietTotals.entries()].sort((a, b) => b[1] - a[1])[0];
+
+  if (elements.clinicalDemandDate && !elements.clinicalDemandDate.value) elements.clinicalDemandDate.value = formatIsoDate(new Date());
+  elements.clinicalDemandEditSelect.innerHTML = state.clinicalSupply.dailyDemands.length
+    ? state.clinicalSupply.dailyDemands.map((row) => `<option value="${escapeHtml(row.id)}">${formatDisplayDate(row.demandDate)} - ${escapeHtml(row.filename)}</option>`).join("")
+    : '<option value="">Sin fichas</option>';
+  if (latest) elements.clinicalDemandEditSelect.value = latest.id;
+  elements.clinicalDemandPatientsInput.value = latest?.totalPatients || "";
+
+  renderClinicalSummary(elements.clinicalDemandDailySummary, [
+    { title: "Fecha", caption: "Ficha seleccionada", value: latest ? formatDisplayDate(latest.demandDate) : "-" },
+    { title: "Pacientes", caption: "Total detectado", value: latest ? formatNumber(latest.totalPatients) : "0" },
+    { title: "Dietas especiales", caption: "Suma detectada", value: latest ? formatNumber(latest.dietSpecialTotal) : "0" },
+    { title: "Advertencias", caption: "Lectura flexible", value: latest ? formatNumber(latest.warningCount) : "0" }
+  ]);
+
+  const average = monthPatientValues.length ? monthPatientValues.reduce((sum, value) => sum + value, 0) / monthPatientValues.length : 0;
+  renderClinicalSummary(elements.clinicalDemandMonthlySummary, [
+    { title: "Promedio diario", caption: MONTHS[state.clinicalSupply.monthIndex].label, value: formatNumber(average) },
+    { title: "Maximo diario", caption: maxDemand ? formatDisplayDate(maxDemand.demandDate) : "Sin datos", value: formatNumber(maxDemand?.totalPatients || 0) },
+    { title: "Dieta frecuente", caption: topDiet?.[0] || "Sin datos", value: formatNumber(topDiet?.[1] || 0) },
+    { title: "Fichas del mes", caption: "Demanda real", value: formatNumber(monthDemands.length) }
+  ]);
+
+  const currentWarnings = latest ? state.clinicalSupply.dailyImportErrors.filter((row) => row.demandId === latest.id) : [];
+  elements.clinicalDemandWarnings.hidden = !currentWarnings.length;
+  elements.clinicalDemandWarnings.innerHTML = currentWarnings.map((row) => `<div>${escapeHtml(row.message)}</div>`).join("");
+
+  elements.clinicalDemandTableBody.innerHTML = state.clinicalSupply.dailyDemands.length
+    ? state.clinicalSupply.dailyDemands.map((row) => `
+      <tr>
+        <td>${formatDisplayDate(row.demandDate)}</td>
+        <td><strong>${escapeHtml(row.filename)}</strong></td>
+        <td>${formatNumber(row.totalPatients)}</td>
+        <td>${formatNumber(row.dietSpecialTotal)}</td>
+        <td>${formatNumber(row.enteralTotal)}</td>
+        <td>${formatNumber(row.supplyTotal)}</td>
+        <td>${escapeHtml(row.status)}</td>
+        <td>${formatNumber(row.warningCount)}</td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="8" class="empty">Carga una ficha diaria para comenzar.</td></tr>';
+
+  const selectedId = latest?.id;
+  const selectedDiets = state.clinicalSupply.dailyDietCounts.filter((row) => row.demandId === selectedId);
+  elements.clinicalDemandDietList.innerHTML = selectedDiets.length
+    ? selectedDiets.map((row) => `
+      <div class="clinical-history-item">
+        <strong>${escapeHtml(row.dietType)}</strong>
+        <span>${formatNumber(row.quantity)} pacientes</span>
+        <span>${escapeHtml(row.sourceSheet || row.observation || "-")}</span>
+      </div>
+    `).join("")
+    : '<div class="empty compact-empty">Sin dietas detectadas.</div>';
+
+  const selectedItems = [
+    ...state.clinicalSupply.dailyEnteralItems.filter((row) => row.demandId === selectedId).map((row) => ({ type: "Enteral", title: row.product, detail: `${formatNumber(row.volume)} ${row.unit || ""} ${row.schedule || ""}` })),
+    ...state.clinicalSupply.dailySupplyItems.filter((row) => row.demandId === selectedId).map((row) => ({ type: "Insumo", title: row.product, detail: `${formatNumber(row.quantity)} ${row.unit || ""} ${row.service || ""}` }))
+  ];
+  elements.clinicalDemandItemList.innerHTML = selectedItems.length
+    ? selectedItems.slice(0, 24).map((row) => `
+      <div class="clinical-history-item">
+        <strong>${escapeHtml(row.title || row.type)}</strong>
+        <span>${escapeHtml(row.type)}</span>
+        <span>${escapeHtml(row.detail || "-")}</span>
+      </div>
+    `).join("")
+    : '<div class="empty compact-empty">Sin enterales ni insumos detectados.</div>';
+}
+
+async function importClinicalPacFile(file) {
+  const rows = await parseClinicalFile(file);
+  state.clinicalSupply.pacRows = rows
+    .map(normalizeClinicalPacRow)
+    .filter((row) => row.producto || row.codigo);
+  state.clinicalSupply.orderRows = [];
+  state.clinicalSupply.realOrderRows = [];
+  saveClinicalSupplyState();
+  try {
+    await ensureClinicalPacYearSaved({ replaceItems: true });
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("PAC guardado solo localmente", error);
+    showToastError("PAC guardado localmente; Supabase no disponible.");
+  }
+  renderClinicalSupply();
+  showToastSuccess("PAC cargado.");
+}
+
+function normalizeClinicalRealOrderRow(rawRow, index) {
+  const row = {};
+  Object.entries(rawRow || {}).forEach(([key, value]) => {
+    row[getClinicalFieldName(key)] = value;
+  });
+  return {
+    id: `real-${Date.now()}-${index}`,
+    codigo: String(row.codigo ?? "").trim(),
+    producto: String(row.producto ?? "").trim(),
+    cantidad: parseClinicalNumber(row.cantidad ?? row.cantidadAnual ?? row.pedidoFinal ?? row.total),
+    precioUnitario: parseClinicalNumber(row.precioUnitario),
+    total: parseClinicalNumber(row.totalValorizado)
+  };
+}
+
+async function importClinicalRealOrderFile(file) {
+  const rows = await parseClinicalFile(file);
+  state.clinicalSupply.realOrderRows = rows
+    .map(normalizeClinicalRealOrderRow)
+    .filter((row) => row.producto || row.codigo);
+  commitClinicalCurrentOrder(buildClinicalOrderRows());
+  try {
+    await saveClinicalRealOrderImportToSupabase(state.clinicalSupply.realOrderRows, file?.name || "");
+    commitClinicalCurrentOrder(buildClinicalOrderRows());
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Pedido real guardado solo localmente", error);
+    showToastError("Pedido real guardado localmente; Supabase no disponible.");
+  }
+  renderClinicalSupply();
+  showToastSuccess("Pedido real importado.");
 }
 
 function maybeAutofillUnit(nameInput, unitInput) {
@@ -1043,6 +2924,7 @@ function render() {
   renderInventory();
   renderHistory();
   renderAnalytics();
+  renderClinicalSupply();
 }
 
 function openEntryModal() {
@@ -2918,6 +4800,19 @@ document.addEventListener("click", (event) => {
 
   const detailButton = event.target.closest("[data-detail]");
   if (detailButton) openDetailModal(detailButton.dataset.detail);
+
+  const clinicalTab = event.target.closest("[data-clinical-tab]");
+  if (clinicalTab) {
+    state.clinicalSupply.activeTab = clinicalTab.dataset.clinicalTab;
+    saveClinicalSupplyState();
+    renderClinicalSupply();
+    return;
+  }
+
+  const clinicalExport = event.target.closest("[data-clinical-export]");
+  if (clinicalExport) {
+    exportClinicalReport(clinicalExport.dataset.clinicalExport);
+  }
 });
 
 elements.systemModalCancel.addEventListener("click", () => closeSystemModal(false));
@@ -3265,6 +5160,102 @@ document.getElementById("criticalViewBtn").addEventListener("click", () => {
   elements.compactCriticalPanel.hidden = !elements.compactCriticalPanel.hidden;
 });
 
+elements.clinicalSupplyBtn.addEventListener("click", () => {
+  elements.clinicalSupplyPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+elements.clinicalPacYear.addEventListener("change", async (event) => {
+  state.clinicalSupply.pacYear = Number(event.target.value || new Date().getFullYear());
+  saveClinicalSupplyState();
+  await loadClinicalSupplyState({ useLocal: false });
+  renderClinicalSupply();
+});
+elements.clinicalOrderMonth.addEventListener("change", async (event) => {
+  state.clinicalSupply.monthIndex = Number(event.target.value || 0);
+  saveClinicalSupplyState();
+  await loadClinicalSupplyState({ useLocal: false });
+  renderClinicalSupply();
+});
+elements.clinicalBudgetApproved.addEventListener("input", (event) => {
+  state.clinicalSupply.budgetApproved = parseClinicalNumber(event.target.value);
+  scheduleClinicalPacMetadataSave();
+  renderClinicalSupply();
+});
+elements.clinicalBudgetRequested.addEventListener("input", (event) => {
+  state.clinicalSupply.budgetRequested = parseClinicalNumber(event.target.value);
+  scheduleClinicalPacMetadataSave();
+  renderClinicalSupply();
+});
+elements.clinicalPacFile.addEventListener("change", async (event) => {
+  try {
+    await importClinicalPacFile(event.target.files?.[0]);
+  } catch (error) {
+    showError("No se pudo importar PAC", error);
+  } finally {
+    event.target.value = "";
+  }
+});
+elements.clinicalRealOrderFile.addEventListener("change", async (event) => {
+  try {
+    await importClinicalRealOrderFile(event.target.files?.[0]);
+  } catch (error) {
+    showError("No se pudo importar pedido real", error);
+  } finally {
+    event.target.value = "";
+  }
+});
+elements.clinicalDemandFile.addEventListener("change", async (event) => {
+  try {
+    await importClinicalDemandFile(event.target.files?.[0]);
+  } catch (error) {
+    showError("No se pudo importar demanda diaria", error);
+  } finally {
+    event.target.value = "";
+  }
+});
+elements.clinicalDemandEditSelect.addEventListener("change", renderClinicalDemand);
+elements.clinicalDemandSaveManualBtn.addEventListener("click", saveClinicalDemandManualEdit);
+elements.clinicalClearPacBtn.addEventListener("click", async () => {
+  const confirmed = await showModalConfirm({
+    title: "Limpiar PAC",
+    message: "Esto borra el PAC, pedidos y comparaciones locales del modulo Abastecimiento Clinico. No toca inventario.",
+    confirmText: "Limpiar",
+    variant: "warning"
+  });
+  if (!confirmed) return;
+  state.clinicalSupply.pacRows = [];
+  state.clinicalSupply.orderRows = [];
+  state.clinicalSupply.realOrderRows = [];
+  saveClinicalSupplyState();
+  renderClinicalSupply();
+  showToastSuccess("PAC limpiado.");
+});
+elements.clinicalGenerateOrderBtn.addEventListener("click", async () => {
+  try {
+    await generateClinicalOrder();
+  } catch (error) {
+    showError("No se pudo generar pedido mensual", error);
+  }
+});
+elements.clinicalSaveOrderBtn.addEventListener("click", async () => {
+  const rows = getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows();
+  commitClinicalCurrentOrder(rows);
+  try {
+    await saveClinicalOrderToSupabase(rows, "generated");
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Pedido guardado solo localmente", error);
+    showToastError("Pedido guardado localmente; Supabase no disponible.");
+  }
+  renderClinicalSupply();
+  showToastSuccess("Pedido guardado.");
+});
+elements.clinicalExportOrderBtn.addEventListener("click", () => exportClinicalReport("pedido"));
+elements.clinicalOrderTableBody.addEventListener("change", (event) => {
+  const input = event.target.closest("[data-clinical-final]");
+  if (!input) return;
+  updateClinicalFinalOrder(input.dataset.clinicalFinal, input.value);
+});
+
 document.getElementById("closeProductSettingsModal").addEventListener("click", closeProductSettingsModal);
 document.getElementById("cancelProductSettings").addEventListener("click", closeProductSettingsModal);
 elements.productSettingsModal.addEventListener("click", (event) => {
@@ -3337,6 +5328,11 @@ if ("serviceWorker" in navigator) {
 
 updateInstallUi();
 checkInitialSession();
+
+
+
+
+
 
 
 
