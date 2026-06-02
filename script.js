@@ -1125,7 +1125,6 @@ async function saveClinicalProductLinkToSupabase(link) {
     ignored: Boolean(link.ignored),
     confirmed_by: normalizeClinicalMatchStatus(link.matchStatus) === "vinculado" ? state.currentUser.id : null,
     confirmed_at: normalizeClinicalMatchStatus(link.matchStatus) === "vinculado" ? new Date().toISOString() : null,
-    created_by: state.currentUser.id,
     updated_at: new Date().toISOString()
   };
   const { data, error } = await supabaseClient
@@ -1138,14 +1137,14 @@ async function saveClinicalProductLinkToSupabase(link) {
 }
 
 async function persistClinicalProductLink(link) {
-  upsertClinicalProductLink(link);
   try {
     const saved = await saveClinicalProductLinkToSupabase(link);
     upsertClinicalProductLink(saved);
     setClinicalSupabaseReady(true);
+    return saved;
   } catch (error) {
     setClinicalSupabaseReady(false);
-    console.warn("Vinculo clinico guardado solo localmente", error);
+    throw error;
   }
 }
 
@@ -1242,7 +1241,6 @@ async function saveClinicalDemandProductLinkToSupabase(link) {
     match_confidence: Number(link.matchConfidence || 0),
     match_method: link.matchMethod || null,
     ignored: Boolean(link.ignored),
-    created_by: state.currentUser.id,
     updated_at: new Date().toISOString()
   };
   const { data, error } = await supabaseClient
@@ -1255,8 +1253,6 @@ async function saveClinicalDemandProductLinkToSupabase(link) {
 }
 
 async function persistClinicalDemandProductLink(link) {
-  upsertClinicalProductLink(link);
-  upsertClinicalDemandProductLink(link);
   try {
     const saved = await saveClinicalProductLinkToSupabase(link);
     const demandSaved = {
@@ -1272,9 +1268,10 @@ async function persistClinicalDemandProductLink(link) {
       console.warn("Vinculo demanda legado omitido", legacyError);
     }
     setClinicalSupabaseReady(true);
+    return demandSaved;
   } catch (error) {
     setClinicalSupabaseReady(false);
-    console.warn("Vinculo demanda diaria guardado solo localmente", error);
+    throw error;
   }
 }
 
