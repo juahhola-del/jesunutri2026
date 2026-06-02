@@ -772,7 +772,7 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 }
 
 .clinical-summary-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .clinical-summary-grid.compact .clinical-summary-card strong {
@@ -922,18 +922,75 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 }
 
 .reconcile-table {
-  min-width: 1460px;
+  min-width: 980px;
+}
+
+.reconcile-table th,
+.reconcile-table td {
+  padding: 7px 8px;
+  vertical-align: top;
+}
+
+.pac-reconcile-table th:nth-child(1) { width: 92px; }
+.pac-reconcile-table th:nth-child(2) { width: 30%; }
+.pac-reconcile-table th:nth-child(3) { width: 210px; }
+.pac-reconcile-table th:nth-child(4) { width: 230px; }
+.pac-reconcile-table th:nth-child(5) { width: 92px; }
+.pac-reconcile-table th:nth-child(6) { width: 78px; }
+.pac-reconcile-table th:nth-child(7) { width: 130px; }
+
+.clinical-link-cell {
+  display: grid;
+  gap: 3px;
+  max-width: 220px;
+}
+
+.clinical-link-cell small {
+  color: #93f0c8;
+  font-size: 0.68rem;
+  font-weight: 800;
 }
 
 .clinical-link-input {
-  width: min(280px, 100%);
+  width: 100%;
+  max-width: 220px;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clinical-link-input:focus {
+  max-width: 420px;
+  position: relative;
+  z-index: 2;
+}
+
+.clinical-link-input.is-suggested {
+  border-color: rgba(35, 196, 131, 0.62);
+  background: rgba(35, 196, 131, 0.08);
+}
+
+.reconcile-table tr.row-linked {
+  background: rgba(35, 196, 131, 0.055);
+}
+
+.reconcile-table tr.row-suggested {
+  background: rgba(35, 196, 131, 0.035);
+}
+
+.reconcile-table tr.row-ignored {
+  opacity: 0.72;
 }
 
 .clinical-row-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  min-width: 260px;
+  gap: 5px;
+  min-width: 210px;
 }
 
 .clinical-final-input {

@@ -431,17 +431,15 @@
               </select>
               <select id="clinicalReconcileFilter" class="clinical-select">
                 <option value="all">Todos</option>
-                <option value="missing">Sin coincidencia</option>
-                <option value="suggested">Sugeridos</option>
-                <option value="linked">Vinculados</option>
-                <option value="conflict">Conflictos</option>
-                <option value="ignored">Ignorados</option>
+                <option value="pendientes">Pendientes</option>
+                <option value="vinculado">Vinculados</option>
+                <option value="ignorado">Ignorados</option>
                 <option value="inconsistencies">Inconsistencias PAC</option>
               </select>
-              <button class="btn primary" type="button" id="clinicalAcceptHighConfidenceBtn">Preseleccionar sugerencias &gt;80%</button>
-              <button class="btn" type="button" id="clinicalLinkReviewedBtn">Vincular seleccionados revisados</button>
+              <button class="btn primary" type="button" id="clinicalAcceptHighConfidenceBtn">Vincular sugerencias</button>
               <button class="btn" type="button" data-clinical-export="conciliacion_pendientes">Exportar pendientes</button>
-              <button class="btn" type="button" id="clinicalCreateMissingProductsBtn">Crear productos faltantes desde PAC</button>
+              <button class="btn" type="button" id="clinicalCreateMissingProductsBtn">Crear productos faltantes</button>
+              <button class="btn" type="button" id="clinicalLinkReviewedBtn" hidden>Vincular seleccionados revisados</button>
               <select id="clinicalDemandReconcileFilter" class="clinical-select">
                 <option value="all">Todos demanda</option>
                 <option value="sin coincidencia">Sin coincidencia</option>
@@ -453,18 +451,16 @@
             <div class="clinical-summary-grid" id="clinicalReconcileSummary"></div>
             <div class="bulk-error-list clinical-validation-list" id="clinicalPacInconsistencyList" hidden></div>
             <div class="table-wrap" id="clinicalPacReconcilePanel">
-              <table class="clinical-table reconcile-table">
+              <table class="clinical-table reconcile-table pac-reconcile-table">
                 <thead>
                   <tr>
                     <th>Codigo PAC</th>
                     <th>Producto PAC</th>
-                    <th>Categoria PAC</th>
                     <th>Producto inventario vinculado</th>
+                    <th>Acciones</th>
                     <th>Stock actual</th>
                     <th>Unidad</th>
-                    <th>Estado</th>
-                    <th>Confianza</th>
-                    <th>Acciones</th>
+                    <th>Categoria PAC</th>
                   </tr>
                 </thead>
                 <tbody id="clinicalReconcileTableBody"></tbody>
