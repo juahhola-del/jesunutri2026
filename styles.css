@@ -917,6 +917,10 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   min-width: 1540px;
 }
 
+.real-order-error-table {
+  min-width: 1120px;
+}
+
 .demand-table {
   min-width: 1180px;
 }
@@ -1545,6 +1549,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   accent-color: var(--blue);
 }
 .row-invalid { background: rgba(239, 83, 80, 0.08); }
+.row-warning { background: rgba(242, 201, 76, 0.08); }
 .row-invalid .bulk-input { border-color: rgba(239, 83, 80, 0.7); }
 .bulk-row-error { min-width: 220px; color: #ffc4c2; font-size: 0.78rem; }
 .bulk-error-list {

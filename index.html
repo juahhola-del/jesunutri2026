@@ -327,6 +327,14 @@
                 <input id="clinicalRealOrderFile" type="file" accept=".xlsx,.xls,.csv,.txt" hidden>
               </label>
               <button class="btn" type="button" data-clinical-export="pedido_real_errores">Ver errores de importacion</button>
+              <select id="clinicalRealOrderErrorFilter" class="clinical-select">
+                <option value="all">Todos los errores</option>
+                <option value="reconciliation">Pendientes de conciliacion</option>
+                <option value="sin_pac">Sin PAC</option>
+                <option value="cantidad_vacia">Cantidad vacia</option>
+                <option value="duplicados">Duplicados</option>
+              </select>
+              <button class="btn" type="button" id="clinicalRevalidateRealOrderBtn">Revalidar pedido real</button>
               <button class="btn" type="button" id="clinicalRegenerateWithLinksBtn">Regenerar usando conciliacion</button>
             </div>
             <section class="clinical-import-diagnostic" id="clinicalRealImportDiagnostic" hidden>
@@ -354,6 +362,22 @@
                 </table>
               </div>
             </section>
+            <div class="table-wrap">
+              <table class="clinical-table real-order-error-table">
+                <thead>
+                  <tr>
+                    <th>Hoja</th>
+                    <th>Categoria</th>
+                    <th>Codigo</th>
+                    <th>Producto</th>
+                    <th>Cantidad</th>
+                    <th>Categoria error</th>
+                    <th>Estado validacion</th>
+                  </tr>
+                </thead>
+                <tbody id="clinicalRealOrderErrorTableBody"></tbody>
+              </table>
+            </div>
             <div class="clinical-summary-grid" id="clinicalOrderSummary"></div>
             <div class="table-wrap">
               <table class="clinical-table order-table">

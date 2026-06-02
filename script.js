@@ -171,6 +171,7 @@ const state = {
     pacRows: [],
     orderRows: [],
     realOrderRows: [],
+    realOrderErrorFilter: "all",
     realImportDiagnostics: null,
     productLinks: [],
     reconcileFilter: "pendientes",
@@ -306,6 +307,9 @@ const elements = {
   clinicalRealImportDiagnosticMeta: document.getElementById("clinicalRealImportDiagnosticMeta"),
   clinicalRealImportDiagnosticSummary: document.getElementById("clinicalRealImportDiagnosticSummary"),
   clinicalRealImportDiagnosticBody: document.getElementById("clinicalRealImportDiagnosticBody"),
+  clinicalRealOrderErrorFilter: document.getElementById("clinicalRealOrderErrorFilter"),
+  clinicalRevalidateRealOrderBtn: document.getElementById("clinicalRevalidateRealOrderBtn"),
+  clinicalRealOrderErrorTableBody: document.getElementById("clinicalRealOrderErrorTableBody"),
   clinicalBreakSummary: document.getElementById("clinicalBreakSummary"),
   clinicalBreakTableBody: document.getElementById("clinicalBreakTableBody"),
   clinicalBudgetSummary: document.getElementById("clinicalBudgetSummary"),
@@ -940,7 +944,7 @@ function suggestClinicalProductForPacRow(row) {
 function getClinicalLinkForPacRow(row) {
   return state.clinicalSupply.productLinks.find((link) =>
     (row.id && String(link.pacItemId) === String(row.id)) ||
-    (row.codigo && normalize(link.pacCodigo || "") === normalize(row.codigo)) ||
+    (row.codigo && normalizeClinicalCode(link.pacCodigo || "") === normalizeClinicalCode(row.codigo)) ||
     (row.producto && normalize(link.pacProducto || "") === normalize(row.producto))
   );
 }
@@ -959,7 +963,7 @@ function buildClinicalProductLink(row, product, status = "vinculado", confidence
     id: getClinicalLinkForPacRow(row)?.id || `link-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     pacYearId: state.clinicalSupply.pacYearId || null,
     pacItemId: row.id || null,
-    pacCodigo: row.codigo || "",
+    pacCodigo: normalizeClinicalCode(row.codigo) || "",
     pacProducto: row.producto || "",
     productoId: product?.id || null,
     matchStatus: status,
@@ -1187,6 +1191,7 @@ function loadClinicalSupplyLocalState() {
       pacRows: Array.isArray(saved.pacRows) ? saved.pacRows : [],
       orderRows: Array.isArray(saved.orderRows) ? saved.orderRows : [],
       realOrderRows: Array.isArray(saved.realOrderRows) ? saved.realOrderRows : [],
+      realOrderErrorFilter: saved.realOrderErrorFilter || "all",
       realImportDiagnostics: saved.realImportDiagnostics || null,
       productLinks: Array.isArray(saved.productLinks) ? saved.productLinks : [],
       reconcileFilter: normalizeClinicalReconcileFilter(saved.reconcileFilter || "pendientes"),
@@ -1235,7 +1240,7 @@ function applyClinicalDbMonths(target, source) {
 function mapClinicalPacItemFromDb(row) {
   return applyClinicalDbMonths({
     id: row.id,
-    codigo: row.code || "",
+    codigo: normalizeClinicalCode(row.code),
     producto: row.product || "",
     categoria: row.category || "",
     cantidadAnual: Number(row.annual_quantity || 0),
@@ -1253,7 +1258,7 @@ function mapClinicalOrderItemFromDb(row, order) {
     orderId: row.monthly_order_id,
     orderKey: `${order?.year || state.clinicalSupply.pacYear}-${monthIndex + 1}`,
     pacRowId: row.pac_item_id || row.id,
-    codigo: row.code || "",
+    codigo: normalizeClinicalCode(row.code),
     producto: row.product || "",
     categoria: row.category || "",
     productoId: row.product_id || null,
@@ -1272,18 +1277,30 @@ function mapClinicalOrderItemFromDb(row, order) {
 }
 
 function mapClinicalRealItemFromDb(row) {
+  const comparison = row.comparison || {};
+  const importMeta = comparison.import_meta || {};
   return {
     id: row.id,
     importId: row.real_order_import_id,
-    codigo: row.code || "",
+    codigo: normalizeClinicalCode(row.code),
     producto: row.product || "",
     productoId: row.product_id || null,
     pacRowId: row.pac_item_id || null,
     orderItemId: row.monthly_order_item_id || null,
     cantidad: Number(row.quantity || 0),
+    cantidadTexto: importMeta.quantity_text || "",
+    cantidadRecepcionada: Number(importMeta.quantity_received || 0),
+    hojaOrigen: importMeta.source_sheet || "",
+    categoria: importMeta.category || "",
+    formato: importMeta.unit_format || "",
+    pacReferencia: Number(importMeta.pac_reference || 0),
+    proveedor: importMeta.provider || "",
+    ordenCompra: importMeta.purchase_order || "",
+    observacion: importMeta.observation || "",
     precioUnitario: Number(row.unit_price || 0),
     total: Number(row.total || 0),
-    comparison: row.comparison || {},
+    validationCategory: comparison.validation_category || "",
+    comparison,
     validations: Array.isArray(row.validations) ? row.validations : []
   };
 }
@@ -1471,6 +1488,24 @@ function normalizeClinicalHeader(value) {
     .replaceAll("-", " ");
 }
 
+function normalizeClinicalCode(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/\s*-\s*/g, "-")
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+}
+
+function getClinicalCentralCategory(parserType = "", sheetName = "") {
+  const key = normalize(parserType || sheetName);
+  if (key.includes("abarrotes")) return "Abarrotes";
+  if (key.includes("desechables")) return "Desechables";
+  if (key.includes("enterales")) return "Enterales";
+  if (key.includes("infantil")) return "Infantil";
+  if (key.includes("verduras") || key.includes("verdura")) return "Verduras";
+  return String(sheetName || parserType || "").trim();
+}
+
 function getClinicalFieldName(header) {
   const clean = normalizeClinicalHeader(header);
   const map = {
@@ -1628,13 +1663,13 @@ function getClinicalCell(row = [], index = -1) {
 }
 
 function normalizeClinicalCentralRow(row = [], columns = {}, parserType = "", sheetName = "") {
-  const codigo = parserType === "verduras" ? "" : String(getClinicalCell(row, columns.codigo)).replace(/\s+-\s+/g, "-").trim();
+  const codigo = parserType === "verduras" ? "" : normalizeClinicalCode(getClinicalCell(row, columns.codigo));
   const producto = String(getClinicalCell(row, columns.producto)).trim();
   const unidad = String(getClinicalCell(row, columns.unidad)).trim();
   const pacRaw = getClinicalCell(row, columns.pac);
   const solicitudRaw = getClinicalCell(row, columns.solicitud);
   const proveedor = String(getClinicalCell(row, columns.proveedor)).trim();
-  const categoria = parserType === "verduras" ? "VERDURAS" : parserType.toUpperCase();
+  const categoria = getClinicalCentralCategory(parserType, sheetName);
   const solicitud = parseClinicalNumber(solicitudRaw);
 
   return {
@@ -1706,7 +1741,7 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
       rows.push({
         codigo: "",
         producto: cells[productIndex],
-        categoria: "VERDURAS",
+        categoria: getClinicalCentralCategory("verduras", sheetName),
         unidad: "kg",
         formato: "kg",
         pac: 0,
@@ -1832,7 +1867,7 @@ function normalizeClinicalPacRow(rawRow, index) {
 
   const normalized = {
     id: `pac-${Date.now()}-${index}`,
-    codigo: String(row.codigo ?? "").trim(),
+    codigo: normalizeClinicalCode(row.codigo),
     producto: String(row.producto ?? "").trim(),
     categoria: String(row.categoria ?? "").trim(),
     cantidadAnual: parseClinicalNumber(row.cantidadAnual),
@@ -1890,7 +1925,8 @@ function getClinicalCurrentOrderRows() {
 
 function getClinicalRealOrderByProduct(row) {
   const key = normalize(row.producto);
-  return state.clinicalSupply.realOrderRows.find((real) => normalize(real.producto) === key || (row.codigo && real.codigo === row.codigo));
+  const code = normalizeClinicalCode(row.codigo);
+  return state.clinicalSupply.realOrderRows.find((real) => normalize(real.producto) === key || (code && normalizeClinicalCode(real.codigo) === code));
 }
 
 function buildClinicalOrderRows() {
@@ -2040,12 +2076,15 @@ function renderClinicalRealImportDiagnostics() {
 
   const sheets = Array.isArray(diagnostics.hojasDetectadas) ? diagnostics.hojasDetectadas : [];
   const errors = Array.isArray(diagnostics.errores) ? diagnostics.errores : [];
+  const validationRows = state.clinicalSupply.realOrderRows.map((row) => getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows));
   elements.clinicalRealImportDiagnosticMeta.textContent = diagnostics.archivo || "Ultima importacion";
   renderClinicalSummary(elements.clinicalRealImportDiagnosticSummary, [
     { title: "Hojas detectadas", caption: "Excel", value: formatNumber(sheets.length) },
     { title: "Filas leidas", caption: "Consolidadas", value: formatNumber(diagnostics.filasLeidas || 0) },
-    { title: "Filas descartadas", caption: "Sin producto/cantidad", value: formatNumber(diagnostics.filasDescartadas || 0) },
-    { title: "Errores", caption: "Lectura", value: formatNumber(errors.length) }
+    { title: "Requiere conciliacion", caption: "PAC sin producto", value: formatNumber(validationRows.filter((row) => row.validationCategory === "reconciliation").length) },
+    { title: "Sin PAC", caption: "Fuera del PAC", value: formatNumber(validationRows.filter((row) => row.validationDetails.some((item) => item.message === "No existe en PAC")).length) },
+    { title: "Cantidad/codigo", caption: "Archivo", value: formatNumber(validationRows.filter((row) => ["quantity", "code"].includes(row.validationCategory)).length) },
+    { title: "Errores lectura", caption: "Hojas", value: formatNumber(errors.length) }
   ]);
   elements.clinicalRealImportDiagnosticBody.innerHTML = sheets.length
     ? sheets.map((sheet) => `
@@ -2105,6 +2144,7 @@ function renderClinicalOrder() {
   const total = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
   const suggested = rows.reduce((sum, row) => sum + Number(row.pedidoSugerido || 0), 0);
   const final = rows.reduce((sum, row) => sum + Number(row.pedidoFinal || 0), 0);
+  renderClinicalRealOrderErrors();
 
   renderClinicalSummary(elements.clinicalOrderSummary, [
     { title: "Pedido valorizado", caption: "Final", value: formatCurrency(total) },
@@ -2133,6 +2173,27 @@ function renderClinicalOrder() {
       </tr>
     `).join("")
     : '<tr><td colspan="14" class="empty">Carga un PAC para generar el pedido mensual.</td></tr>';
+}
+
+function renderClinicalRealOrderErrors() {
+  if (!elements.clinicalRealOrderErrorTableBody) return;
+  if (elements.clinicalRealOrderErrorFilter) {
+    elements.clinicalRealOrderErrorFilter.value = state.clinicalSupply.realOrderErrorFilter || "all";
+  }
+  const rows = getClinicalRealOrderErrorRows();
+  elements.clinicalRealOrderErrorTableBody.innerHTML = rows.length
+    ? rows.map((row) => `
+      <tr class="${row.validationCategory === "reconciliation" ? "row-warning" : "row-invalid"}">
+        <td>${escapeHtml(row.hojaOrigen || "-")}</td>
+        <td>${escapeHtml(row.categoria || "-")}</td>
+        <td>${escapeHtml(normalizeClinicalCode(row.codigo) || "-")}</td>
+        <td><strong>${escapeHtml(row.producto || "-")}</strong></td>
+        <td>${row.cantidadTexto ? escapeHtml(row.cantidadTexto) : formatNumber(row.cantidad || 0)}</td>
+        <td>${escapeHtml(getClinicalRealValidationLabel(row.validationCategory))}</td>
+        <td>${escapeHtml(row.validations.join(" | "))}</td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="7" class="empty">Sin errores para este filtro.</td></tr>';
 }
 
 function renderClinicalBreaks() {
@@ -2882,33 +2943,82 @@ async function saveClinicalOrderToSupabase(rows, status = "generated") {
   return order.id;
 }
 
+function addClinicalRealValidation(collection, category, message) {
+  collection.push({ category, message });
+}
+
+function getClinicalRealValidationLabel(category = "") {
+  const labels = {
+    reconciliation: "requiere conciliacion",
+    pac: "error de PAC",
+    quantity: "error de cantidad",
+    code: "error de codigo",
+    import: "error de importacion"
+  };
+  return labels[category] || category || "sin errores";
+}
+
+function getClinicalRealValidationCategory(details = []) {
+  if (!details.length) return "ok";
+  const priority = ["quantity", "code", "reconciliation", "pac", "import"];
+  return priority.find((category) => details.some((item) => item.category === category)) || details[0].category;
+}
+
+function getClinicalRealImportMeta(row) {
+  return {
+    source_sheet: row.hojaOrigen || "",
+    category: row.categoria || "",
+    unit_format: row.formato || "",
+    pac_reference: Number(row.pacReferencia || 0),
+    quantity_text: row.cantidadTexto || "",
+    quantity_received: Number(row.cantidadRecepcionada || 0),
+    provider: row.proveedor || "",
+    purchase_order: row.ordenCompra || "",
+    observation: row.observacion || ""
+  };
+}
+
 function getClinicalRealOrderComparison(row, allRows) {
-  const duplicateCode = row.codigo && allRows.filter((item) => item.codigo && item.codigo === row.codigo).length > 1;
+  const rowCode = normalizeClinicalCode(row.codigo);
+  const duplicateCode = rowCode && allRows.filter((item) => normalizeClinicalCode(item.codigo) && normalizeClinicalCode(item.codigo) === rowCode).length > 1;
   const duplicateProduct = row.producto && allRows.filter((item) => normalize(item.producto) === normalize(row.producto)).length > 1;
-  const pacRow = state.clinicalSupply.pacRows.find((item) => (row.codigo && normalize(item.codigo) === normalize(row.codigo)) || normalize(item.producto) === normalize(row.producto));
+  const pacRow = state.clinicalSupply.pacRows.find((item) =>
+    (row.pacRowId && String(item.id) === String(row.pacRowId)) ||
+    (rowCode && normalizeClinicalCode(item.codigo) === rowCode) ||
+    normalize(item.producto) === normalize(row.producto)
+  );
   const linkedProduct = pacRow ? getClinicalLinkedProductByPacRow(pacRow) : null;
-  const product = linkedProduct || (row.productoId && findProductById(row.productoId)) || findProductByName(row.producto);
+  const product = linkedProduct || (!pacRow && row.productoId && findProductById(row.productoId)) || null;
   const orderRow = (getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows())
-    .find((item) => normalize(item.producto) === normalize(row.producto) || (row.codigo && normalize(item.codigo) === normalize(row.codigo)));
-  const validations = [];
-  if (duplicateCode) validations.push("Codigo duplicado");
-  if (duplicateProduct) validations.push("Producto duplicado");
-  if (!row.codigo) validations.push("Producto sin codigo");
-  if (!Number(row.cantidad || 0) && row.cantidadTexto) validations.push("Cantidad en texto no parseada");
-  if (!Number(row.cantidad || 0) && !row.cantidadTexto) validations.push("Cantidad vacia");
-  if (!product) validations.push("Producto no encontrado");
-  if (pacRow && !linkedProduct) validations.push("Pendiente de conciliacion");
-  if (!pacRow) validations.push("No existe en PAC");
-  if (!orderRow) validations.push("No existe en pedido sugerido");
-  if (pacRow && Number(row.cantidad || 0) > getClinicalMonthValue(pacRow)) validations.push("Real sobre PAC mensual");
-  if (pacRow && Number(row.cantidad || 0) < getClinicalMonthValue(pacRow)) validations.push("Real bajo PAC mensual");
-  if (orderRow && Math.abs(Number(row.cantidad || 0) - Number(orderRow.pedidoSugerido || 0)) > 0.01) validations.push("Difiere del sugerido");
+    .find((item) =>
+      (row.orderItemId && String(item.id) === String(row.orderItemId)) ||
+      normalize(item.producto) === normalize(row.producto) ||
+      (rowCode && normalizeClinicalCode(item.codigo) === rowCode)
+    );
+  const validationDetails = [];
+  const quantityText = String(row.cantidadTexto ?? "").trim();
+  const hasQuantityText = quantityText !== "";
+  const parsedQuantity = Number(row.cantidad || 0);
+  const textIsExplicitZero = /^0+([,.]0+)?$/.test(quantityText);
+  if (duplicateCode) addClinicalRealValidation(validationDetails, "code", "Codigo duplicado");
+  if (duplicateProduct) addClinicalRealValidation(validationDetails, "import", "Producto duplicado");
+  if (!rowCode) addClinicalRealValidation(validationDetails, "code", "Producto sin codigo");
+  if (!parsedQuantity && hasQuantityText && !textIsExplicitZero) addClinicalRealValidation(validationDetails, "quantity", "Cantidad en texto no parseada");
+  if (!parsedQuantity && !hasQuantityText) addClinicalRealValidation(validationDetails, "quantity", "Cantidad vacia");
+  if (pacRow && !linkedProduct) addClinicalRealValidation(validationDetails, "reconciliation", "Pendiente de conciliacion");
+  if (!pacRow) addClinicalRealValidation(validationDetails, "pac", "No existe en PAC");
+  if (!orderRow && !pacRow) addClinicalRealValidation(validationDetails, "pac", "No existe en pedido sugerido");
+  if (pacRow && Number(row.cantidad || 0) > getClinicalMonthValue(pacRow)) addClinicalRealValidation(validationDetails, "pac", "Real sobre PAC mensual");
+  if (pacRow && Number(row.cantidad || 0) < getClinicalMonthValue(pacRow)) addClinicalRealValidation(validationDetails, "pac", "Real bajo PAC mensual");
+  if (orderRow && Math.abs(Number(row.cantidad || 0) - Number(orderRow.pedidoSugerido || 0)) > 0.01) addClinicalRealValidation(validationDetails, "import", "Difiere del sugerido");
 
   return {
     product,
     pacRow,
     orderRow,
-    validations,
+    validationDetails,
+    validations: validationDetails.map((item) => item.message),
+    validationCategory: getClinicalRealValidationCategory(validationDetails),
     comparison: {
       pac_monthly: pacRow ? getClinicalMonthValue(pacRow) : null,
       suggested_order: orderRow ? Number(orderRow.pedidoSugerido || 0) : null,
@@ -2916,7 +3026,10 @@ function getClinicalRealOrderComparison(row, allRows) {
       existing_product: Boolean(product),
       linked_product: Boolean(linkedProduct),
       duplicate_code: Boolean(duplicateCode),
-      duplicate_product: Boolean(duplicateProduct)
+      duplicate_product: Boolean(duplicateProduct),
+      validation_category: getClinicalRealValidationCategory(validationDetails),
+      validation_details: validationDetails,
+      import_meta: getClinicalRealImportMeta(row)
     }
   };
 }
@@ -2949,7 +3062,7 @@ async function saveClinicalRealOrderImportToSupabase(rows, filename = "") {
       product_id: comparison.product?.id || null,
       pac_item_id: comparison.pacRow?.id && !String(comparison.pacRow.id).startsWith("pac-") ? comparison.pacRow.id : null,
       monthly_order_item_id: comparison.orderRow?.id || null,
-      code: row.codigo || null,
+      code: normalizeClinicalCode(row.codigo) || null,
       product: row.producto || "",
       quantity: Number(row.cantidad || 0),
       unit_price: Number(row.precioUnitario || 0),
@@ -2972,6 +3085,63 @@ async function saveClinicalRealOrderImportToSupabase(rows, filename = "") {
   await loadClinicalHistoryFromSupabase();
   setClinicalSupabaseReady(true);
   saveClinicalSupplyLocalState();
+}
+
+function applyClinicalRealComparisonToRow(row, allRows = state.clinicalSupply.realOrderRows) {
+  const comparison = getClinicalRealOrderComparison(row, allRows);
+  row.codigo = normalizeClinicalCode(row.codigo);
+  row.productoId = comparison.product?.id || null;
+  row.pacRowId = comparison.pacRow?.id || null;
+  row.orderItemId = comparison.orderRow?.id || null;
+  row.comparison = comparison.comparison;
+  row.validations = comparison.validations;
+  row.validationCategory = comparison.validationCategory;
+  return row;
+}
+
+function getClinicalRealOrderErrorRows() {
+  const rows = state.clinicalSupply.realOrderRows.map((row) => {
+    const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
+    return { ...row, ...comparison, validationCategory: comparison.validationCategory };
+  });
+  const filter = state.clinicalSupply.realOrderErrorFilter || "all";
+  if (filter === "all") return rows.filter((row) => row.validations.length);
+  if (filter === "reconciliation") return rows.filter((row) => row.validationCategory === "reconciliation");
+  if (filter === "sin_pac") return rows.filter((row) => row.validationDetails.some((item) => item.message === "No existe en PAC"));
+  if (filter === "cantidad_vacia") return rows.filter((row) => row.validationDetails.some((item) => item.message === "Cantidad vacia" || item.message === "Cantidad en texto no parseada"));
+  if (filter === "duplicados") return rows.filter((row) => row.validationDetails.some((item) => /duplicado/i.test(item.message)));
+  return rows.filter((row) => row.validations.length);
+}
+
+async function revalidateClinicalRealOrder() {
+  if (!state.clinicalSupply.realOrderRows.length) {
+    showToastError("No hay pedido real importado para revalidar.");
+    return;
+  }
+  commitClinicalCurrentOrder(buildClinicalOrderRows());
+  const rows = state.clinicalSupply.realOrderRows.map((row) => applyClinicalRealComparisonToRow(row));
+  state.clinicalSupply.realOrderRows = rows;
+  saveClinicalSupplyState();
+
+  if (state.currentUser?.id && supabaseClient) {
+    const persistedRows = rows.filter((row) => row.id && !String(row.id).startsWith("real-"));
+    const results = await Promise.all(persistedRows.map((row) => supabaseClient
+      .from("clinical_real_order_items")
+      .update({
+        product_id: row.productoId || null,
+        pac_item_id: row.pacRowId && !String(row.pacRowId).startsWith("pac-") ? row.pacRowId : null,
+        monthly_order_item_id: row.orderItemId || null,
+        code: normalizeClinicalCode(row.codigo) || null,
+        comparison: row.comparison || {},
+        validations: row.validations || []
+      })
+      .eq("id", row.id)));
+    const failed = results.find((result) => result.error);
+    if (failed?.error) throw failed.error;
+  }
+
+  renderClinicalSupply();
+  showToastSuccess("Pedido real revalidado.");
 }
 
 let clinicalBudgetSaveTimer = null;
@@ -3059,21 +3229,23 @@ function getClinicalExportRows(type) {
     riesgo: row.riesgo,
     observacion: row.observacion
   }));
-  if (type === "pedido_real_errores") return state.clinicalSupply.realOrderRows.map((row) => {
+  if (type === "pedido_real_errores") return getClinicalRealOrderErrorRows().map((row) => {
     const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
     return {
       hoja_origen: row.hojaOrigen,
-      codigo: row.codigo,
+      codigo: normalizeClinicalCode(row.codigo),
       producto: row.producto,
       categoria: row.categoria,
       formato: row.formato,
       pac_referencia: row.pacReferencia,
       cantidad_solicitada: row.cantidad,
+      cantidad_recepcionada: row.cantidadRecepcionada,
       cantidad_texto: row.cantidadTexto,
       proveedor: row.proveedor,
       orden_compra: row.ordenCompra,
       producto_id: comparison.product?.id || "",
       pac_item_id: comparison.pacRow?.id || "",
+      categoria_error: getClinicalRealValidationLabel(comparison.validationCategory),
       estado_validacion: comparison.validations.length ? comparison.validations.join(" | ") : "OK"
     };
   });
@@ -4269,16 +4441,16 @@ function normalizeClinicalRealOrderRow(rawRow, index) {
     row[getClinicalFieldName(key)] = value;
   });
   const rawEntries = Object.fromEntries(Object.entries(rawRow || {}).map(([key, value]) => [normalizeClinicalHeader(key), value]));
-  const codigo = String(row.codigo ?? rawEntries.codigo ?? rawEntries.cod ?? "").replace(/\s+-\s+/g, "-").trim();
+  const codigo = normalizeClinicalCode(row.codigo ?? rawEntries.codigo ?? rawEntries.cod ?? "");
   const producto = String(row.producto ?? rawEntries.producto ?? rawEntries.descripcion ?? rawEntries.detalle ?? rawEntries["nombre formula"] ?? "").trim();
   const cantidadRaw = row.cantidad ?? row.solicitud ?? row.pedidoFinal ?? rawEntries.pedido ?? rawEntries.solicitud ?? rawEntries.solciitud ?? rawEntries.cantidad ?? row.total;
   const pacRef = parseClinicalNumber(row.pac ?? row.cantidadAnual ?? rawEntries["pac 2026"] ?? rawEntries.pac ?? 0);
   return {
     id: `real-${Date.now()}-${index}`,
-    hojaOrigen: rawRow.hoja_origen || rawRow.hojaOrigen || "",
+    hojaOrigen: rawRow.hoja_origen || rawRow.hojaOrigen || rawEntries["hoja origen"] || "",
     codigo,
     producto,
-    categoria: String(row.categoria ?? rawEntries.categoria ?? rawRow.hoja_origen ?? "").trim(),
+    categoria: getClinicalCentralCategory(row.categoria ?? rawEntries.categoria ?? "", rawRow.hoja_origen ?? rawRow.hojaOrigen ?? ""),
     formato: String(row.unidad ?? rawEntries.formato ?? row.formato ?? rawEntries.unidad ?? "").trim(),
     pacReferencia: pacRef,
     cantidad: parseClinicalNumber(cantidadRaw),
@@ -4299,6 +4471,8 @@ async function importClinicalRealOrderFile(file) {
     .map(normalizeClinicalRealOrderRow)
     .filter((row) => row.producto || row.codigo);
   commitClinicalCurrentOrder(buildClinicalOrderRows());
+  state.clinicalSupply.realOrderRows = state.clinicalSupply.realOrderRows.map((row) => applyClinicalRealComparisonToRow(row));
+  saveClinicalSupplyState();
   try {
     await saveClinicalRealOrderImportToSupabase(state.clinicalSupply.realOrderRows, file?.name || "");
     commitClinicalCurrentOrder(buildClinicalOrderRows());
@@ -6933,6 +7107,18 @@ elements.clinicalRealOrderFile.addEventListener("change", async (event) => {
     showError("No se pudo importar pedido real", error);
   } finally {
     event.target.value = "";
+  }
+});
+elements.clinicalRealOrderErrorFilter?.addEventListener("change", (event) => {
+  state.clinicalSupply.realOrderErrorFilter = event.target.value;
+  saveClinicalSupplyState();
+  renderClinicalRealOrderErrors();
+});
+elements.clinicalRevalidateRealOrderBtn?.addEventListener("click", async () => {
+  try {
+    await revalidateClinicalRealOrder();
+  } catch (error) {
+    showError("No se pudo revalidar pedido real", error);
   }
 });
 elements.clinicalReconcileFilter.addEventListener("change", (event) => {
