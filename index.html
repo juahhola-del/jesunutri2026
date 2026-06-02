@@ -468,26 +468,35 @@
           <section class="clinical-view" id="clinicalViewConciliacion">
             <div class="clinical-toolbar">
               <select id="clinicalReconcileMode" class="clinical-select">
-                <option value="pac">Conciliacion PAC</option>
-                <option value="demanda">Conciliacion Demanda Diaria</option>
+                <option value="all">Todos</option>
+                <option value="pac">PAC</option>
+                <option value="monthly_order">Pedido mensual</option>
+                <option value="demanda">Demanda diaria</option>
               </select>
               <select id="clinicalReconcileFilter" class="clinical-select">
                 <option value="all">Todos</option>
                 <option value="pendientes">Pendientes</option>
+                <option value="sugerido">Sugeridos</option>
                 <option value="vinculado">Vinculados</option>
                 <option value="ignorado">Ignorados</option>
+                <option value="conflicto">Conflictos</option>
                 <option value="inconsistencies">Inconsistencias PAC</option>
               </select>
+              <button class="btn" type="button" id="clinicalRevalidatePacBtn">Revalidar PAC</button>
+              <button class="btn" type="button" id="clinicalRevalidateMonthlyBtn">Revalidar pedido mensual</button>
+              <button class="btn" type="button" id="clinicalRevalidateDemandBtn">Revalidar demanda diaria</button>
+              <button class="btn" type="button" id="clinicalRevalidateAllBtn">Revalidar todo</button>
               <button class="btn primary" type="button" id="clinicalAcceptHighConfidenceBtn">Vincular sugerencias</button>
               <button class="btn" type="button" data-clinical-export="conciliacion_pendientes">Exportar pendientes</button>
               <button class="btn" type="button" id="clinicalCreateMissingProductsBtn">Crear productos faltantes</button>
               <button class="btn" type="button" id="clinicalLinkReviewedBtn" hidden>Vincular seleccionados revisados</button>
               <select id="clinicalDemandReconcileFilter" class="clinical-select">
                 <option value="all">Todos demanda</option>
-                <option value="sin coincidencia">Sin coincidencia</option>
+                <option value="pendientes">Pendientes</option>
                 <option value="sugerido">Sugeridos</option>
                 <option value="vinculado">Vinculados</option>
                 <option value="ignorado">Ignorados</option>
+                <option value="conflicto">Conflictos</option>
               </select>
             </div>
             <div class="clinical-summary-grid" id="clinicalReconcileSummary"></div>
@@ -496,13 +505,14 @@
               <table class="clinical-table reconcile-table pac-reconcile-table">
                 <thead>
                   <tr>
-                    <th>Codigo PAC</th>
-                    <th>Producto PAC</th>
+                    <th>Fuente</th>
+                    <th>Codigo</th>
+                    <th>Nombre detectado</th>
                     <th>Producto inventario vinculado</th>
                     <th>Acciones</th>
                     <th>Stock actual</th>
                     <th>Unidad</th>
-                    <th>Categoria PAC</th>
+                    <th>Categoria</th>
                   </tr>
                 </thead>
                 <tbody id="clinicalReconcileTableBody"></tbody>
