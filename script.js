@@ -307,6 +307,7 @@ const elements = {
   clinicalRealImportDiagnosticMeta: document.getElementById("clinicalRealImportDiagnosticMeta"),
   clinicalRealImportDiagnosticSummary: document.getElementById("clinicalRealImportDiagnosticSummary"),
   clinicalRealImportDiagnosticBody: document.getElementById("clinicalRealImportDiagnosticBody"),
+  clinicalRealImportDiagnosticRowsBody: document.getElementById("clinicalRealImportDiagnosticRowsBody"),
   clinicalRealOrderErrorFilter: document.getElementById("clinicalRealOrderErrorFilter"),
   clinicalRevalidateRealOrderBtn: document.getElementById("clinicalRevalidateRealOrderBtn"),
   clinicalRealOrderErrorTableBody: document.getElementById("clinicalRealOrderErrorTableBody"),
@@ -1291,6 +1292,13 @@ function mapClinicalRealItemFromDb(row) {
     cantidadTexto: importMeta.quantity_text || "",
     cantidadRecepcionada: Number(importMeta.quantity_received || 0),
     hojaOrigen: importMeta.source_sheet || "",
+    excelRowNumber: importMeta.excel_row_number || null,
+    quantityColumnName: importMeta.quantity_column || "",
+    quantityColumnIndex: importMeta.quantity_column_index || null,
+    quantityRawValue: importMeta.quantity_raw_value ?? importMeta.quantity_text ?? "",
+    quantityParsedValue: Number(importMeta.quantity_parsed_value ?? row.quantity ?? 0),
+    quantityInterpretable: importMeta.quantity_interpretable !== false,
+    quantityEmpty: Boolean(importMeta.quantity_empty),
     categoria: importMeta.category || "",
     formato: importMeta.unit_format || "",
     pacReferencia: Number(importMeta.pac_reference || 0),
@@ -1605,6 +1613,7 @@ function createClinicalRealImportDiagnostics(fileName = "") {
     tipo: "Pedido Central Nutricion",
     archivo: fileName,
     hojasDetectadas: [],
+    filasDetalle: [],
     filasLeidas: 0,
     filasDescartadas: 0,
     errores: []
@@ -1635,13 +1644,21 @@ function getClinicalColumnIndex(headers = [], synonyms = []) {
   return normalizedHeaders.findIndex((header) => normalizedSynonyms.some((synonym) => header === synonym || header.includes(synonym)));
 }
 
+function getClinicalColumnIndexStrict(headers = [], synonyms = []) {
+  const normalizedHeaders = headers.map(normalizeClinicalHeader);
+  const normalizedSynonyms = synonyms.map(normalizeClinicalHeader);
+  const exactIndex = normalizedHeaders.findIndex((header) => normalizedSynonyms.includes(header));
+  if (exactIndex >= 0) return exactIndex;
+  return normalizedHeaders.findIndex((header) => normalizedSynonyms.some((synonym) => header.includes(synonym)));
+}
+
 function buildClinicalColumnMap(headers = [], parserType = "") {
   const map = {
-    codigo: getClinicalColumnIndex(headers, ["codigo", "codigo producto", "cod"]),
-    producto: getClinicalColumnIndex(headers, ["producto", "descripcion", "detalle", "nombre formula", "formula", "insumo"]),
-    unidad: getClinicalColumnIndex(headers, ["formato", "unidad", "volumen"]),
-    pac: getClinicalColumnIndex(headers, ["pac", "pac 2026"]),
-    solicitud: getClinicalColumnIndex(headers, ["pedido", "solicitud", "cantidad kg", "cantidad", "solciitud"]),
+    codigo: getClinicalColumnIndexStrict(headers, ["codigo", "codigo producto", "cod"]),
+    producto: getClinicalColumnIndexStrict(headers, ["producto", "descripcion", "detalle", "nombre formula", "formula", "insumo"]),
+    unidad: getClinicalColumnIndexStrict(headers, ["formato", "unidad", "volumen"]),
+    pac: getClinicalColumnIndexStrict(headers, ["pac 2026", "pac"]),
+    solicitud: getClinicalColumnIndexStrict(headers, parserType === "abarrotes" ? ["pedido"] : ["pedido", "solicitud", "solciitud", "cantidad kg", "cantidad"]),
     proveedor: getClinicalColumnIndex(headers, ["proveedor", "empresa"])
   };
 
@@ -1662,7 +1679,31 @@ function getClinicalCell(row = [], index = -1) {
   return index >= 0 ? row[index] ?? "" : "";
 }
 
-function normalizeClinicalCentralRow(row = [], columns = {}, parserType = "", sheetName = "") {
+function getClinicalQuantityParseState(value) {
+  const rawText = String(value ?? "").trim();
+  const isEmpty = value == null || rawText === "";
+  const parsed = parseClinicalNumber(value);
+  const explicitZero = typeof value === "number"
+    ? Object.is(value, 0) || value === 0
+    : /^0+([,.]0+)?$/.test(rawText);
+  const interpretable = !isEmpty && (parsed !== 0 || explicitZero);
+  return { rawText, parsed, isEmpty, interpretable, explicitZero };
+}
+
+function getClinicalRealQuantityRaw(row = {}) {
+  const rawValue = row.quantityRawValue ?? row.quantity_raw_value;
+  if (String(rawValue ?? "").trim() !== "") return rawValue;
+  if (String(row.cantidadTexto ?? "").trim() !== "") return row.cantidadTexto;
+  return row.cantidad;
+}
+
+function getClinicalColumnLabel(headers = [], index = -1) {
+  if (index < 0) return "";
+  const header = String(headers[index] ?? "").trim();
+  return header || `Columna ${index + 1}`;
+}
+
+function normalizeClinicalCentralRow(row = [], columns = {}, parserType = "", sheetName = "", context = {}) {
   const codigo = parserType === "verduras" ? "" : normalizeClinicalCode(getClinicalCell(row, columns.codigo));
   const producto = String(getClinicalCell(row, columns.producto)).trim();
   const unidad = String(getClinicalCell(row, columns.unidad)).trim();
@@ -1670,7 +1711,8 @@ function normalizeClinicalCentralRow(row = [], columns = {}, parserType = "", sh
   const solicitudRaw = getClinicalCell(row, columns.solicitud);
   const proveedor = String(getClinicalCell(row, columns.proveedor)).trim();
   const categoria = getClinicalCentralCategory(parserType, sheetName);
-  const solicitud = parseClinicalNumber(solicitudRaw);
+  const quantityState = getClinicalQuantityParseState(solicitudRaw);
+  const solicitud = quantityState.parsed;
 
   return {
     codigo,
@@ -1684,6 +1726,13 @@ function normalizeClinicalCentralRow(row = [], columns = {}, parserType = "", sh
     cantidad: solicitud,
     cantidadTexto: String(solicitudRaw ?? "").trim(),
     proveedor,
+    excelRowNumber: context.excelRowNumber || null,
+    quantityColumnName: getClinicalColumnLabel(context.headers || [], columns.solicitud),
+    quantityColumnIndex: columns.solicitud >= 0 ? columns.solicitud + 1 : null,
+    quantityRawValue: solicitudRaw,
+    quantityParsedValue: solicitud,
+    quantityInterpretable: quantityState.interpretable,
+    quantityEmpty: quantityState.isEmpty,
     hoja_origen: sheetName,
     hojaOrigen: sheetName
   };
@@ -1706,7 +1755,7 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
   }
 
   let headerIndex = -1;
-  if (parserType === "abarrotes") headerIndex = findClinicalHeaderRow(matrix, ["codigo"]);
+  if (parserType === "abarrotes") headerIndex = findClinicalHeaderRow(matrix, ["codigo", "pedido"]);
   if (parserType === "desechables") headerIndex = findClinicalHeaderRow(matrix, ["codigo"]);
   if (parserType === "enterales" || parserType === "infantil") headerIndex = findClinicalHeaderRow(matrix, ["nombre formula"]);
   if (parserType === "verduras") headerIndex = findClinicalHeaderRow(matrix, ["producto", "cantidad"]);
@@ -1727,7 +1776,7 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
   const missing = requiredColumns.filter((field) => columns[field] < 0);
   if (missing.length && parserType === "verduras") {
     const rows = [];
-    matrix.slice(headerIndex).forEach((sourceRow) => {
+    matrix.slice(headerIndex).forEach((sourceRow, offset) => {
       const cells = sourceRow.map((cell) => String(cell ?? "").trim());
       if (!cells.some(Boolean)) return;
       const productIndex = cells.findIndex((cell) => /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(cell) && !/pedido|seccion|mensual|cantidad|kilos|kg/i.test(cell));
@@ -1737,6 +1786,7 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
         sheetDiagnostic.filasDescartadas += 1;
         return;
       }
+      const quantityState = getClinicalQuantityParseState(cells[qtyIndex]);
       sheetDiagnostic.filasLeidas += 1;
       rows.push({
         codigo: "",
@@ -1746,10 +1796,17 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
         formato: "kg",
         pac: 0,
         pacReferencia: 0,
-        solicitud: parseClinicalNumber(cells[qtyIndex]),
-        cantidad: parseClinicalNumber(cells[qtyIndex]),
+        solicitud: quantityState.parsed,
+        cantidad: quantityState.parsed,
         cantidadTexto: cells[qtyIndex],
         proveedor: "",
+        excelRowNumber: headerIndex + offset + 1,
+        quantityColumnName: `Columna ${qtyIndex + 1}`,
+        quantityColumnIndex: qtyIndex + 1,
+        quantityRawValue: cells[qtyIndex],
+        quantityParsedValue: quantityState.parsed,
+        quantityInterpretable: quantityState.interpretable,
+        quantityEmpty: quantityState.isEmpty,
         hoja_origen: sheetName,
         hojaOrigen: sheetName
       });
@@ -1765,13 +1822,15 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
   }
 
   const rows = [];
-  matrix.slice(headerIndex + 1).forEach((sourceRow) => {
+  matrix.slice(headerIndex + 1).forEach((sourceRow, offset) => {
     const hasAnyCell = sourceRow.some((cell) => String(cell ?? "").trim());
     if (!hasAnyCell) return;
-    const normalizedRow = normalizeClinicalCentralRow(sourceRow, columns, parserType, sheetName);
+    const normalizedRow = normalizeClinicalCentralRow(sourceRow, columns, parserType, sheetName, {
+      excelRowNumber: headerIndex + offset + 2,
+      headers
+    });
     const hasProduct = Boolean(normalizedRow.producto);
-    const hasRequest = Boolean(normalizedRow.cantidad) || Boolean(normalizedRow.cantidadTexto);
-    if (!hasProduct || !hasRequest) {
+    if (!hasProduct) {
       sheetDiagnostic.filasDescartadas += 1;
       return;
     }
@@ -1797,6 +1856,13 @@ async function parseClinicalRealOrderWorkbook(file) {
       errores: []
     });
     diagnostics.filasLeidas = rows.length;
+    diagnostics.filasDetalle = rows.map((row, index) => ({
+      hoja_origen: row.hoja_origen || "CSV",
+      fila_excel: index + 2,
+      columna_cantidad: "cantidad",
+      valor_crudo: row.cantidad ?? "",
+      valor_parseado: parseClinicalNumber(row.cantidad)
+    }));
     return { rows, diagnostics };
   }
   if (!window.XLSX) throw new Error("La libreria Excel no esta cargada. Importa CSV/TXT o revisa la conexion.");
@@ -1810,6 +1876,13 @@ async function parseClinicalRealOrderWorkbook(file) {
     diagnostics.errores.push(...parsed.diagnostic.errores.map((error) => `${sheetName}: ${error}`));
     return parsed.rows;
   });
+  diagnostics.filasDetalle = rows.map((row) => ({
+    hoja_origen: row.hojaOrigen || row.hoja_origen || "",
+    fila_excel: row.excelRowNumber || "",
+    columna_cantidad: row.quantityColumnName || "",
+    valor_crudo: row.quantityRawValue ?? row.cantidadTexto ?? "",
+    valor_parseado: row.quantityParsedValue ?? row.cantidad ?? 0
+  }));
   return { rows, diagnostics };
 }
 
@@ -1962,8 +2035,12 @@ function buildClinicalOrderRows() {
     }
     if (real) {
       observationParts.push(`Pedido real: ${formatNumber(real.cantidad)}`);
-      if (Math.abs(Number(real.cantidad || 0) - pedidoSugerido) > 0.01) observationParts.push("Difiere del sugerido");
-      if (pacMensual > 0 && Number(real.cantidad || 0) > pacMensual) observationParts.push("Real sobre PAC");
+      const realQuantityState = getClinicalQuantityParseState(getClinicalRealQuantityRaw(real));
+      const realQuantity = Number(real.cantidad ?? 0);
+      if (realQuantityState.interpretable && realQuantity === 0) observationParts.push("No solicitado este mes");
+      if (realQuantityState.interpretable && pacMensual > 0 && realQuantity < pacMensual) observationParts.push("Pedido menor al PAC mensual");
+      if (realQuantityState.interpretable && pacMensual > 0 && realQuantity > pacMensual) observationParts.push("Pedido mayor al PAC mensual");
+      if (realQuantityState.interpretable && Math.abs(realQuantity - pedidoSugerido) > 0.01) observationParts.push("Difiere del sugerido");
     }
 
     return {
@@ -2076,6 +2153,7 @@ function renderClinicalRealImportDiagnostics() {
 
   const sheets = Array.isArray(diagnostics.hojasDetectadas) ? diagnostics.hojasDetectadas : [];
   const errors = Array.isArray(diagnostics.errores) ? diagnostics.errores : [];
+  const rowDetails = Array.isArray(diagnostics.filasDetalle) ? diagnostics.filasDetalle : [];
   const validationRows = state.clinicalSupply.realOrderRows.map((row) => getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows));
   elements.clinicalRealImportDiagnosticMeta.textContent = diagnostics.archivo || "Ultima importacion";
   renderClinicalSummary(elements.clinicalRealImportDiagnosticSummary, [
@@ -2098,6 +2176,19 @@ function renderClinicalRealImportDiagnostics() {
       </tr>
     `).join("")
     : '<tr><td colspan="6" class="empty">Sin diagnostico de importacion.</td></tr>';
+  if (elements.clinicalRealImportDiagnosticRowsBody) {
+    elements.clinicalRealImportDiagnosticRowsBody.innerHTML = rowDetails.length
+      ? rowDetails.slice(0, 80).map((row) => `
+        <tr>
+          <td>${escapeHtml(row.hoja_origen || "-")}</td>
+          <td>${escapeHtml(row.fila_excel || "-")}</td>
+          <td>${escapeHtml(row.columna_cantidad || "-")}</td>
+          <td>${escapeHtml(String(row.valor_crudo ?? "")) || "-"}</td>
+          <td>${formatNumber(row.valor_parseado ?? 0)}</td>
+        </tr>
+      `).join("")
+      : '<tr><td colspan="5" class="empty">Sin detalle de filas.</td></tr>';
+  }
 }
 
 function renderClinicalPac() {
@@ -2189,11 +2280,15 @@ function renderClinicalRealOrderErrors() {
         <td>${escapeHtml(normalizeClinicalCode(row.codigo) || "-")}</td>
         <td><strong>${escapeHtml(row.producto || "-")}</strong></td>
         <td>${row.cantidadTexto ? escapeHtml(row.cantidadTexto) : formatNumber(row.cantidad || 0)}</td>
+        <td>${escapeHtml(row.excelRowNumber || "-")}</td>
+        <td>${escapeHtml(row.quantityColumnName || (row.quantityColumnIndex ? `Columna ${row.quantityColumnIndex}` : "-"))}</td>
+        <td>${escapeHtml(String(row.quantityRawValue ?? row.cantidadTexto ?? "")) || "-"}</td>
+        <td>${formatNumber(row.quantityParsedValue ?? row.cantidad ?? 0)}</td>
         <td>${escapeHtml(getClinicalRealValidationLabel(row.validationCategory))}</td>
         <td>${escapeHtml(row.validations.join(" | "))}</td>
       </tr>
     `).join("")
-    : '<tr><td colspan="7" class="empty">Sin errores para este filtro.</td></tr>';
+    : '<tr><td colspan="11" class="empty">Sin errores para este filtro.</td></tr>';
 }
 
 function renderClinicalBreaks() {
@@ -2967,6 +3062,13 @@ function getClinicalRealValidationCategory(details = []) {
 function getClinicalRealImportMeta(row) {
   return {
     source_sheet: row.hojaOrigen || "",
+    excel_row_number: row.excelRowNumber || null,
+    quantity_column: row.quantityColumnName || "",
+    quantity_column_index: row.quantityColumnIndex || null,
+    quantity_raw_value: row.quantityRawValue ?? row.cantidadTexto ?? "",
+    quantity_parsed_value: Number(row.quantityParsedValue ?? row.cantidad ?? 0),
+    quantity_interpretable: row.quantityInterpretable !== false,
+    quantity_empty: Boolean(row.quantityEmpty),
     category: row.categoria || "",
     unit_format: row.formato || "",
     pac_reference: Number(row.pacReferencia || 0),
@@ -2997,20 +3099,23 @@ function getClinicalRealOrderComparison(row, allRows) {
     );
   const validationDetails = [];
   const quantityText = String(row.cantidadTexto ?? "").trim();
-  const hasQuantityText = quantityText !== "";
-  const parsedQuantity = Number(row.cantidad || 0);
-  const textIsExplicitZero = /^0+([,.]0+)?$/.test(quantityText);
+  const quantityState = getClinicalQuantityParseState(getClinicalRealQuantityRaw(row));
+  const parsedQuantity = quantityState.interpretable ? Number(quantityState.parsed || 0) : Number(row.cantidad ?? 0);
+  const quantityEmpty = row.quantityEmpty === true || quantityState.isEmpty;
+  const quantityInterpretable = row.quantityInterpretable === false ? false : quantityState.interpretable;
+  const observationDetails = [];
   if (duplicateCode) addClinicalRealValidation(validationDetails, "code", "Codigo duplicado");
   if (duplicateProduct) addClinicalRealValidation(validationDetails, "import", "Producto duplicado");
   if (!rowCode) addClinicalRealValidation(validationDetails, "code", "Producto sin codigo");
-  if (!parsedQuantity && hasQuantityText && !textIsExplicitZero) addClinicalRealValidation(validationDetails, "quantity", "Cantidad en texto no parseada");
-  if (!parsedQuantity && !hasQuantityText) addClinicalRealValidation(validationDetails, "quantity", "Cantidad vacia");
+  if (quantityEmpty || !quantityInterpretable) addClinicalRealValidation(validationDetails, "quantity", "Cantidad vacia o no interpretable");
   if (pacRow && !linkedProduct) addClinicalRealValidation(validationDetails, "reconciliation", "Pendiente de conciliacion");
   if (!pacRow) addClinicalRealValidation(validationDetails, "pac", "No existe en PAC");
   if (!orderRow && !pacRow) addClinicalRealValidation(validationDetails, "pac", "No existe en pedido sugerido");
-  if (pacRow && Number(row.cantidad || 0) > getClinicalMonthValue(pacRow)) addClinicalRealValidation(validationDetails, "pac", "Real sobre PAC mensual");
-  if (pacRow && Number(row.cantidad || 0) < getClinicalMonthValue(pacRow)) addClinicalRealValidation(validationDetails, "pac", "Real bajo PAC mensual");
-  if (orderRow && Math.abs(Number(row.cantidad || 0) - Number(orderRow.pedidoSugerido || 0)) > 0.01) addClinicalRealValidation(validationDetails, "import", "Difiere del sugerido");
+  const pacMonthly = pacRow ? getClinicalMonthValue(pacRow) : 0;
+  if (quantityInterpretable && parsedQuantity === 0) observationDetails.push("No solicitado este mes");
+  if (quantityInterpretable && pacRow && pacMonthly > 0 && parsedQuantity < pacMonthly) observationDetails.push("Pedido menor al PAC mensual");
+  if (quantityInterpretable && pacRow && pacMonthly > 0 && parsedQuantity > pacMonthly) observationDetails.push("Pedido mayor al PAC mensual");
+  if (quantityInterpretable && orderRow && Math.abs(parsedQuantity - Number(orderRow.pedidoSugerido || 0)) > 0.01) observationDetails.push("Difiere del sugerido");
 
   return {
     product,
@@ -3027,6 +3132,7 @@ function getClinicalRealOrderComparison(row, allRows) {
       linked_product: Boolean(linkedProduct),
       duplicate_code: Boolean(duplicateCode),
       duplicate_product: Boolean(duplicateProduct),
+      observations: observationDetails,
       validation_category: getClinicalRealValidationCategory(validationDetails),
       validation_details: validationDetails,
       import_meta: getClinicalRealImportMeta(row)
@@ -3108,7 +3214,7 @@ function getClinicalRealOrderErrorRows() {
   if (filter === "all") return rows.filter((row) => row.validations.length);
   if (filter === "reconciliation") return rows.filter((row) => row.validationCategory === "reconciliation");
   if (filter === "sin_pac") return rows.filter((row) => row.validationDetails.some((item) => item.message === "No existe en PAC"));
-  if (filter === "cantidad_vacia") return rows.filter((row) => row.validationDetails.some((item) => item.message === "Cantidad vacia" || item.message === "Cantidad en texto no parseada"));
+  if (filter === "cantidad_vacia") return rows.filter((row) => row.validationDetails.some((item) => item.message === "Cantidad vacia o no interpretable" || item.message === "Cantidad vacia" || item.message === "Cantidad en texto no parseada"));
   if (filter === "duplicados") return rows.filter((row) => row.validationDetails.some((item) => /duplicado/i.test(item.message)));
   return rows.filter((row) => row.validations.length);
 }
@@ -3238,6 +3344,11 @@ function getClinicalExportRows(type) {
       categoria: row.categoria,
       formato: row.formato,
       pac_referencia: row.pacReferencia,
+      fila_excel: row.excelRowNumber || "",
+      columna_cantidad: row.quantityColumnName || "",
+      indice_columna_cantidad: row.quantityColumnIndex || "",
+      valor_crudo_cantidad: row.quantityRawValue ?? row.cantidadTexto ?? "",
+      valor_numerico_parseado: row.quantityParsedValue ?? row.cantidad ?? 0,
       cantidad_solicitada: row.cantidad,
       cantidad_recepcionada: row.cantidadRecepcionada,
       cantidad_texto: row.cantidadTexto,
@@ -3246,7 +3357,8 @@ function getClinicalExportRows(type) {
       producto_id: comparison.product?.id || "",
       pac_item_id: comparison.pacRow?.id || "",
       categoria_error: getClinicalRealValidationLabel(comparison.validationCategory),
-      estado_validacion: comparison.validations.length ? comparison.validations.join(" | ") : "OK"
+      estado_validacion: comparison.validations.length ? comparison.validations.join(" | ") : "OK",
+      observaciones: (comparison.comparison.observations || []).join(" | ")
     };
   });
   if (type === "quiebres") return getClinicalBreakRows().map((row) => ({
@@ -4444,17 +4556,25 @@ function normalizeClinicalRealOrderRow(rawRow, index) {
   const codigo = normalizeClinicalCode(row.codigo ?? rawEntries.codigo ?? rawEntries.cod ?? "");
   const producto = String(row.producto ?? rawEntries.producto ?? rawEntries.descripcion ?? rawEntries.detalle ?? rawEntries["nombre formula"] ?? "").trim();
   const cantidadRaw = row.cantidad ?? row.solicitud ?? row.pedidoFinal ?? rawEntries.pedido ?? rawEntries.solicitud ?? rawEntries.solciitud ?? rawEntries.cantidad ?? row.total;
+  const quantityState = getClinicalQuantityParseState(rawRow.quantityRawValue ?? rawRow.quantity_raw_value ?? cantidadRaw);
   const pacRef = parseClinicalNumber(row.pac ?? row.cantidadAnual ?? rawEntries["pac 2026"] ?? rawEntries.pac ?? 0);
   return {
     id: `real-${Date.now()}-${index}`,
     hojaOrigen: rawRow.hoja_origen || rawRow.hojaOrigen || rawEntries["hoja origen"] || "",
+    excelRowNumber: rawRow.excelRowNumber || rawRow.excel_row_number || rawEntries.fila || rawEntries["fila excel"] || null,
+    quantityColumnName: rawRow.quantityColumnName || rawRow.quantity_column || rawEntries["columna cantidad"] || "",
+    quantityColumnIndex: rawRow.quantityColumnIndex || rawRow.quantity_column_index || null,
+    quantityRawValue: rawRow.quantityRawValue ?? rawRow.quantity_raw_value ?? cantidadRaw ?? "",
+    quantityParsedValue: quantityState.parsed,
+    quantityInterpretable: quantityState.interpretable,
+    quantityEmpty: quantityState.isEmpty,
     codigo,
     producto,
     categoria: getClinicalCentralCategory(row.categoria ?? rawEntries.categoria ?? "", rawRow.hoja_origen ?? rawRow.hojaOrigen ?? ""),
     formato: String(row.unidad ?? rawEntries.formato ?? row.formato ?? rawEntries.unidad ?? "").trim(),
     pacReferencia: pacRef,
-    cantidad: parseClinicalNumber(cantidadRaw),
-    cantidadTexto: String(cantidadRaw ?? "").trim(),
+    cantidad: quantityState.parsed,
+    cantidadTexto: quantityState.rawText,
     cantidadRecepcionada: parseClinicalNumber(rawEntries.recepcionado ?? rawEntries.recepcion ?? rawEntries["recepcionado si/no"] ?? 0),
     proveedor: String(rawEntries.proveedor ?? "").trim(),
     ordenCompra: String(rawEntries["orden de compra"] ?? "").trim(),
