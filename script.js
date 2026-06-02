@@ -161,6 +161,8 @@ const state = {
     pacRows: [],
     orderRows: [],
     realOrderRows: [],
+    productLinks: [],
+    reconcileFilter: "all",
     dailyDemands: [],
     dailyDietCounts: [],
     dailyEnteralItems: [],
@@ -283,6 +285,13 @@ const elements = {
   clinicalBreakTableBody: document.getElementById("clinicalBreakTableBody"),
   clinicalBudgetSummary: document.getElementById("clinicalBudgetSummary"),
   clinicalBudgetTableBody: document.getElementById("clinicalBudgetTableBody"),
+  clinicalReconcileFilter: document.getElementById("clinicalReconcileFilter"),
+  clinicalAcceptHighConfidenceBtn: document.getElementById("clinicalAcceptHighConfidenceBtn"),
+  clinicalCreateMissingProductsBtn: document.getElementById("clinicalCreateMissingProductsBtn"),
+  clinicalReconcileSummary: document.getElementById("clinicalReconcileSummary"),
+  clinicalPacInconsistencyList: document.getElementById("clinicalPacInconsistencyList"),
+  clinicalReconcileTableBody: document.getElementById("clinicalReconcileTableBody"),
+  clinicalRegenerateWithLinksBtn: document.getElementById("clinicalRegenerateWithLinksBtn"),
   clinicalDemandDate: document.getElementById("clinicalDemandDate"),
   clinicalDemandNotes: document.getElementById("clinicalDemandNotes"),
   clinicalDemandFile: document.getElementById("clinicalDemandFile"),
@@ -836,6 +845,167 @@ function findProductById(id) {
   return state.products.find((product) => String(product.id) === String(id));
 }
 
+function normalizeClinicalMatchText(value) {
+  return normalize(value)
+    .replace(/\bgrado ii\b/g, "grado 2")
+    .replace(/\bgrado i\b/g, "grado 1")
+    .replace(/\blts?\b/g, "lt")
+    .replace(/\blitros?\b/g, "lt")
+    .replace(/\bkgs?\b/g, "kg")
+    .replace(/\bgrs?\b/g, "g")
+    .replace(/\bcc\b/g, "ml")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b(x|de|del|la|el|con|sin|cte|pq|bolsa|unidad|un)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getClinicalMatchTokens(value) {
+  return normalizeClinicalMatchText(value)
+    .split(" ")
+    .filter((token) => token.length > 1 && !["kg", "g", "lt", "ml", "cc"].includes(token));
+}
+
+function scoreClinicalProductMatch(pacName, productName) {
+  const pacClean = normalizeClinicalMatchText(pacName);
+  const productClean = normalizeClinicalMatchText(productName);
+  if (!pacClean || !productClean) return { confidence: 0, method: "sin datos" };
+  if (pacClean === productClean) return { confidence: 100, method: "nombre exacto" };
+  if (pacClean.includes(productClean) || productClean.includes(pacClean)) return { confidence: 86, method: "coincidencia parcial" };
+
+  const pacTokens = getClinicalMatchTokens(pacClean);
+  const productTokens = getClinicalMatchTokens(productClean);
+  const common = pacTokens.filter((token) => productTokens.includes(token));
+  const denominator = Math.max(1, Math.max(pacTokens.length, productTokens.length));
+  let confidence = Math.round((common.length / denominator) * 82);
+  if (common.length >= 2) confidence += 8;
+  if (pacTokens[0] && pacTokens[0] === productTokens[0]) confidence += 5;
+  return { confidence: Math.min(95, confidence), method: "palabras relevantes" };
+}
+
+function suggestClinicalProductForPacRow(row) {
+  let best = null;
+  state.products.forEach((product) => {
+    const score = scoreClinicalProductMatch(row.producto, product.nombre);
+    if (!best || score.confidence > best.confidence) {
+      best = { product, confidence: score.confidence, method: score.method };
+    }
+  });
+  return best || { product: null, confidence: 0, method: "sin coincidencia" };
+}
+
+function getClinicalLinkForPacRow(row) {
+  return state.clinicalSupply.productLinks.find((link) =>
+    (row.id && String(link.pacItemId) === String(row.id)) ||
+    (row.codigo && normalize(link.pacCodigo || "") === normalize(row.codigo)) ||
+    (row.producto && normalize(link.pacProducto || "") === normalize(row.producto))
+  );
+}
+
+function getClinicalLinkedProductByPacRow(row, { allowSuggestion = true } = {}) {
+  const link = getClinicalLinkForPacRow(row);
+  if (link?.ignored) return null;
+  const linked = link?.productoId ? findProductById(link.productoId) : null;
+  if (linked) return linked;
+  if (row.productoId) return findProductById(row.productoId);
+  if (allowSuggestion) {
+    const suggestion = suggestClinicalProductForPacRow(row);
+    if (suggestion.product && suggestion.confidence >= 88) return suggestion.product;
+  }
+  return findProductByName(row.producto);
+}
+
+function buildClinicalProductLink(row, product, status = "vinculado", confidence = 100, method = "manual") {
+  return {
+    id: getClinicalLinkForPacRow(row)?.id || `link-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    pacYearId: state.clinicalSupply.pacYearId || null,
+    pacItemId: row.id || null,
+    pacCodigo: row.codigo || "",
+    pacProducto: row.producto || "",
+    productoId: product?.id || null,
+    matchStatus: status,
+    matchConfidence: Number(confidence || 0),
+    matchMethod: method,
+    ignored: status === "ignorado",
+    createdBy: state.currentUser?.id || null,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function upsertClinicalProductLink(link) {
+  state.clinicalSupply.productLinks = [
+    ...state.clinicalSupply.productLinks.filter((item) => item.id !== link.id && !(item.pacItemId && item.pacItemId === link.pacItemId) && !(item.pacCodigo && item.pacCodigo === link.pacCodigo)),
+    link
+  ];
+  saveClinicalSupplyState();
+}
+
+function mapClinicalProductLinkFromDb(row) {
+  return {
+    id: row.id,
+    pacYearId: row.pac_year_id,
+    pacItemId: row.pac_item_id,
+    pacCodigo: row.pac_codigo || "",
+    pacProducto: row.pac_producto || "",
+    productoId: row.producto_id || null,
+    matchStatus: row.match_status || "vinculado",
+    matchConfidence: Number(row.match_confidence || 0),
+    matchMethod: row.match_method || "",
+    ignored: Boolean(row.ignored),
+    createdBy: row.created_by || null,
+    updatedAt: row.updated_at || row.created_at
+  };
+}
+
+async function loadClinicalProductLinksFromSupabase() {
+  if (!state.currentUser?.id) return;
+  let query = supabaseClient
+    .from("clinical_product_links")
+    .select("*")
+    .eq("created_by", state.currentUser.id)
+    .order("updated_at", { ascending: false });
+  if (state.clinicalSupply.pacYearId) query = query.eq("pac_year_id", state.clinicalSupply.pacYearId);
+  const { data, error } = await query;
+  if (error) throw error;
+  state.clinicalSupply.productLinks = (data || []).map(mapClinicalProductLinkFromDb);
+}
+
+async function saveClinicalProductLinkToSupabase(link) {
+  if (!state.currentUser?.id) throw new Error("Usuario no autenticado.");
+  const payload = {
+    pac_year_id: state.clinicalSupply.pacYearId || null,
+    pac_item_id: link.pacItemId && !String(link.pacItemId).startsWith("pac-") ? link.pacItemId : null,
+    pac_codigo: link.pacCodigo || null,
+    pac_producto: link.pacProducto || "",
+    producto_id: link.productoId || null,
+    match_status: link.matchStatus || "vinculado",
+    match_confidence: Number(link.matchConfidence || 0),
+    match_method: link.matchMethod || null,
+    ignored: Boolean(link.ignored),
+    created_by: state.currentUser.id,
+    updated_at: new Date().toISOString()
+  };
+  const { data, error } = await supabaseClient
+    .from("clinical_product_links")
+    .upsert(payload, { onConflict: "pac_year_id,pac_codigo,created_by" })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return mapClinicalProductLinkFromDb(data);
+}
+
+async function persistClinicalProductLink(link) {
+  upsertClinicalProductLink(link);
+  try {
+    const saved = await saveClinicalProductLinkToSupabase(link);
+    upsertClinicalProductLink(saved);
+    setClinicalSupabaseReady(true);
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Vinculo clinico guardado solo localmente", error);
+  }
+}
+
 function getProductLots(productId) {
   return state.inventory.filter((item) => String(item.productoId) === String(productId));
 }
@@ -864,6 +1034,8 @@ function loadClinicalSupplyLocalState() {
       pacRows: Array.isArray(saved.pacRows) ? saved.pacRows : [],
       orderRows: Array.isArray(saved.orderRows) ? saved.orderRows : [],
       realOrderRows: Array.isArray(saved.realOrderRows) ? saved.realOrderRows : [],
+      productLinks: Array.isArray(saved.productLinks) ? saved.productLinks : [],
+      reconcileFilter: saved.reconcileFilter || "all",
       dailyDemands: Array.isArray(saved.dailyDemands) ? saved.dailyDemands : [],
       dailyDietCounts: Array.isArray(saved.dailyDietCounts) ? saved.dailyDietCounts : [],
       dailyEnteralItems: Array.isArray(saved.dailyEnteralItems) ? saved.dailyEnteralItems : [],
@@ -1093,6 +1265,11 @@ async function loadClinicalSupplyState({ useLocal = true } = {}) {
     await loadClinicalCurrentOrderFromSupabase(pacYear?.id || null);
     await loadClinicalHistoryFromSupabase();
     try {
+      await loadClinicalProductLinksFromSupabase();
+    } catch (linkError) {
+      console.warn("Conciliacion PAC inventario en respaldo local", linkError);
+    }
+    try {
       await loadClinicalDailyDemandFromSupabase();
     } catch (demandError) {
       console.warn("Demanda diaria en respaldo local", demandError);
@@ -1201,6 +1378,41 @@ function tableFromClinicalMatrix(matrix = []) {
     .map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""])));
 }
 
+function fallbackClinicalSheetRows(sheetName, matrix = []) {
+  const sheetKey = normalize(sheetName);
+  if (!/verdura|pre elaborada/.test(sheetKey)) return [];
+  return matrix
+    .map((row) => row.map((cell) => String(cell ?? "").trim()))
+    .filter((row) => row.some(Boolean))
+    .map((row) => {
+      const productIndex = row.findIndex((cell) => /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(cell) && !/pedido|seccion|geonox|mensual|cantidad/i.test(cell));
+      const qtyIndex = [...row].reverse().findIndex((cell) => parseClinicalNumber(cell) > 0);
+      const realQtyIndex = qtyIndex >= 0 ? row.length - 1 - qtyIndex : -1;
+      if (productIndex < 0 || realQtyIndex < 0 || realQtyIndex === productIndex) return null;
+      return {
+        producto: row[productIndex],
+        cantidad: row[realQtyIndex],
+        categoria: sheetName,
+        formato: row[productIndex].match(/\(([^)]+)\)/)?.[1] || ""
+      };
+    })
+    .filter(Boolean);
+}
+
+async function parseClinicalRealOrderWorkbook(file) {
+  if (!file) return [];
+  const extension = file.name.split(".").pop().toLowerCase();
+  if (!["xlsx", "xls"].includes(extension)) return (await parseClinicalFile(file)).map((row) => ({ ...row, hoja_origen: "CSV" }));
+  if (!window.XLSX) throw new Error("La libreria Excel no esta cargada. Importa CSV/TXT o revisa la conexion.");
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  return workbook.SheetNames.flatMap((sheetName) => {
+    const matrix = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: true });
+    const rows = tableFromClinicalMatrix(matrix);
+    const fallbackRows = rows.length ? [] : fallbackClinicalSheetRows(sheetName, matrix);
+    return [...rows, ...fallbackRows].map((row) => ({ ...row, hoja_origen: sheetName }));
+  });
+}
+
 function parseClinicalNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const text = String(value ?? "").trim();
@@ -1225,7 +1437,7 @@ function parseClinicalNumber(value) {
 }
 
 function getClinicalProductByPacRow(row) {
-  return (row.productoId && findProductById(row.productoId)) || findProductByName(row.producto);
+  return getClinicalLinkedProductByPacRow(row);
 }
 
 function getClinicalMonthValue(row, monthIndex = state.clinicalSupply.monthIndex) {
@@ -1449,6 +1661,7 @@ function renderClinicalSupply() {
   renderClinicalOrder();
   renderClinicalBreaks();
   renderClinicalBudget();
+  renderClinicalReconciliation();
   renderClinicalDemand();
   renderClinicalHistory();
 }
@@ -1579,6 +1792,282 @@ function renderClinicalBudget() {
       </tr>
     `).join("")
     : '<tr><td colspan="7" class="empty">Sin pedido mensual valorizado.</td></tr>';
+}
+
+function getClinicalPacInconsistencies() {
+  return state.clinicalSupply.pacRows.map((row) => {
+    const monthlySum = CLINICAL_MONTH_FIELDS.reduce((sum, field) => sum + Number(row[field] || 0), 0);
+    const diff = Number(row.cantidadAnual || 0) - monthlySum;
+    return { ...row, monthlySum, diff };
+  }).filter((row) => Math.abs(row.diff) > 0.01 && !row.inconsistencyReviewed);
+}
+
+function getClinicalReconciliationRows() {
+  return state.clinicalSupply.pacRows.map((row) => {
+    const link = getClinicalLinkForPacRow(row);
+    const linkedProduct = link?.productoId ? findProductById(link.productoId) : null;
+    const suggestion = suggestClinicalProductForPacRow(row);
+    let status = "sin coincidencia";
+    let product = null;
+    let confidence = suggestion.confidence;
+    let method = suggestion.method;
+
+    if (link?.ignored) {
+      status = "ignorado";
+      confidence = Number(link.matchConfidence || 0);
+      method = link.matchMethod || "manual";
+    } else if (linkedProduct) {
+      product = linkedProduct;
+      status = "vinculado";
+      confidence = Number(link.matchConfidence || 100);
+      method = link.matchMethod || "manual";
+    } else if (suggestion.product && suggestion.confidence >= 55) {
+      product = suggestion.product;
+      status = suggestion.confidence >= 88 ? "sugerido" : "conflicto";
+    }
+
+    return {
+      ...row,
+      link,
+      linkedProduct: product,
+      suggestedProduct: suggestion.product,
+      status,
+      confidence,
+      method,
+      stockActual: product ? getProductStockTotal(product.id) : 0,
+      unidad: product?.unidad_default || "-"
+    };
+  });
+}
+
+function getFilteredClinicalReconciliationRows() {
+  const filter = state.clinicalSupply.reconcileFilter || "all";
+  const rows = getClinicalReconciliationRows();
+  if (filter === "all") return rows;
+  if (filter === "inconsistencies") {
+    const ids = new Set(getClinicalPacInconsistencies().map((row) => row.id));
+    return rows.filter((row) => ids.has(row.id));
+  }
+  return rows.filter((row) => row.status === filter);
+}
+
+function renderClinicalReconciliation() {
+  if (!elements.clinicalReconcileTableBody) return;
+  elements.clinicalReconcileFilter.value = state.clinicalSupply.reconcileFilter || "all";
+  const rows = getClinicalReconciliationRows();
+  const filteredRows = getFilteredClinicalReconciliationRows();
+  const inconsistencies = getClinicalPacInconsistencies();
+
+  renderClinicalSummary(elements.clinicalReconcileSummary, [
+    { title: "Productos PAC", caption: "Total", value: formatNumber(rows.length) },
+    { title: "Vinculados", caption: "Manual o aceptado", value: formatNumber(rows.filter((row) => row.status === "vinculado").length) },
+    { title: "Sugeridos", caption: "Alta confianza", value: formatNumber(rows.filter((row) => row.status === "sugerido").length) },
+    { title: "Sin coincidencia", caption: "Pendientes", value: formatNumber(rows.filter((row) => row.status === "sin coincidencia").length) }
+  ]);
+
+  elements.clinicalPacInconsistencyList.hidden = !inconsistencies.length || state.clinicalSupply.reconcileFilter !== "inconsistencies";
+  elements.clinicalPacInconsistencyList.innerHTML = inconsistencies.map((row) => `
+    <div>
+      <strong>${escapeHtml(row.codigo || "-")} - ${escapeHtml(row.producto)}</strong>
+      Anual: ${formatNumber(row.cantidadAnual)} | Meses: ${formatNumber(row.monthlySum)} | Diferencia: ${formatNumber(row.diff)}
+      <button class="btn small" type="button" data-pac-recalc-annual="${escapeHtml(row.id)}">Recalcular anual desde meses</button>
+      <button class="btn small" type="button" data-pac-review-inconsistency="${escapeHtml(row.id)}">Marcar revisado</button>
+    </div>
+  `).join("");
+
+  elements.clinicalReconcileTableBody.innerHTML = filteredRows.length
+    ? filteredRows.map((row) => {
+        const productName = row.linkedProduct?.nombre || row.suggestedProduct?.nombre || "";
+        return `
+          <tr>
+            <td>${escapeHtml(row.codigo || "-")}</td>
+            <td><strong>${escapeHtml(row.producto || "-")}</strong></td>
+            <td>${escapeHtml(row.categoria || "-")}</td>
+            <td>
+              <input class="clinical-link-input" list="productSuggestions" value="${escapeHtml(productName)}" data-link-input="${escapeHtml(row.id)}" placeholder="Buscar producto">
+            </td>
+            <td>${row.linkedProduct ? formatNumber(row.stockActual) : "-"}</td>
+            <td>${escapeHtml(row.unidad)}</td>
+            <td>${escapeHtml(row.status)}</td>
+            <td>${formatNumber(row.confidence)}% ${escapeHtml(row.method || "")}</td>
+            <td>
+              <div class="clinical-row-actions">
+                <button class="btn small" type="button" data-link-manual="${escapeHtml(row.id)}">Vincular</button>
+                ${row.status === "sugerido" || row.status === "conflicto" ? `<button class="btn small" type="button" data-link-accept="${escapeHtml(row.id)}">Aceptar</button>` : ""}
+                <button class="btn small" type="button" data-link-unlink="${escapeHtml(row.id)}">Desvincular</button>
+                <button class="btn small" type="button" data-link-ignore="${escapeHtml(row.id)}">Ignorar</button>
+                <button class="btn small" type="button" data-link-create-product="${escapeHtml(row.id)}">Crear</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("")
+    : '<tr><td colspan="9" class="empty">No hay productos PAC para este filtro.</td></tr>';
+}
+
+function getClinicalPacRowById(id) {
+  return state.clinicalSupply.pacRows.find((row) => String(row.id) === String(id));
+}
+
+function inferClinicalUnitFromPacName(name = "") {
+  const clean = normalize(name);
+  if (/\b(lt|litro|litros)\b/.test(clean)) return "lt";
+  if (/\b(ml|cc)\b/.test(clean)) return "ml";
+  if (/\b(kg|kilo|kilos)\b/.test(clean)) return "kg";
+  if (/\b(gr|g|gramo|gramos)\b/.test(clean)) return "g";
+  if (/\b(caja)\b/.test(clean)) return "caja";
+  if (/\b(paquete|paq)\b/.test(clean)) return "paquete";
+  return "unidad";
+}
+
+async function createInventoryProductFromPacRow(row) {
+  if (!state.currentUser?.id) throw new Error("Usuario no autenticado.");
+  const name = row.producto || row.codigo || "Producto PAC";
+  const payload = {
+    nombre: name,
+    nombre_normalizado: normalize(name),
+    categoria: row.categoria || null,
+    unidad_default: inferClinicalUnitFromPacName(name),
+    stock_minimo: 0,
+    critico: false,
+    consumo_promedio_diario: 0,
+    activo: true
+  };
+  let { data, error } = await supabaseClient
+    .from("productos_insumos")
+    .insert(payload)
+    .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,critico,consumo_promedio_diario,favorito,activo")
+    .single();
+  if (error && /consumo_promedio_diario|favorito|critico/i.test(getSupabaseErrorMessage(error))) {
+    const fallback = await supabaseClient
+      .from("productos_insumos")
+      .insert({
+        nombre: payload.nombre,
+        nombre_normalizado: payload.nombre_normalizado,
+        categoria: payload.categoria,
+        unidad_default: payload.unidad_default,
+        stock_minimo: 0,
+        activo: true
+      })
+      .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,activo")
+      .single();
+    data = fallback.data;
+    error = fallback.error;
+  }
+  if (error) throw error;
+  await loadProductsFromSupabase();
+  return findProductById(data.id) || data;
+}
+
+async function linkClinicalPacRowToProduct(row, product, status = "vinculado", confidence = 100, method = "manual") {
+  const link = buildClinicalProductLink(row, product, status, confidence, method);
+  await persistClinicalProductLink(link);
+  row.productoId = product?.id || null;
+  commitClinicalCurrentOrder(buildClinicalOrderRows());
+  renderClinicalSupply();
+}
+
+async function acceptClinicalSuggestion(row) {
+  const suggestion = suggestClinicalProductForPacRow(row);
+  if (!suggestion.product) {
+    showToastError("No hay sugerencia para aceptar.");
+    return;
+  }
+  await linkClinicalPacRowToProduct(row, suggestion.product, "vinculado", suggestion.confidence, suggestion.method);
+  showToastSuccess("Sugerencia aceptada.");
+}
+
+async function acceptHighConfidenceClinicalSuggestions() {
+  const rows = getClinicalReconciliationRows().filter((row) => row.status === "sugerido" && row.suggestedProduct && row.confidence >= 88);
+  for (const row of rows) {
+    await linkClinicalPacRowToProduct(row, row.suggestedProduct, "vinculado", row.confidence, row.method);
+  }
+  renderClinicalSupply();
+  showToastSuccess(`${rows.length} sugerencias aceptadas.`);
+}
+
+async function createMissingClinicalProductsFromPac() {
+  const rows = getClinicalReconciliationRows().filter((row) => row.status === "sin coincidencia");
+  let created = 0;
+  for (const row of rows) {
+    try {
+      const product = await createInventoryProductFromPacRow(row);
+      await linkClinicalPacRowToProduct(row, product, "vinculado", 100, "creado desde pac");
+      created += 1;
+    } catch (error) {
+      console.warn("No se pudo crear producto PAC", row.producto, error);
+    }
+  }
+  await refreshInventory();
+  renderClinicalSupply();
+  showToastSuccess(`${created} productos creados desde PAC.`);
+}
+
+async function handleClinicalReconciliationAction(target) {
+  const manualId = target.dataset.linkManual;
+  const acceptId = target.dataset.linkAccept;
+  const unlinkId = target.dataset.linkUnlink;
+  const ignoreId = target.dataset.linkIgnore;
+  const createId = target.dataset.linkCreateProduct;
+  const recalcId = target.dataset.pacRecalcAnnual;
+  const reviewId = target.dataset.pacReviewInconsistency;
+  const rowId = manualId || acceptId || unlinkId || ignoreId || createId || recalcId || reviewId;
+  if (!rowId) return false;
+  const row = getClinicalPacRowById(rowId);
+  if (!row) return true;
+
+  if (manualId) {
+    const input = elements.clinicalReconcileTableBody.querySelector(`[data-link-input="${CSS.escape(rowId)}"]`);
+    const product = findProductByName(input?.value || "");
+    if (!product) {
+      showToastError("Producto de inventario no encontrado.");
+      return true;
+    }
+    await linkClinicalPacRowToProduct(row, product);
+    showToastSuccess("Producto vinculado.");
+    return true;
+  }
+  if (acceptId) {
+    await acceptClinicalSuggestion(row);
+    return true;
+  }
+  if (unlinkId) {
+    await persistClinicalProductLink(buildClinicalProductLink(row, null, "sin coincidencia", 0, "desvinculado"));
+    row.productoId = null;
+    commitClinicalCurrentOrder(buildClinicalOrderRows());
+    renderClinicalSupply();
+    showToastSuccess("Producto desvinculado.");
+    return true;
+  }
+  if (ignoreId) {
+    await persistClinicalProductLink(buildClinicalProductLink(row, null, "ignorado", 0, "manual"));
+    renderClinicalSupply();
+    showToastSuccess("Producto marcado como no aplica.");
+    return true;
+  }
+  if (createId) {
+    const product = await createInventoryProductFromPacRow(row);
+    await linkClinicalPacRowToProduct(row, product, "vinculado", 100, "creado desde pac");
+    await refreshInventory();
+    showToastSuccess("Producto creado y vinculado.");
+    return true;
+  }
+  if (recalcId) {
+    row.cantidadAnual = CLINICAL_MONTH_FIELDS.reduce((sum, field) => sum + Number(row[field] || 0), 0);
+    row.totalValorizado = Number(row.cantidadAnual || 0) * Number(row.precioUnitario || 0);
+    saveClinicalSupplyState();
+    renderClinicalSupply();
+    showToastSuccess("Cantidad anual recalculada localmente.");
+    return true;
+  }
+  if (reviewId) {
+    row.inconsistencyReviewed = true;
+    saveClinicalSupplyState();
+    renderClinicalSupply();
+    showToastSuccess("Inconsistencia marcada como revisada.");
+    return true;
+  }
+  return true;
 }
 
 function renderClinicalHistoryList(container, rows, emptyMessage, mapper) {
@@ -1794,17 +2283,23 @@ async function saveClinicalOrderToSupabase(rows, status = "generated") {
 function getClinicalRealOrderComparison(row, allRows) {
   const duplicateCode = row.codigo && allRows.filter((item) => item.codigo && item.codigo === row.codigo).length > 1;
   const duplicateProduct = row.producto && allRows.filter((item) => normalize(item.producto) === normalize(row.producto)).length > 1;
-  const product = (row.productoId && findProductById(row.productoId)) || findProductByName(row.producto);
-  const pacRow = state.clinicalSupply.pacRows.find((item) => normalize(item.producto) === normalize(row.producto) || (row.codigo && item.codigo === row.codigo));
+  const pacRow = state.clinicalSupply.pacRows.find((item) => (row.codigo && normalize(item.codigo) === normalize(row.codigo)) || normalize(item.producto) === normalize(row.producto));
+  const linkedProduct = pacRow ? getClinicalLinkedProductByPacRow(pacRow, { allowSuggestion: false }) : null;
+  const product = linkedProduct || (row.productoId && findProductById(row.productoId)) || findProductByName(row.producto);
   const orderRow = (getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows())
-    .find((item) => normalize(item.producto) === normalize(row.producto) || (row.codigo && item.codigo === row.codigo));
+    .find((item) => normalize(item.producto) === normalize(row.producto) || (row.codigo && normalize(item.codigo) === normalize(row.codigo)));
   const validations = [];
   if (duplicateCode) validations.push("Codigo duplicado");
   if (duplicateProduct) validations.push("Producto duplicado");
+  if (!row.codigo) validations.push("Producto sin codigo");
+  if (!Number(row.cantidad || 0) && row.cantidadTexto) validations.push("Cantidad en texto no parseada");
+  if (!Number(row.cantidad || 0) && !row.cantidadTexto) validations.push("Cantidad vacia");
   if (!product) validations.push("Producto no encontrado");
+  if (pacRow && !linkedProduct) validations.push("Pendiente de conciliacion");
   if (!pacRow) validations.push("No existe en PAC");
   if (!orderRow) validations.push("No existe en pedido sugerido");
   if (pacRow && Number(row.cantidad || 0) > getClinicalMonthValue(pacRow)) validations.push("Real sobre PAC mensual");
+  if (pacRow && Number(row.cantidad || 0) < getClinicalMonthValue(pacRow)) validations.push("Real bajo PAC mensual");
   if (orderRow && Math.abs(Number(row.cantidad || 0) - Number(orderRow.pedidoSugerido || 0)) > 0.01) validations.push("Difiere del sugerido");
 
   return {
@@ -1817,6 +2312,7 @@ function getClinicalRealOrderComparison(row, allRows) {
       suggested_order: orderRow ? Number(orderRow.pedidoSugerido || 0) : null,
       final_order: orderRow ? Number(orderRow.pedidoFinal || 0) : null,
       existing_product: Boolean(product),
+      linked_product: Boolean(linkedProduct),
       duplicate_code: Boolean(duplicateCode),
       duplicate_product: Boolean(duplicateProduct)
     }
@@ -1961,6 +2457,24 @@ function getClinicalExportRows(type) {
     riesgo: row.riesgo,
     observacion: row.observacion
   }));
+  if (type === "pedido_real_errores") return state.clinicalSupply.realOrderRows.map((row) => {
+    const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
+    return {
+      hoja_origen: row.hojaOrigen,
+      codigo: row.codigo,
+      producto: row.producto,
+      categoria: row.categoria,
+      formato: row.formato,
+      pac_referencia: row.pacReferencia,
+      cantidad_solicitada: row.cantidad,
+      cantidad_texto: row.cantidadTexto,
+      proveedor: row.proveedor,
+      orden_compra: row.ordenCompra,
+      producto_id: comparison.product?.id || "",
+      pac_item_id: comparison.pacRow?.id || "",
+      estado_validacion: comparison.validations.length ? comparison.validations.join(" | ") : "OK"
+    };
+  });
   if (type === "quiebres") return getClinicalBreakRows().map((row) => ({
     producto: row.producto,
     stock_actual: row.stockActual,
@@ -2033,6 +2547,17 @@ function getClinicalExportRows(type) {
     severidad: row.severity,
     mensaje: row.message
   }));
+  if (type === "conciliacion_pendientes") return getClinicalReconciliationRows()
+    .filter((row) => !["vinculado", "ignorado"].includes(row.status))
+    .map((row) => ({
+      codigo_pac: row.codigo,
+      producto_pac: row.producto,
+      categoria_pac: row.categoria,
+      sugerencia: row.suggestedProduct?.nombre || "",
+      estado: row.status,
+      confianza: row.confidence,
+      metodo: row.method
+    }));
   return [];
 }
 
@@ -2638,18 +3163,32 @@ function normalizeClinicalRealOrderRow(rawRow, index) {
   Object.entries(rawRow || {}).forEach(([key, value]) => {
     row[getClinicalFieldName(key)] = value;
   });
+  const rawEntries = Object.fromEntries(Object.entries(rawRow || {}).map(([key, value]) => [normalizeClinicalHeader(key), value]));
+  const codigo = String(row.codigo ?? rawEntries.codigo ?? rawEntries.cod ?? "").replace(/\s+-\s+/g, "-").trim();
+  const producto = String(row.producto ?? rawEntries.producto ?? rawEntries.descripcion ?? rawEntries.detalle ?? rawEntries["nombre formula"] ?? "").trim();
+  const cantidadRaw = row.cantidad ?? row.pedidoFinal ?? rawEntries.pedido ?? rawEntries.solicitud ?? rawEntries.solciitud ?? rawEntries.cantidad ?? row.total;
+  const pacRef = parseClinicalNumber(row.cantidadAnual ?? rawEntries["pac 2026"] ?? rawEntries.pac ?? 0);
   return {
     id: `real-${Date.now()}-${index}`,
-    codigo: String(row.codigo ?? "").trim(),
-    producto: String(row.producto ?? "").trim(),
-    cantidad: parseClinicalNumber(row.cantidad ?? row.cantidadAnual ?? row.pedidoFinal ?? row.total),
+    hojaOrigen: rawRow.hoja_origen || rawRow.hojaOrigen || "",
+    codigo,
+    producto,
+    categoria: String(row.categoria ?? rawEntries.categoria ?? rawRow.hoja_origen ?? "").trim(),
+    formato: String(rawEntries.formato ?? row.formato ?? rawEntries.unidad ?? "").trim(),
+    pacReferencia: pacRef,
+    cantidad: parseClinicalNumber(cantidadRaw),
+    cantidadTexto: String(cantidadRaw ?? "").trim(),
+    cantidadRecepcionada: parseClinicalNumber(rawEntries.recepcionado ?? rawEntries.recepcion ?? rawEntries["recepcionado si/no"] ?? 0),
+    proveedor: String(rawEntries.proveedor ?? "").trim(),
+    ordenCompra: String(rawEntries["orden de compra"] ?? "").trim(),
     precioUnitario: parseClinicalNumber(row.precioUnitario),
-    total: parseClinicalNumber(row.totalValorizado)
+    total: parseClinicalNumber(row.totalValorizado),
+    observacion: ""
   };
 }
 
 async function importClinicalRealOrderFile(file) {
-  const rows = await parseClinicalFile(file);
+  const rows = await parseClinicalRealOrderWorkbook(file);
   state.clinicalSupply.realOrderRows = rows
     .map(normalizeClinicalRealOrderRow)
     .filter((row) => row.producto || row.codigo);
@@ -4869,8 +5408,17 @@ document.addEventListener("click", (event) => {
   const clinicalTab = event.target.closest("[data-clinical-tab]");
   if (clinicalTab) {
     state.clinicalSupply.activeTab = clinicalTab.dataset.clinicalTab;
+    if (clinicalTab.dataset.clinicalFilterShortcut) {
+      state.clinicalSupply.reconcileFilter = clinicalTab.dataset.clinicalFilterShortcut;
+    }
     saveClinicalSupplyState();
     renderClinicalSupply();
+    return;
+  }
+
+  const reconciliationAction = event.target.closest("[data-link-manual], [data-link-accept], [data-link-unlink], [data-link-ignore], [data-link-create-product], [data-pac-recalc-annual], [data-pac-review-inconsistency]");
+  if (reconciliationAction) {
+    handleClinicalReconciliationAction(reconciliationAction).catch((error) => showError("No se pudo actualizar conciliacion", error));
     return;
   }
 
@@ -5266,6 +5814,37 @@ elements.clinicalRealOrderFile.addEventListener("change", async (event) => {
     showError("No se pudo importar pedido real", error);
   } finally {
     event.target.value = "";
+  }
+});
+elements.clinicalReconcileFilter.addEventListener("change", (event) => {
+  state.clinicalSupply.reconcileFilter = event.target.value;
+  saveClinicalSupplyState();
+  renderClinicalReconciliation();
+});
+elements.clinicalAcceptHighConfidenceBtn.addEventListener("click", () => {
+  acceptHighConfidenceClinicalSuggestions().catch((error) => showError("No se pudieron aceptar sugerencias", error));
+});
+elements.clinicalCreateMissingProductsBtn.addEventListener("click", async () => {
+  const confirmed = await showModalConfirm({
+    title: "Crear productos faltantes",
+    message: "Esto creara productos de inventario para PAC sin coincidencia. No crea lotes ni stock.",
+    confirmText: "Crear",
+    variant: "warning"
+  });
+  if (!confirmed) return;
+  createMissingClinicalProductsFromPac().catch((error) => showError("No se pudieron crear productos desde PAC", error));
+});
+elements.clinicalRegenerateWithLinksBtn.addEventListener("click", async () => {
+  try {
+    commitClinicalCurrentOrder(buildClinicalOrderRows());
+    await saveClinicalOrderToSupabase(getClinicalCurrentOrderRows(), "generated");
+    renderClinicalSupply();
+    showToastSuccess("Pedido regenerado usando conciliacion.");
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Pedido regenerado solo localmente", error);
+    renderClinicalSupply();
+    showToastError("Pedido regenerado localmente; Supabase no disponible.");
   }
 });
 elements.clinicalDemandFile.addEventListener("change", async (event) => {

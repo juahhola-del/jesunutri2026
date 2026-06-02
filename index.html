@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Jesunutri">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=10">
+    <link rel="stylesheet" href="styles.css?v=11">
   </head>
   <body>
     <section class="app-splash" id="appSplash">
@@ -260,6 +260,7 @@
             <button class="clinical-tab" type="button" data-clinical-tab="pedido">Pedido Mensual</button>
             <button class="clinical-tab" type="button" data-clinical-tab="quiebres">Proyeccion de Quiebres</button>
             <button class="clinical-tab" type="button" data-clinical-tab="presupuesto">Presupuesto</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="conciliacion">Conciliacion</button>
             <button class="clinical-tab" type="button" data-clinical-tab="demanda">Demanda Diaria</button>
             <button class="clinical-tab" type="button" data-clinical-tab="reportes">Reportes</button>
             <button class="clinical-tab" type="button" data-clinical-tab="historial">Historial</button>
@@ -275,6 +276,8 @@
                     Importar Excel/CSV
                     <input id="clinicalPacFile" type="file" accept=".xlsx,.xls,.csv,.txt" hidden>
                   </label>
+                  <button class="btn" type="button" data-clinical-tab="conciliacion" data-clinical-filter-shortcut="missing">Ver productos no conciliados</button>
+                  <button class="btn" type="button" data-clinical-tab="conciliacion" data-clinical-filter-shortcut="inconsistencies">Ver inconsistencias PAC</button>
                   <button class="btn" type="button" id="clinicalClearPacBtn">Limpiar PAC</button>
                 </div>
               </article>
@@ -318,10 +321,13 @@
               <button class="btn primary" type="button" id="clinicalGenerateOrderBtn">Generar pedido sugerido</button>
               <button class="btn" type="button" id="clinicalSaveOrderBtn">Guardar pedido</button>
               <button class="btn" type="button" id="clinicalExportOrderBtn">Exportar pedido</button>
+              <button class="btn" type="button" data-clinical-tab="conciliacion">Ir a conciliacion</button>
               <label class="btn file-import-btn">
                 Importar pedido real
                 <input id="clinicalRealOrderFile" type="file" accept=".xlsx,.xls,.csv,.txt" hidden>
               </label>
+              <button class="btn" type="button" data-clinical-export="pedido_real_errores">Ver errores de importacion</button>
+              <button class="btn" type="button" id="clinicalRegenerateWithLinksBtn">Regenerar usando conciliacion</button>
             </div>
             <div class="clinical-summary-grid" id="clinicalOrderSummary"></div>
             <div class="table-wrap">
@@ -388,6 +394,43 @@
                   </tr>
                 </thead>
                 <tbody id="clinicalBudgetTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="clinical-view" id="clinicalViewConciliacion">
+            <div class="clinical-toolbar">
+              <select id="clinicalReconcileFilter" class="clinical-select">
+                <option value="all">Todos</option>
+                <option value="missing">Sin coincidencia</option>
+                <option value="suggested">Sugeridos</option>
+                <option value="linked">Vinculados</option>
+                <option value="conflict">Conflictos</option>
+                <option value="ignored">Ignorados</option>
+                <option value="inconsistencies">Inconsistencias PAC</option>
+              </select>
+              <button class="btn primary" type="button" id="clinicalAcceptHighConfidenceBtn">Aceptar sugerencias altas</button>
+              <button class="btn" type="button" data-clinical-export="conciliacion_pendientes">Exportar pendientes</button>
+              <button class="btn" type="button" id="clinicalCreateMissingProductsBtn">Crear productos faltantes desde PAC</button>
+            </div>
+            <div class="clinical-summary-grid" id="clinicalReconcileSummary"></div>
+            <div class="bulk-error-list clinical-validation-list" id="clinicalPacInconsistencyList" hidden></div>
+            <div class="table-wrap">
+              <table class="clinical-table reconcile-table">
+                <thead>
+                  <tr>
+                    <th>Codigo PAC</th>
+                    <th>Producto PAC</th>
+                    <th>Categoria PAC</th>
+                    <th>Producto inventario vinculado</th>
+                    <th>Stock actual</th>
+                    <th>Unidad</th>
+                    <th>Estado</th>
+                    <th>Confianza</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="clinicalReconcileTableBody"></tbody>
               </table>
             </div>
           </section>
@@ -1192,7 +1235,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="script.js?v=10"></script>
+    <script src="script.js?v=11"></script>
   </body>
 </html>
 

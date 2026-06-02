@@ -718,6 +718,8 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 .clinical-controls input,
 .clinical-controls select,
 .clinical-budget-fields input,
+.clinical-select,
+.clinical-link-input,
 .clinical-final-input {
   min-height: 38px;
   border: 1px solid var(--line);
@@ -864,6 +866,21 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 
 .demand-table {
   min-width: 1180px;
+}
+
+.reconcile-table {
+  min-width: 1460px;
+}
+
+.clinical-link-input {
+  width: min(280px, 100%);
+}
+
+.clinical-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 260px;
 }
 
 .clinical-final-input {
