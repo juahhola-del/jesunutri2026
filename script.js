@@ -1136,9 +1136,17 @@ function getClinicalFieldName(header) {
     sku: "codigo",
     producto: "producto",
     nombre: "producto",
+    "nombre formula": "producto",
+    detalle: "producto",
     insumo: "producto",
+    pedido: "cantidad",
+    solicitud: "cantidad",
+    solciitud: "cantidad",
+    "pac 2026": "cantidadAnual",
+    formato: "categoria",
     categoria: "categoria",
     rubro: "categoria",
+    bodega: "categoria",
     "cantidad anual": "cantidadAnual",
     anual: "cantidadAnual",
     "total anual": "cantidadAnual",
@@ -1154,15 +1162,64 @@ function getClinicalFieldName(header) {
   return map[clean] || clean.replace(/\s+(.)/g, (_, letter) => letter.toUpperCase());
 }
 
+function scoreClinicalHeaderRow(row = []) {
+  const normalized = row.map(normalizeClinicalHeader);
+  const text = normalized.join(" ");
+  let score = 0;
+  if (normalized.some((cell) => cell === "codigo" || cell === "cod")) score += 3;
+  if (normalized.some((cell) => ["producto", "nombre", "detalle", "insumo"].includes(cell))) score += 3;
+  if (text.includes("precio unitario") || normalized.includes("precio")) score += 2;
+  if (text.includes("cantidad anual") || normalized.includes("anual")) score += 2;
+  score += CLINICAL_MONTH_FIELDS.filter((month) => normalized.some((cell) => cell === month || cell.startsWith(month.slice(0, 3)))).length;
+  if (text.includes("pac 2026")) score += 2;
+  if (normalized.some((cell) => ["pedido", "solicitud"].includes(cell))) score += 2;
+  return score;
+}
+
+function tableFromClinicalMatrix(matrix = []) {
+  let bestHeaderIndex = -1;
+  let bestScore = 0;
+  matrix.slice(0, 30).forEach((row, index) => {
+    const score = scoreClinicalHeaderRow(row);
+    if (score > bestScore) {
+      bestScore = score;
+      bestHeaderIndex = index;
+    }
+  });
+
+  if (bestHeaderIndex < 0 || bestScore < 4) return [];
+  const headers = matrix[bestHeaderIndex].map((header, index, headerRow) => {
+    const value = String(header || "").trim();
+    if (value) return value;
+    const previous = normalizeClinicalHeader(headerRow[index - 1] || "");
+    const next = normalizeClinicalHeader(headerRow[index + 1] || "");
+    if ((previous === "codigo" || previous === "cod") && ["formato", "pac 2026", "pedido", "solicitud"].includes(next)) return "producto";
+    return `columna_${index + 1}`;
+  });
+  return matrix.slice(bestHeaderIndex + 1)
+    .filter((row) => row.some((cell) => String(cell ?? "").trim()))
+    .map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""])));
+}
+
 function parseClinicalNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const text = String(value ?? "").trim();
   if (!text) return 0;
-  const clean = text
+  const withoutCurrency = text
     .replace(/\$/g, "")
-    .replace(/\s/g, "")
-    .replace(/\./g, "")
-    .replace(",", ".");
+    .replace(/\s/g, "");
+  const hasComma = withoutCurrency.includes(",");
+  const hasDot = withoutCurrency.includes(".");
+  let clean = withoutCurrency;
+  if (hasComma && hasDot) {
+    clean = withoutCurrency.replace(/\./g, "").replace(",", ".");
+  } else if (hasComma) {
+    clean = withoutCurrency.replace(",", ".");
+  } else if (hasDot) {
+    const dotParts = withoutCurrency.split(".");
+    const looksLikeThousands = dotParts.length > 2 || (dotParts.length === 2 && dotParts[1].length === 3 && dotParts[0].length <= 3);
+    clean = looksLikeThousands ? withoutCurrency.replace(/\./g, "") : withoutCurrency;
+  }
   const number = Number(clean);
   return Number.isFinite(number) ? number : 0;
 }
@@ -1997,8 +2054,16 @@ async function parseClinicalFile(file) {
     }
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    return XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    const candidates = workbook.SheetNames.map((sheetName) => {
+      const matrix = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: true });
+      const rows = tableFromClinicalMatrix(matrix);
+      const headerScore = matrix.slice(0, 30).reduce((best, row) => Math.max(best, scoreClinicalHeaderRow(row)), 0);
+      const sheetBonus = normalize(sheetName).includes("trabajar") ? 3 : 0;
+      return { sheetName, rows, score: headerScore + sheetBonus };
+    }).filter((candidate) => candidate.rows.length);
+    const best = candidates.sort((a, b) => b.score - a.score || b.rows.length - a.rows.length)[0];
+    if (!best) return [];
+    return best.rows;
   }
   const text = await file.text();
   const delimiter = text.includes(";") ? ";" : text.includes("\t") ? "\t" : ",";
