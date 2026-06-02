@@ -180,6 +180,15 @@ const state = {
     dailySupplyItems: [],
     dailyImportErrors: [],
     dailyBulkImportDiagnostics: null,
+    dailyDemandProductLinks: [],
+    dailyWarningFilters: {
+      file: "all",
+      severity: "all",
+      type: "all",
+      status: "pendiente"
+    },
+    demandReconcileFilter: "all",
+    reconcileMode: "pac",
     history: {
       pacYears: [],
       monthlyOrders: [],
@@ -302,12 +311,17 @@ const elements = {
   clinicalBudgetSummary: document.getElementById("clinicalBudgetSummary"),
   clinicalBudgetTableBody: document.getElementById("clinicalBudgetTableBody"),
   clinicalReconcileFilter: document.getElementById("clinicalReconcileFilter"),
+  clinicalReconcileMode: document.getElementById("clinicalReconcileMode"),
+  clinicalDemandReconcileFilter: document.getElementById("clinicalDemandReconcileFilter"),
   clinicalAcceptHighConfidenceBtn: document.getElementById("clinicalAcceptHighConfidenceBtn"),
   clinicalLinkReviewedBtn: document.getElementById("clinicalLinkReviewedBtn"),
   clinicalCreateMissingProductsBtn: document.getElementById("clinicalCreateMissingProductsBtn"),
   clinicalReconcileSummary: document.getElementById("clinicalReconcileSummary"),
   clinicalPacInconsistencyList: document.getElementById("clinicalPacInconsistencyList"),
   clinicalReconcileTableBody: document.getElementById("clinicalReconcileTableBody"),
+  clinicalDemandReconcileTableBody: document.getElementById("clinicalDemandReconcileTableBody"),
+  clinicalPacReconcilePanel: document.getElementById("clinicalPacReconcilePanel"),
+  clinicalDemandReconcilePanel: document.getElementById("clinicalDemandReconcilePanel"),
   clinicalRegenerateWithLinksBtn: document.getElementById("clinicalRegenerateWithLinksBtn"),
   clinicalDemandDate: document.getElementById("clinicalDemandDate"),
   clinicalDemandNotes: document.getElementById("clinicalDemandNotes"),
@@ -325,6 +339,11 @@ const elements = {
   clinicalDemandBulkDiagnostic: document.getElementById("clinicalDemandBulkDiagnostic"),
   clinicalDemandBulkDiagnosticMeta: document.getElementById("clinicalDemandBulkDiagnosticMeta"),
   clinicalDemandBulkDiagnosticBody: document.getElementById("clinicalDemandBulkDiagnosticBody"),
+  clinicalDemandWarningFileFilter: document.getElementById("clinicalDemandWarningFileFilter"),
+  clinicalDemandWarningSeverityFilter: document.getElementById("clinicalDemandWarningSeverityFilter"),
+  clinicalDemandWarningTypeFilter: document.getElementById("clinicalDemandWarningTypeFilter"),
+  clinicalDemandWarningStatusFilter: document.getElementById("clinicalDemandWarningStatusFilter"),
+  clinicalDemandWarningTableBody: document.getElementById("clinicalDemandWarningTableBody"),
   clinicalDemandDailySummary: document.getElementById("clinicalDemandDailySummary"),
   clinicalDemandMonthlySummary: document.getElementById("clinicalDemandMonthlySummary"),
   clinicalDemandWarnings: document.getElementById("clinicalDemandWarnings"),
@@ -1026,6 +1045,120 @@ async function persistClinicalProductLink(link) {
   }
 }
 
+function normalizeClinicalDemandDetectedType(type = "") {
+  const clean = normalize(type);
+  if (clean.includes("enteral") || clean.includes("formula") || clean.includes("modulo")) return clean.includes("modulo") ? "modulo" : "enteral";
+  if (clean.includes("dieta")) return "dieta";
+  if (clean.includes("preparacion")) return "preparacion";
+  return "insumo";
+}
+
+function getClinicalDemandProductLink(name = "", type = "") {
+  const key = normalizeClinicalMatchText(name);
+  const detectedType = normalizeClinicalDemandDetectedType(type);
+  return state.clinicalSupply.dailyDemandProductLinks.find((link) =>
+    normalizeClinicalMatchText(link.detectedName || "") === key &&
+    normalizeClinicalDemandDetectedType(link.detectedType || "") === detectedType
+  );
+}
+
+function suggestClinicalProductForDemandName(name = "") {
+  let best = null;
+  state.products.forEach((product) => {
+    const score = scoreClinicalProductMatch(name, product.nombre);
+    if (!best || score.confidence > best.confidence) {
+      best = { product, confidence: score.confidence, method: score.method };
+    }
+  });
+  return best || { product: null, confidence: 0, method: "sin coincidencia" };
+}
+
+function buildClinicalDemandProductLink(row, product, status = "vinculado", confidence = 100, method = "manual") {
+  const existing = getClinicalDemandProductLink(row.detectedName || row.name, row.detectedType || row.type);
+  return {
+    id: existing?.id || `demand-link-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    detectedName: row.detectedName || row.name || "",
+    detectedType: normalizeClinicalDemandDetectedType(row.detectedType || row.type),
+    productoId: product?.id || null,
+    matchStatus: status,
+    matchConfidence: Number(confidence || 0),
+    matchMethod: method,
+    ignored: status === "ignorado",
+    createdBy: state.currentUser?.id || null,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function upsertClinicalDemandProductLink(link) {
+  const key = normalizeClinicalMatchText(link.detectedName || "");
+  const type = normalizeClinicalDemandDetectedType(link.detectedType || "");
+  state.clinicalSupply.dailyDemandProductLinks = [
+    ...state.clinicalSupply.dailyDemandProductLinks.filter((item) => item.id !== link.id && !(normalizeClinicalMatchText(item.detectedName || "") === key && normalizeClinicalDemandDetectedType(item.detectedType || "") === type)),
+    link
+  ];
+  saveClinicalSupplyState();
+}
+
+function mapClinicalDemandProductLinkFromDb(row) {
+  return {
+    id: row.id,
+    detectedName: row.detected_name || "",
+    detectedType: row.detected_type || "insumo",
+    productoId: row.producto_id || null,
+    matchStatus: row.match_status || "vinculado",
+    matchConfidence: Number(row.match_confidence || 0),
+    matchMethod: row.match_method || "",
+    ignored: Boolean(row.ignored),
+    createdBy: row.created_by || null,
+    updatedAt: row.updated_at || row.created_at
+  };
+}
+
+async function loadClinicalDemandProductLinksFromSupabase() {
+  if (!state.currentUser?.id) return;
+  const { data, error } = await supabaseClient
+    .from("clinical_demand_product_links")
+    .select("*")
+    .eq("created_by", state.currentUser.id)
+    .order("updated_at", { ascending: false });
+  if (error) throw error;
+  state.clinicalSupply.dailyDemandProductLinks = (data || []).map(mapClinicalDemandProductLinkFromDb);
+}
+
+async function saveClinicalDemandProductLinkToSupabase(link) {
+  if (!state.currentUser?.id) throw new Error("Usuario no autenticado.");
+  const payload = {
+    detected_name: link.detectedName || "",
+    detected_type: normalizeClinicalDemandDetectedType(link.detectedType || ""),
+    producto_id: link.productoId || null,
+    match_status: link.matchStatus || "vinculado",
+    match_confidence: Number(link.matchConfidence || 0),
+    match_method: link.matchMethod || null,
+    ignored: Boolean(link.ignored),
+    created_by: state.currentUser.id,
+    updated_at: new Date().toISOString()
+  };
+  const { data, error } = await supabaseClient
+    .from("clinical_demand_product_links")
+    .upsert(payload, { onConflict: "detected_name,detected_type,created_by" })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return mapClinicalDemandProductLinkFromDb(data);
+}
+
+async function persistClinicalDemandProductLink(link) {
+  upsertClinicalDemandProductLink(link);
+  try {
+    const saved = await saveClinicalDemandProductLinkToSupabase(link);
+    upsertClinicalDemandProductLink(saved);
+    setClinicalSupabaseReady(true);
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Vinculo demanda diaria guardado solo localmente", error);
+  }
+}
+
 function getProductLots(productId) {
   return state.inventory.filter((item) => String(item.productoId) === String(productId));
 }
@@ -1063,6 +1196,10 @@ function loadClinicalSupplyLocalState() {
       dailySupplyItems: Array.isArray(saved.dailySupplyItems) ? saved.dailySupplyItems : [],
       dailyImportErrors: Array.isArray(saved.dailyImportErrors) ? saved.dailyImportErrors : [],
       dailyBulkImportDiagnostics: saved.dailyBulkImportDiagnostics || null,
+      dailyDemandProductLinks: Array.isArray(saved.dailyDemandProductLinks) ? saved.dailyDemandProductLinks : [],
+      dailyWarningFilters: { file: "all", severity: "all", type: "all", status: "pendiente", ...(saved.dailyWarningFilters || {}) },
+      demandReconcileFilter: saved.demandReconcileFilter || "all",
+      reconcileMode: saved.reconcileMode || "pac",
       history: { ...getClinicalDefaultHistory(), ...(saved.history || {}) }
     };
     return true;
@@ -1291,6 +1428,11 @@ async function loadClinicalSupplyState({ useLocal = true } = {}) {
       await loadClinicalProductLinksFromSupabase();
     } catch (linkError) {
       console.warn("Conciliacion PAC inventario en respaldo local", linkError);
+    }
+    try {
+      await loadClinicalDemandProductLinksFromSupabase();
+    } catch (demandLinkError) {
+      console.warn("Conciliacion demanda diaria en respaldo local", demandLinkError);
     }
     try {
       await loadClinicalDailyDemandFromSupabase();
@@ -2108,8 +2250,83 @@ function getFilteredClinicalReconciliationRows() {
   return rows.filter((row) => row.status === filter);
 }
 
+function getClinicalDemandDetectedRows() {
+  const year = Number(state.clinicalSupply.pacYear);
+  const month = Number(state.clinicalSupply.monthIndex) + 1;
+  const monthDemandIds = new Set(state.clinicalSupply.dailyDemands
+    .filter((row) => {
+      const [rowYear, rowMonth] = String(row.demandDate || "").split("-").map(Number);
+      return rowYear === year && rowMonth === month;
+    })
+    .map((row) => row.id));
+  const aggregate = new Map();
+  const add = (name, type, quantity = 1) => {
+    const cleanName = String(name || "").trim();
+    if (!cleanName) return;
+    const detectedType = normalizeClinicalDemandDetectedType(type);
+    const key = `${normalizeClinicalMatchText(cleanName)}-${detectedType}`;
+    const current = aggregate.get(key) || { detectedName: cleanName, detectedType, frequency: 0, totalQuantity: 0 };
+    current.frequency += 1;
+    current.totalQuantity += Number(quantity || 0);
+    aggregate.set(key, current);
+  };
+  state.clinicalSupply.dailyEnteralItems
+    .filter((row) => monthDemandIds.has(row.demandId))
+    .forEach((row) => add(row.product, /modulo/i.test(row.product) ? "modulo" : "enteral", row.volume || 1));
+  state.clinicalSupply.dailySupplyItems
+    .filter((row) => monthDemandIds.has(row.demandId))
+    .forEach((row) => add(row.product, "insumo", row.quantity || 1));
+
+  return [...aggregate.values()].map((row) => {
+    const link = getClinicalDemandProductLink(row.detectedName, row.detectedType);
+    const linkedProduct = link?.productoId ? findProductById(link.productoId) : null;
+    const suggestion = suggestClinicalProductForDemandName(row.detectedName);
+    let status = "sin coincidencia";
+    let product = null;
+    let confidence = suggestion.confidence;
+    let method = suggestion.method;
+    if (link?.ignored) {
+      status = "ignorado";
+      confidence = Number(link.matchConfidence || 0);
+      method = link.matchMethod || "manual";
+    } else if (linkedProduct) {
+      product = linkedProduct;
+      status = "vinculado";
+      confidence = Number(link.matchConfidence || 100);
+      method = link.matchMethod || "manual";
+    } else if (suggestion.product && suggestion.confidence >= 80) {
+      product = suggestion.product;
+      status = "sugerido";
+    }
+    return { ...row, link, linkedProduct: product, suggestedProduct: suggestion.product, status, confidence, method };
+  });
+}
+
+function getFilteredClinicalDemandReconciliationRows() {
+  const filter = state.clinicalSupply.demandReconcileFilter || "all";
+  const rows = getClinicalDemandDetectedRows();
+  if (filter === "all") return rows;
+  return rows.filter((row) => row.status === filter);
+}
+
 function renderClinicalReconciliation() {
   if (!elements.clinicalReconcileTableBody) return;
+  const mode = state.clinicalSupply.reconcileMode || "pac";
+  if (elements.clinicalReconcileMode) elements.clinicalReconcileMode.value = mode;
+  if (elements.clinicalPacReconcilePanel) elements.clinicalPacReconcilePanel.hidden = mode !== "pac";
+  if (elements.clinicalDemandReconcilePanel) elements.clinicalDemandReconcilePanel.hidden = mode !== "demanda";
+  if (elements.clinicalReconcileFilter) elements.clinicalReconcileFilter.hidden = mode !== "pac";
+  if (elements.clinicalDemandReconcileFilter) {
+    elements.clinicalDemandReconcileFilter.hidden = mode !== "demanda";
+    elements.clinicalDemandReconcileFilter.value = state.clinicalSupply.demandReconcileFilter || "all";
+  }
+  elements.clinicalAcceptHighConfidenceBtn.hidden = mode !== "pac";
+  elements.clinicalLinkReviewedBtn.hidden = mode !== "pac";
+  elements.clinicalCreateMissingProductsBtn.hidden = mode !== "pac";
+  if (mode === "demanda") {
+    renderClinicalDemandReconciliation();
+    return;
+  }
   elements.clinicalReconcileFilter.value = state.clinicalSupply.reconcileFilter || "all";
   const rows = getClinicalReconciliationRows();
   const filteredRows = getFilteredClinicalReconciliationRows();
@@ -2159,6 +2376,45 @@ function renderClinicalReconciliation() {
         `;
       }).join("")
     : '<tr><td colspan="9" class="empty">No hay productos PAC para este filtro.</td></tr>';
+}
+
+function renderClinicalDemandReconciliation() {
+  const rows = getClinicalDemandDetectedRows();
+  const filteredRows = getFilteredClinicalDemandReconciliationRows();
+  const linked = rows.filter((row) => row.status === "vinculado").length;
+  const pending = rows.filter((row) => !["vinculado", "ignorado"].includes(row.status)).length;
+  renderClinicalSummary(elements.clinicalReconcileSummary, [
+    { title: "Insumos detectados", caption: "Mes activo", value: formatNumber(rows.length) },
+    { title: "Conciliados", caption: "Vinculados", value: formatNumber(linked) },
+    { title: "Pendientes", caption: "Por revisar", value: formatNumber(pending) },
+    { title: "% conciliacion", caption: "Vinculados / detectados", value: `${formatNumber(rows.length ? (linked / rows.length) * 100 : 0)}%` }
+  ]);
+  elements.clinicalPacInconsistencyList.hidden = true;
+  elements.clinicalDemandReconcileTableBody.innerHTML = filteredRows.length
+    ? filteredRows.map((row) => {
+        const productName = row.status === "vinculado" || row.status === "sugerido" ? (row.linkedProduct?.nombre || row.suggestedProduct?.nombre || "") : "";
+        const rowKey = `${normalizeClinicalMatchText(row.detectedName)}|${row.detectedType}`;
+        return `
+          <tr>
+            <td><strong>${escapeHtml(row.detectedName)}</strong></td>
+            <td>${escapeHtml(row.detectedType)}</td>
+            <td>${formatNumber(row.frequency)}</td>
+            <td>${formatNumber(row.totalQuantity)}</td>
+            <td><input class="clinical-link-input" list="productSuggestions" value="${escapeHtml(productName)}" data-demand-link-input="${escapeHtml(rowKey)}" placeholder="Buscar producto"></td>
+            <td>${formatNumber(row.confidence)}% ${escapeHtml(row.method || "")}</td>
+            <td>${escapeHtml(row.status)}</td>
+            <td>
+              <div class="clinical-row-actions">
+                <button class="btn small" type="button" data-demand-link-manual="${escapeHtml(rowKey)}">Vincular seleccionado</button>
+                <button class="btn small" type="button" data-demand-link-create="${escapeHtml(rowKey)}">Crear producto</button>
+                <button class="btn small" type="button" data-demand-link-unlink="${escapeHtml(rowKey)}">Desvincular</button>
+                <button class="btn small" type="button" data-demand-link-ignore="${escapeHtml(rowKey)}">Ignorar</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("")
+    : '<tr><td colspan="8" class="empty">No hay insumos ni formulas detectadas este mes.</td></tr>';
 }
 
 function getClinicalPacRowById(id) {
@@ -2215,6 +2471,14 @@ async function createInventoryProductFromPacRow(row) {
   return findProductById(data.id) || data;
 }
 
+async function createInventoryProductFromDemandRow(row) {
+  return createInventoryProductFromPacRow({
+    producto: row.detectedName,
+    codigo: "",
+    categoria: row.detectedType
+  });
+}
+
 async function linkClinicalPacRowToProduct(row, product, status = "vinculado", confidence = 100, method = "manual") {
   const link = buildClinicalProductLink(row, product, status, confidence, method);
   await persistClinicalProductLink(link);
@@ -2266,6 +2530,13 @@ async function createMissingClinicalProductsFromPac() {
 }
 
 async function handleClinicalReconciliationAction(target) {
+  const demandManualKey = target.dataset.demandLinkManual;
+  const demandUnlinkKey = target.dataset.demandLinkUnlink;
+  const demandIgnoreKey = target.dataset.demandLinkIgnore;
+  const demandCreateKey = target.dataset.demandLinkCreate;
+  const demandKey = demandManualKey || demandUnlinkKey || demandIgnoreKey || demandCreateKey;
+  if (demandKey) return handleClinicalDemandReconciliationAction(target, demandKey);
+
   const manualId = target.dataset.linkManual;
   const unlinkId = target.dataset.linkUnlink;
   const ignoreId = target.dataset.linkIgnore;
@@ -2322,6 +2593,52 @@ async function handleClinicalReconciliationAction(target) {
     saveClinicalSupplyState();
     renderClinicalSupply();
     showToastSuccess("Inconsistencia marcada como revisada.");
+    return true;
+  }
+  return true;
+}
+
+function getClinicalDemandDetectedRowByKey(key = "") {
+  const [nameKey, type] = String(key).split("|");
+  return getClinicalDemandDetectedRows().find((row) => normalizeClinicalMatchText(row.detectedName) === nameKey && row.detectedType === type);
+}
+
+async function handleClinicalDemandReconciliationAction(target, rowKey) {
+  const row = getClinicalDemandDetectedRowByKey(rowKey);
+  if (!row) return true;
+  if (target.dataset.demandLinkManual) {
+    const input = elements.clinicalDemandReconcileTableBody.querySelector(`[data-demand-link-input="${CSS.escape(rowKey)}"]`);
+    const product = findProductByName(input?.value || "");
+    if (!product) {
+      showToastError("Producto de inventario no encontrado.");
+      return true;
+    }
+    const suggestion = suggestClinicalProductForDemandName(row.detectedName);
+    const confidence = product.id === suggestion.product?.id ? suggestion.confidence : 100;
+    const method = product.id === suggestion.product?.id ? suggestion.method : "manual";
+    await persistClinicalDemandProductLink(buildClinicalDemandProductLink(row, product, "vinculado", confidence, method));
+    renderClinicalSupply();
+    showToastSuccess("Producto de demanda vinculado.");
+    return true;
+  }
+  if (target.dataset.demandLinkUnlink) {
+    await persistClinicalDemandProductLink(buildClinicalDemandProductLink(row, null, "sin coincidencia", 0, "desvinculado"));
+    renderClinicalSupply();
+    showToastSuccess("Producto de demanda desvinculado.");
+    return true;
+  }
+  if (target.dataset.demandLinkIgnore) {
+    await persistClinicalDemandProductLink(buildClinicalDemandProductLink(row, null, "ignorado", 0, "manual"));
+    renderClinicalSupply();
+    showToastSuccess("Producto de demanda ignorado.");
+    return true;
+  }
+  if (target.dataset.demandLinkCreate) {
+    const product = await createInventoryProductFromDemandRow(row);
+    await persistClinicalDemandProductLink(buildClinicalDemandProductLink(row, product, "vinculado", 100, "creado desde demanda"));
+    await refreshInventory();
+    renderClinicalSupply();
+    showToastSuccess("Producto creado y vinculado.");
     return true;
   }
   return true;
@@ -2800,10 +3117,18 @@ function getClinicalExportRows(type) {
   }));
   if (type === "demanda_errores") return state.clinicalSupply.dailyImportErrors.map((row) => ({
     ficha: row.demandId,
+    archivo: row.fileName,
+    fecha: row.demandDate,
     hoja: row.sheetName,
     fila: row.rowNumber,
+    celda: row.cellRef,
+    tipo: row.warningType,
     severidad: row.severity,
-    mensaje: row.message
+    mensaje: row.message,
+    accion_sugerida: row.suggestedAction,
+    estado: row.status,
+    revisada_en: row.reviewedAt,
+    revisada_por: row.reviewedBy
   }));
   if (type === "conciliacion_pendientes") return getClinicalReconciliationRows()
     .filter((row) => !["vinculado", "ignorado"].includes(row.status))
@@ -2897,14 +3222,43 @@ function getClinicalDemandSelected() {
   return state.clinicalSupply.dailyDemands.find((row) => String(row.id) === String(id)) || null;
 }
 
-function pushClinicalDemandWarning(collection, demandId, sheetName, message, rowNumber = null) {
+function getClinicalDemandWarningMeta(message = "", type = "") {
+  const text = normalize(`${type} ${message}`);
+  if (text.includes("sospechosa") || text.includes("descartado")) {
+    return { warningType: type || "valor sospechoso descartado", severity: "alta", suggestedAction: "Corregir manualmente la ficha y marcar revisada." };
+  }
+  if (text.includes("producto no conciliado") || text.includes("insumo") || text.includes("formula")) {
+    return { warningType: type || "producto no conciliado", severity: "media", suggestedAction: "Ir a conciliacion de Demanda Diaria y vincular el producto." };
+  }
+  if (text.includes("dietas")) {
+    return { warningType: type || "no se detectaron dietas especiales", severity: "media", suggestedAction: "Agregar dieta manual o confirmar que la ficha no incluye dietas especiales." };
+  }
+  if (text.includes("enterales")) {
+    return { warningType: type || "no se pudo leer seccion enterales", severity: "media", suggestedAction: "Revisar hoja de enterales o agregar registros manualmente." };
+  }
+  if (text.includes("fecha")) {
+    return { warningType: type || "fecha no reconocida", severity: "alta", suggestedAction: "Seleccionar fecha manual e importar nuevamente o corregir la ficha." };
+  }
+  return { warningType: type || "formato diferente al esperado", severity: "baja", suggestedAction: "Revisar la fila indicada y marcar advertencia como revisada o ignorada." };
+}
+
+function pushClinicalDemandWarning(collection, demandId, sheetName, message, rowNumber = null, options = {}) {
+  const meta = getClinicalDemandWarningMeta(message, options.warningType);
   collection.push({
     id: `demand-error-${Date.now()}-${collection.length}`,
     demandId,
+    fileName: options.fileName || "",
+    demandDate: options.demandDate || "",
     sheetName,
     rowNumber,
-    severity: "warning",
-    message
+    cellRef: options.cellRef || "",
+    warningType: meta.warningType,
+    severity: options.severity || meta.severity,
+    message,
+    suggestedAction: options.suggestedAction || meta.suggestedAction,
+    status: options.status || "pendiente",
+    reviewedAt: "",
+    reviewedBy: ""
   });
 }
 
@@ -3096,6 +3450,21 @@ function extractClinicalDemand(sheetPayload, { file, demandDate, observations })
     suspiciousReading = true;
     pushClinicalDemandWarning(errors, demandId, "", getClinicalSuspiciousMessage("dietas especiales", dietSpecialTotal, CLINICAL_DEMAND_LIMITS.dietQuantity));
   }
+  const detectedProducts = [
+    ...enteralItems.map((row) => ({ name: row.product, type: "enteral" })),
+    ...supplyItems.map((row) => ({ name: row.product, type: "insumo" }))
+  ];
+  [...new Map(detectedProducts.filter((row) => row.name).map((row) => [`${normalize(row.name)}-${row.type}`, row])).values()]
+    .forEach((row) => {
+      const link = getClinicalDemandProductLink(row.name, row.type);
+      if (!link || (!link.productoId && !link.ignored)) {
+        pushClinicalDemandWarning(errors, demandId, "", `Producto no conciliado: ${row.name}`, null, {
+          warningType: "producto no conciliado",
+          severity: "media",
+          suggestedAction: "Ir a conciliacion de Demanda Diaria y vincular el producto."
+        });
+      }
+    });
   const demand = {
     id: demandId,
     demandDate: demandDate || formatIsoDate(new Date()),
@@ -3112,6 +3481,11 @@ function extractClinicalDemand(sheetPayload, { file, demandDate, observations })
     suspiciousReading,
     createdAt: new Date().toISOString()
   };
+  errors.forEach((error) => {
+    error.fileName = demand.filename;
+    error.demandDate = demand.demandDate;
+  });
+  if (!errors.length && demand.status === "con errores") demand.status = "cargada";
 
   return { demand, dietCounts: uniqueDietCounts, enteralItems, supplyItems, errors };
 }
@@ -3234,10 +3608,17 @@ async function saveClinicalDemandToSupabase(parsed) {
 
   const errorPayload = parsed.errors.map((row) => ({
     daily_demand_id: demand.id,
+    file_name: row.fileName || parsed.demand.filename || null,
     sheet_name: row.sheetName || null,
     row_number: row.rowNumber,
-    severity: row.severity || "warning",
-    message: row.message || ""
+    cell_ref: row.cellRef || null,
+    warning_type: row.warningType || null,
+    severity: row.severity || "media",
+    message: row.message || "",
+    suggested_action: row.suggestedAction || null,
+    status: row.status || "pendiente",
+    reviewed_at: row.reviewedAt || null,
+    reviewed_by: row.reviewedBy || null
   }));
   if (errorPayload.length) {
     const { error: importError } = await supabaseClient.from("clinical_daily_import_errors").insert(errorPayload);
@@ -3318,11 +3699,24 @@ async function loadClinicalDailyDemandFromSupabase() {
   state.clinicalSupply.dailyImportErrors = (errorResult.data || []).map((row) => ({
     id: row.id,
     demandId: row.daily_demand_id,
+    fileName: row.file_name || "",
+    demandDate: state.clinicalSupply.dailyDemands.find((demand) => demand.id === row.daily_demand_id)?.demandDate || "",
     sheetName: row.sheet_name || "",
     rowNumber: row.row_number,
-    severity: row.severity || "warning",
-    message: row.message || ""
+    cellRef: row.cell_ref || "",
+    warningType: row.warning_type || "formato diferente al esperado",
+    severity: row.severity === "warning" ? "media" : row.severity === "error" ? "alta" : row.severity || "media",
+    message: row.message || "",
+    suggestedAction: row.suggested_action || getClinicalDemandWarningMeta(row.message || "").suggestedAction,
+    status: row.status || "pendiente",
+    reviewedAt: row.reviewed_at || "",
+    reviewedBy: row.reviewed_by || ""
   }));
+  state.clinicalSupply.dailyDemands.forEach((demand) => {
+    const warningCount = state.clinicalSupply.dailyImportErrors.filter((row) => row.demandId === demand.id).length;
+    demand.warningCount = warningCount;
+    if (demand.status === "con errores" && !warningCount) demand.status = "cargada";
+  });
   state.clinicalSupply.history.dailyDemands = state.clinicalSupply.dailyDemands.slice(0, 20);
 }
 
@@ -3574,6 +3968,15 @@ function renderClinicalDemand() {
   const missingDays = Math.max(0, daysInMonth - loadedDays);
   const warningDays = monthDemands.filter((row) => Number(row.warningCount || 0) > 0 || row.suspiciousReading).length;
   const pendingReview = monthDemands.filter((row) => row.status !== "revisada").length;
+  const monthWarnings = getClinicalDemandWarningRows().filter((row) => {
+    const [rowYear, rowMonth] = String(row.demandDate || "").split("-").map(Number);
+    return rowYear === Number(state.clinicalSupply.pacYear) && rowMonth === Number(state.clinicalSupply.monthIndex) + 1;
+  });
+  const pendingWarnings = monthWarnings.filter((row) => row.status === "pendiente").length;
+  const demandDetectedRows = getClinicalDemandDetectedRows();
+  const reconciledDemandItems = demandDetectedRows.filter((row) => row.status === "vinculado").length;
+  const pendingDemandItems = demandDetectedRows.filter((row) => !["vinculado", "ignorado"].includes(row.status)).length;
+  const reconciliationPercent = demandDetectedRows.length ? (reconciledDemandItems / demandDetectedRows.length) * 100 : 0;
   const dietTotals = new Map();
   state.clinicalSupply.dailyDietCounts
     .filter((row) => reliableMonthDemands.some((demand) => demand.id === row.demandId))
@@ -3604,10 +4007,18 @@ function renderClinicalDemand() {
     { title: "Minimo diario", caption: minDemand ? formatDisplayDate(minDemand.demandDate) : "Sin datos", value: formatNumber(minDemand?.totalPatients || 0) },
     { title: "Dieta frecuente", caption: topDiet?.[0] || "Sin datos", value: formatNumber(topDiet?.[1] || 0) },
     { title: "Dias con advertencias", caption: "Requieren revision", value: formatNumber(warningDays) },
-    { title: "Pendientes revision", caption: "No revisadas", value: formatNumber(pendingReview) }
+    { title: "Pendientes revision", caption: "No revisadas", value: formatNumber(pendingReview) },
+    { title: "Fichas sin advertencias", caption: "Calidad", value: formatNumber(monthDemands.filter((row) => !Number(row.warningCount || 0) && !row.suspiciousReading).length) },
+    { title: "Fichas con advertencias", caption: "Calidad", value: formatNumber(monthDemands.filter((row) => Number(row.warningCount || 0) || row.suspiciousReading).length) },
+    { title: "Advertencias pendientes", caption: "Panel", value: formatNumber(pendingWarnings) },
+    { title: "Insumos detectados", caption: "Demanda", value: formatNumber(demandDetectedRows.length) },
+    { title: "Insumos conciliados", caption: "Inventario", value: formatNumber(reconciledDemandItems) },
+    { title: "Pendientes conciliacion", caption: "Inventario", value: formatNumber(pendingDemandItems) },
+    { title: "% conciliacion", caption: "Demanda diaria", value: `${formatNumber(reconciliationPercent)}%` }
   ]);
 
   renderClinicalDemandBulkDiagnostics();
+  renderClinicalDemandWarningsPanel();
 
   const currentWarnings = latest ? state.clinicalSupply.dailyImportErrors.filter((row) => row.demandId === latest.id) : [];
   elements.clinicalDemandWarnings.hidden = !currentWarnings.length;
@@ -3655,6 +4066,132 @@ function renderClinicalDemand() {
     : '<div class="empty compact-empty">Sin enterales ni insumos detectados.</div>';
 }
 
+function getClinicalDemandWarningRows() {
+  return state.clinicalSupply.dailyImportErrors.map((warning) => {
+    const demand = state.clinicalSupply.dailyDemands.find((row) => String(row.id) === String(warning.demandId));
+    const meta = getClinicalDemandWarningMeta(warning.message || "", warning.warningType || "");
+    return {
+      ...warning,
+      fileName: warning.fileName || demand?.filename || "",
+      demandDate: warning.demandDate || demand?.demandDate || "",
+      warningType: warning.warningType || meta.warningType,
+      severity: warning.severity === "warning" ? "media" : warning.severity === "error" ? "alta" : warning.severity || meta.severity,
+      suggestedAction: warning.suggestedAction || meta.suggestedAction,
+      status: warning.status || "pendiente"
+    };
+  });
+}
+
+function getFilteredClinicalDemandWarningRows() {
+  const filters = state.clinicalSupply.dailyWarningFilters || {};
+  return getClinicalDemandWarningRows().filter((row) => {
+    if (filters.file && filters.file !== "all" && row.fileName !== filters.file) return false;
+    if (filters.severity && filters.severity !== "all" && row.severity !== filters.severity) return false;
+    if (filters.type && filters.type !== "all" && row.warningType !== filters.type) return false;
+    if (filters.status && filters.status !== "all" && row.status !== filters.status) return false;
+    return true;
+  });
+}
+
+function renderClinicalDemandWarningFilters(rows) {
+  if (!elements.clinicalDemandWarningFileFilter) return;
+  const filters = state.clinicalSupply.dailyWarningFilters;
+  const files = [...new Set(rows.map((row) => row.fileName).filter(Boolean))].sort();
+  const types = [...new Set(rows.map((row) => row.warningType).filter(Boolean))].sort();
+  elements.clinicalDemandWarningFileFilter.innerHTML = '<option value="all">Todos los archivos</option>' + files.map((file) => `<option value="${escapeHtml(file)}">${escapeHtml(file)}</option>`).join("");
+  elements.clinicalDemandWarningTypeFilter.innerHTML = '<option value="all">Todos los tipos</option>' + types.map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join("");
+  elements.clinicalDemandWarningFileFilter.value = filters.file || "all";
+  elements.clinicalDemandWarningSeverityFilter.value = filters.severity || "all";
+  elements.clinicalDemandWarningTypeFilter.value = filters.type || "all";
+  elements.clinicalDemandWarningStatusFilter.value = filters.status || "pendiente";
+}
+
+function renderClinicalDemandWarningsPanel() {
+  if (!elements.clinicalDemandWarningTableBody) return;
+  const rows = getClinicalDemandWarningRows();
+  renderClinicalDemandWarningFilters(rows);
+  const filteredRows = getFilteredClinicalDemandWarningRows();
+  elements.clinicalDemandWarningTableBody.innerHTML = filteredRows.length
+    ? filteredRows.map((row) => `
+      <tr class="${row.severity === "alta" ? "row-invalid" : ""}">
+        <td><strong>${escapeHtml(row.fileName || "-")}</strong></td>
+        <td>${row.demandDate ? formatDisplayDate(row.demandDate) : "-"}</td>
+        <td>${escapeHtml(row.sheetName || "-")}</td>
+        <td>${escapeHtml([row.rowNumber ? `Fila ${row.rowNumber}` : "", row.cellRef || ""].filter(Boolean).join(" / ") || "-")}</td>
+        <td>${escapeHtml(row.warningType || "-")}</td>
+        <td>${escapeHtml(row.message || "-")}</td>
+        <td>${escapeHtml(row.severity || "media")}</td>
+        <td>${escapeHtml(row.suggestedAction || "-")}</td>
+        <td>${escapeHtml(row.status || "pendiente")}</td>
+        <td>
+          <div class="clinical-row-actions">
+            <button class="btn small" type="button" data-demand-warning-review="${escapeHtml(row.id)}">Marcar revisada</button>
+            <button class="btn small" type="button" data-demand-warning-ignore="${escapeHtml(row.id)}">Ignorar</button>
+            <button class="btn small" type="button" data-demand-warning-fix="${escapeHtml(row.demandId)}">Corregir manualmente</button>
+            ${normalize(row.warningType || row.message || "").includes("producto") ? '<button class="btn small" type="button" data-demand-warning-reconcile="1">Ir a conciliacion</button>' : ""}
+          </div>
+        </td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="10" class="empty">Sin advertencias para los filtros seleccionados.</td></tr>';
+}
+
+async function updateClinicalDemandWarningStatus(warningId, status) {
+  const warning = state.clinicalSupply.dailyImportErrors.find((row) => String(row.id) === String(warningId));
+  if (!warning) return;
+  warning.status = status;
+  warning.reviewedAt = new Date().toISOString();
+  warning.reviewedBy = state.currentUser?.id || null;
+  try {
+    if (state.currentUser?.id && /^[0-9a-f-]{36}$/i.test(String(warning.id))) {
+      const { error } = await supabaseClient
+        .from("clinical_daily_import_errors")
+        .update({
+          status,
+          reviewed_at: warning.reviewedAt,
+          reviewed_by: state.currentUser.id
+        })
+        .eq("id", warning.id);
+      if (error) throw error;
+    }
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Advertencia demanda guardada solo localmente", error);
+  }
+  saveClinicalSupplyState();
+  renderClinicalDemand();
+}
+
+async function handleClinicalDemandWarningAction(target) {
+  const reviewId = target.dataset.demandWarningReview;
+  const ignoreId = target.dataset.demandWarningIgnore;
+  const fixDemandId = target.dataset.demandWarningFix;
+  if (reviewId) {
+    await updateClinicalDemandWarningStatus(reviewId, "revisada");
+    showToastSuccess("Advertencia marcada como revisada.");
+    return true;
+  }
+  if (ignoreId) {
+    await updateClinicalDemandWarningStatus(ignoreId, "ignorada");
+    showToastSuccess("Advertencia ignorada.");
+    return true;
+  }
+  if (fixDemandId) {
+    elements.clinicalDemandEditSelect.value = fixDemandId;
+    renderClinicalDemand();
+    elements.clinicalDemandPatientsInput?.focus();
+    return true;
+  }
+  if (target.dataset.demandWarningReconcile) {
+    state.clinicalSupply.activeTab = "conciliacion";
+    state.clinicalSupply.reconcileMode = "demanda";
+    saveClinicalSupplyState();
+    renderClinicalSupply();
+    return true;
+  }
+  return false;
+}
+
 function renderClinicalDemandBulkDiagnostics() {
   if (!elements.clinicalDemandBulkDiagnostic) return;
   const diagnostics = state.clinicalSupply.dailyBulkImportDiagnostics;
@@ -3667,7 +4204,7 @@ function renderClinicalDemandBulkDiagnostics() {
       <tr class="${row.status === "error" ? "row-invalid" : ""}">
         <td><strong>${escapeHtml(row.file || "-")}</strong></td>
         <td>${row.date ? formatDisplayDate(row.date) : "-"}</td>
-        <td>${escapeHtml(row.status || "-")}</td>
+        <td>${row.status === "con advertencias" ? `<button class="btn small" type="button" data-demand-diagnostic-file="${escapeHtml(row.file || "")}">con advertencias</button>` : escapeHtml(row.status || "-")}</td>
         <td>${formatNumber(row.patients || 0)}</td>
         <td>${formatNumber(row.diets || 0)}</td>
         <td>${formatNumber(row.enterals || 0)}</td>
@@ -5957,7 +6494,20 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  const reconciliationAction = event.target.closest("[data-link-manual], [data-link-unlink], [data-link-ignore], [data-link-create-product], [data-pac-recalc-annual], [data-pac-review-inconsistency]");
+  const warningAction = event.target.closest("[data-demand-warning-review], [data-demand-warning-ignore], [data-demand-warning-fix], [data-demand-warning-reconcile], [data-demand-diagnostic-file]");
+  if (warningAction) {
+    const file = warningAction.dataset.demandDiagnosticFile;
+    if (file) {
+      state.clinicalSupply.dailyWarningFilters = { ...state.clinicalSupply.dailyWarningFilters, file, status: "all" };
+      saveClinicalSupplyState();
+      renderClinicalDemand();
+      return;
+    }
+    handleClinicalDemandWarningAction(warningAction).catch((error) => showError("No se pudo actualizar advertencia", error));
+    return;
+  }
+
+  const reconciliationAction = event.target.closest("[data-link-manual], [data-link-unlink], [data-link-ignore], [data-link-create-product], [data-pac-recalc-annual], [data-pac-review-inconsistency], [data-demand-link-manual], [data-demand-link-unlink], [data-demand-link-ignore], [data-demand-link-create]");
   if (reconciliationAction) {
     handleClinicalReconciliationAction(reconciliationAction).catch((error) => showError("No se pudo actualizar conciliacion", error));
     return;
@@ -6419,6 +6969,31 @@ elements.clinicalDemandMonthFile.addEventListener("change", async (event) => {
 elements.clinicalDemandEditSelect.addEventListener("change", renderClinicalDemand);
 elements.clinicalDemandSaveManualBtn.addEventListener("click", saveClinicalDemandManualEdit);
 elements.clinicalDemandMarkReviewedBtn.addEventListener("click", markClinicalDemandReviewed);
+elements.clinicalReconcileMode.addEventListener("change", (event) => {
+  state.clinicalSupply.reconcileMode = event.target.value;
+  saveClinicalSupplyState();
+  renderClinicalSupply();
+});
+elements.clinicalDemandReconcileFilter.addEventListener("change", (event) => {
+  state.clinicalSupply.demandReconcileFilter = event.target.value;
+  saveClinicalSupplyState();
+  renderClinicalReconciliation();
+});
+[
+  ["clinicalDemandWarningFileFilter", "file"],
+  ["clinicalDemandWarningSeverityFilter", "severity"],
+  ["clinicalDemandWarningTypeFilter", "type"],
+  ["clinicalDemandWarningStatusFilter", "status"]
+].forEach(([elementKey, filterKey]) => {
+  elements[elementKey]?.addEventListener("change", (event) => {
+    state.clinicalSupply.dailyWarningFilters = {
+      ...state.clinicalSupply.dailyWarningFilters,
+      [filterKey]: event.target.value
+    };
+    saveClinicalSupplyState();
+    renderClinicalDemand();
+  });
+});
 elements.clinicalClearPacBtn.addEventListener("click", async () => {
   const confirmed = await showModalConfirm({
     title: "Limpiar PAC",

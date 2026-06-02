@@ -425,6 +425,10 @@
 
           <section class="clinical-view" id="clinicalViewConciliacion">
             <div class="clinical-toolbar">
+              <select id="clinicalReconcileMode" class="clinical-select">
+                <option value="pac">Conciliacion PAC</option>
+                <option value="demanda">Conciliacion Demanda Diaria</option>
+              </select>
               <select id="clinicalReconcileFilter" class="clinical-select">
                 <option value="all">Todos</option>
                 <option value="missing">Sin coincidencia</option>
@@ -438,10 +442,17 @@
               <button class="btn" type="button" id="clinicalLinkReviewedBtn">Vincular seleccionados revisados</button>
               <button class="btn" type="button" data-clinical-export="conciliacion_pendientes">Exportar pendientes</button>
               <button class="btn" type="button" id="clinicalCreateMissingProductsBtn">Crear productos faltantes desde PAC</button>
+              <select id="clinicalDemandReconcileFilter" class="clinical-select">
+                <option value="all">Todos demanda</option>
+                <option value="sin coincidencia">Sin coincidencia</option>
+                <option value="sugerido">Sugeridos</option>
+                <option value="vinculado">Vinculados</option>
+                <option value="ignorado">Ignorados</option>
+              </select>
             </div>
             <div class="clinical-summary-grid" id="clinicalReconcileSummary"></div>
             <div class="bulk-error-list clinical-validation-list" id="clinicalPacInconsistencyList" hidden></div>
-            <div class="table-wrap">
+            <div class="table-wrap" id="clinicalPacReconcilePanel">
               <table class="clinical-table reconcile-table">
                 <thead>
                   <tr>
@@ -457,6 +468,23 @@
                   </tr>
                 </thead>
                 <tbody id="clinicalReconcileTableBody"></tbody>
+              </table>
+            </div>
+            <div class="table-wrap" id="clinicalDemandReconcilePanel" hidden>
+              <table class="clinical-table reconcile-table">
+                <thead>
+                  <tr>
+                    <th>Nombre detectado</th>
+                    <th>Tipo</th>
+                    <th>Frecuencia mes</th>
+                    <th>Cantidad total</th>
+                    <th>Producto inventario vinculado</th>
+                    <th>Confianza</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="clinicalDemandReconcileTableBody"></tbody>
               </table>
             </div>
           </section>
@@ -556,6 +584,49 @@
             <div class="clinical-summary-grid" id="clinicalDemandDailySummary"></div>
             <div class="clinical-summary-grid" id="clinicalDemandMonthlySummary"></div>
             <div class="bulk-error-list clinical-validation-list" id="clinicalDemandWarnings" hidden></div>
+            <section class="clinical-import-diagnostic">
+              <div class="clinical-diagnostic-header">
+                <div>
+                  <h3>Advertencias de importacion</h3>
+                  <p>Revision accionable por ficha diaria</p>
+                </div>
+              </div>
+              <div class="clinical-toolbar">
+                <select id="clinicalDemandWarningFileFilter" class="clinical-select"></select>
+                <select id="clinicalDemandWarningSeverityFilter" class="clinical-select">
+                  <option value="all">Todas las severidades</option>
+                  <option value="baja">Baja</option>
+                  <option value="media">Media</option>
+                  <option value="alta">Alta</option>
+                </select>
+                <select id="clinicalDemandWarningTypeFilter" class="clinical-select"></select>
+                <select id="clinicalDemandWarningStatusFilter" class="clinical-select">
+                  <option value="pendiente">Pendientes</option>
+                  <option value="revisada">Revisadas</option>
+                  <option value="ignorada">Ignoradas</option>
+                  <option value="all">Todos los estados</option>
+                </select>
+              </div>
+              <div class="table-wrap">
+                <table class="clinical-table diagnostic-table warning-table">
+                  <thead>
+                    <tr>
+                      <th>Archivo</th>
+                      <th>Fecha</th>
+                      <th>Hoja</th>
+                      <th>Fila/Celda</th>
+                      <th>Tipo</th>
+                      <th>Mensaje</th>
+                      <th>Severidad</th>
+                      <th>Accion sugerida</th>
+                      <th>Estado</th>
+                      <th>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody id="clinicalDemandWarningTableBody"></tbody>
+                </table>
+              </div>
+            </section>
             <div class="table-wrap">
               <table class="clinical-table demand-table">
                 <thead>

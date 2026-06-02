@@ -854,6 +854,10 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   min-width: 760px;
 }
 
+.warning-table {
+  min-width: 1520px;
+}
+
 .diagnostic-table th,
 .diagnostic-table td {
   padding: 9px 10px;
