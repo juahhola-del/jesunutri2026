@@ -329,6 +329,31 @@
               <button class="btn" type="button" data-clinical-export="pedido_real_errores">Ver errores de importacion</button>
               <button class="btn" type="button" id="clinicalRegenerateWithLinksBtn">Regenerar usando conciliacion</button>
             </div>
+            <section class="clinical-import-diagnostic" id="clinicalRealImportDiagnostic" hidden>
+              <div class="clinical-diagnostic-header">
+                <div>
+                  <h3>Diagnostico importacion</h3>
+                  <p>Pedido Central Nutricion</p>
+                </div>
+                <span id="clinicalRealImportDiagnosticMeta"></span>
+              </div>
+              <div class="clinical-summary-grid compact" id="clinicalRealImportDiagnosticSummary"></div>
+              <div class="table-wrap">
+                <table class="clinical-table diagnostic-table">
+                  <thead>
+                    <tr>
+                      <th>Hoja detectada</th>
+                      <th>Parser</th>
+                      <th>Encabezado</th>
+                      <th>Leidas</th>
+                      <th>Descartadas</th>
+                      <th>Errores</th>
+                    </tr>
+                  </thead>
+                  <tbody id="clinicalRealImportDiagnosticBody"></tbody>
+                </table>
+              </div>
+            </section>
             <div class="clinical-summary-grid" id="clinicalOrderSummary"></div>
             <div class="table-wrap">
               <table class="clinical-table order-table">
