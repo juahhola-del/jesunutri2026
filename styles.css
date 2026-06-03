@@ -855,6 +855,10 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   min-width: 760px;
 }
 
+.diagnostic-reconcile-table {
+  min-width: 1680px;
+}
+
 .warning-table {
   min-width: 1520px;
 }
@@ -951,6 +955,10 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   max-width: 220px;
 }
 
+.trace-link-cell {
+  min-width: 210px;
+}
+
 .clinical-link-cell small {
   color: #93f0c8;
   font-size: 0.68rem;
@@ -992,6 +1000,18 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   opacity: 0.72;
 }
 
+.diagnostic-table tr.row-linked {
+  background: rgba(35, 196, 131, 0.055);
+}
+
+.diagnostic-table tr.row-suggested {
+  background: rgba(35, 196, 131, 0.035);
+}
+
+.diagnostic-table tr.row-ignored {
+  opacity: 0.72;
+}
+
 .clinical-row-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1006,6 +1026,44 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 .clinical-small-input {
   width: 84px;
   min-height: 34px;
+}
+
+.clinical-status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.clinical-status-pill.vinculado,
+.clinical-status-pill.sugerido {
+  background: rgba(35, 196, 131, 0.16);
+  color: #93f0c8;
+}
+
+.clinical-status-pill.conflicto,
+.clinical-status-pill.pendiente {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fcd58d;
+}
+
+.clinical-status-pill.ignorado {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+}
+
+.clinical-confidence {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
 }
 
 .clinical-risk,

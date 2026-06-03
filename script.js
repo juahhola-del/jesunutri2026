@@ -3052,6 +3052,48 @@ function renderClinicalSupply() {
   renderClinicalHistory();
 }
 
+function getClinicalRealOrderQuickReconciliation(row = {}, comparison = null) {
+  const link = getClinicalLinkForImportedRecord("monthly", row);
+  const linkStatus = normalizeClinicalMatchStatus(link?.matchStatus || "");
+  const linkedProduct = linkStatus === "vinculado" && link?.productoId ? findProductById(link.productoId) : null;
+  const ignored = Boolean(link?.ignored) || linkStatus === "ignorado";
+  const resolvedProduct = linkedProduct || comparison?.product || (row.productoId ? findProductById(row.productoId) : null);
+  const suggestion = suggestClinicalProductForDemandName(row.producto || row.productoRaw || row.nombre_crudo || "");
+  const suggestedProduct = resolvedProduct || suggestion.product || null;
+  let status = "pendiente";
+  let confidence = suggestion.confidence || 0;
+  let method = suggestion.method || "sin coincidencia";
+
+  if (ignored) {
+    status = "ignorado";
+    confidence = Number(link?.matchConfidence || 0);
+    method = link?.matchMethod || "manual";
+  } else if (linkedProduct) {
+    status = "vinculado";
+    confidence = Number(link?.matchConfidence || 100);
+    method = link?.matchMethod || "manual";
+  } else if (comparison?.product) {
+    status = "vinculado";
+    confidence = 100;
+    method = comparison?.comparison?.search_method || "resuelto por importacion";
+  } else if (suggestion.product && suggestion.confidence >= 80) {
+    status = "sugerido";
+  } else if (suggestion.product && suggestion.confidence >= 65) {
+    status = "conflicto";
+  }
+
+  return {
+    status,
+    confidence,
+    method,
+    linkedProduct: linkedProduct || (status === "vinculado" ? resolvedProduct : null),
+    suggestedProduct,
+    productName: (linkedProduct || (status === "vinculado" ? resolvedProduct : null) || suggestedProduct)?.nombre || "",
+    unit: (linkedProduct || resolvedProduct || suggestedProduct)?.unidad_default || "-",
+    stock: linkedProduct || resolvedProduct ? getProductStockTotal((linkedProduct || resolvedProduct).id) : null
+  };
+}
+
 function renderClinicalRealImportDiagnostics() {
   const diagnostics = state.clinicalSupply.realImportDiagnostics;
   if (!elements.clinicalRealImportDiagnostic) return;
@@ -3070,6 +3112,7 @@ function renderClinicalRealImportDiagnostics() {
     ? state.clinicalSupply.realOrderRows.map((row) => {
         const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
         const finalState = getClinicalImportFinalState(row, comparison);
+        const quickReconciliation = getClinicalRealOrderQuickReconciliation(row, comparison);
         return {
           hoja_origen: row.hojaOrigen || row.hoja_origen || "",
           id: row.id || "",
@@ -3085,6 +3128,13 @@ function renderClinicalRealImportDiagnostics() {
           valor_parseado: row.quantityParsedValue ?? row.cantidad ?? 0,
           pac_item_id: comparison.pacRow?.id || "",
           producto_id: comparison.product?.id || "",
+          producto_inventario_nombre: quickReconciliation.productName,
+          producto_sugerido_id: quickReconciliation.suggestedProduct?.id || "",
+          conciliacion_estado: quickReconciliation.status,
+          conciliacion_confianza: quickReconciliation.confidence,
+          conciliacion_metodo: quickReconciliation.method,
+          conciliacion_unidad: quickReconciliation.unit,
+          conciliacion_stock: quickReconciliation.stock,
           motivo_descarte: ["importado correctamente", "No solicitado este mes"].includes(finalState) ? "" : getClinicalImportDiscardReason(row, comparison),
           estado_final: finalState,
           accion_posible: comparison.product ? "" : (!normalizeClinicalCode(row.codigo) ? "vincular producto" : comparison.pacRow ? "vincular producto" : "crear producto")
@@ -3134,8 +3184,19 @@ function renderClinicalRealImportDiagnostics() {
     : '<tr><td colspan="9" class="empty">Sin diagnostico de importacion.</td></tr>';
   if (elements.clinicalRealImportDiagnosticRowsBody) {
     elements.clinicalRealImportDiagnosticRowsBody.innerHTML = rowDetails.length
-      ? rowDetails.map((row) => `
-        <tr class="${/descartado|correccion|pendiente/i.test(row.estado_final || "") ? "row-warning" : ""}">
+      ? rowDetails.map((row) => {
+        const hasQuickInput = Boolean(row.id);
+        const quickStatus = normalizeClinicalMatchStatus(row.conciliacion_estado || "");
+        const isLinked = quickStatus === "vinculado";
+        const isIgnored = quickStatus === "ignorado";
+        const isSuggested = quickStatus === "sugerido";
+        const rowClass = [
+          /descartado|correccion|pendiente/i.test(row.estado_final || "") ? "row-warning" : "",
+          isLinked ? "row-linked" : isIgnored ? "row-ignored" : isSuggested ? "row-suggested" : ""
+        ].filter(Boolean).join(" ");
+        const productValue = row.producto_inventario_nombre || "";
+        return `
+        <tr class="${rowClass}">
           <td>${escapeHtml(row.hoja_origen || "-")}</td>
           <td>${escapeHtml(row.categoria || "-")}</td>
           <td>${escapeHtml(row.fila_excel || "-")}</td>
@@ -3146,20 +3207,30 @@ function renderClinicalRealImportDiagnostics() {
           <td>${escapeHtml(row.columna_cantidad_detectada || row.columna_cantidad || "-")}</td>
           <td>${escapeHtml(String(row.valor_crudo ?? "")) || "-"}</td>
           <td>${row.id ? `<input class="clinical-small-input" type="text" value="${escapeHtml(row.valor_parseado ?? 0)}" data-real-order-quantity="${escapeHtml(row.id)}" title="Editar cantidad parseada">` : formatNumber(row.valor_parseado ?? 0)}</td>
-          <td>${escapeHtml(row.pac_item_id || "-")}</td>
-          <td>${escapeHtml(row.producto_id || "-")}</td>
+          <td>
+            ${hasQuickInput ? `<div class="clinical-link-cell trace-link-cell">
+              <input class="clinical-link-input ${isSuggested ? "is-suggested" : ""}" list="productSuggestions" value="${escapeHtml(productValue)}" data-real-order-link-input="${escapeHtml(row.id)}" placeholder="Buscar producto" title="${escapeHtml(productValue || "Buscar producto de inventario")}">
+              <small>${escapeHtml(row.conciliacion_metodo || "sin coincidencia")}</small>
+            </div>` : escapeHtml(row.producto_id || row.producto_inventario_nombre || "-")}
+          </td>
+          <td>
+            <span class="clinical-status-pill ${escapeHtml(quickStatus || "pendiente")}">${escapeHtml(quickStatus || "pendiente")}</span>
+            <small class="clinical-confidence">${formatNumber(row.conciliacion_confianza || 0)}%</small>
+          </td>
           <td>${escapeHtml(row.motivo_descarte || "-")}</td>
           <td>${escapeHtml(row.estado_final || "-")}</td>
           <td>
             ${row.id ? `<div class="clinical-row-actions">
-              <button class="btn small" type="button" data-real-order-reconcile="${escapeHtml(row.id)}">Vincular</button>
+              ${!isIgnored ? `<button class="btn small" type="button" data-real-order-link-manual="${escapeHtml(row.id)}">Vincular rapido</button>` : ""}
+              <button class="btn small" type="button" data-real-order-reconcile="${escapeHtml(row.id)}">Abrir conciliacion</button>
               <button class="btn small" type="button" data-real-order-create="${escapeHtml(row.id)}">Crear</button>
               <button class="btn small" type="button" data-real-order-delete="${escapeHtml(row.id)}">Borrar fila</button>
-              <button class="btn small" type="button" data-real-order-ignore="${escapeHtml(row.id)}">Ignorar</button>
+              ${isLinked || isIgnored ? `<button class="btn small" type="button" data-real-order-unlink="${escapeHtml(row.id)}">Desvincular</button>` : `<button class="btn small" type="button" data-real-order-ignore="${escapeHtml(row.id)}">Ignorar</button>`}
             </div>` : escapeHtml(row.accion_posible || "-")}
           </td>
         </tr>
-      `).join("")
+      `;
+      }).join("")
       : '<tr><td colspan="15" class="empty">Sin detalle de filas.</td></tr>';
   }
 }
@@ -3277,10 +3348,41 @@ function getClinicalRealOrderRowById(rowId) {
 }
 
 async function handleClinicalRealOrderRowAction(target) {
-  const rowId = target.dataset.realOrderReconcile || target.dataset.realOrderCreate || target.dataset.realOrderDelete || target.dataset.realOrderIgnore;
+  const rowId = target.dataset.realOrderReconcile ||
+    target.dataset.realOrderLinkManual ||
+    target.dataset.realOrderUnlink ||
+    target.dataset.realOrderCreate ||
+    target.dataset.realOrderDelete ||
+    target.dataset.realOrderIgnore;
   if (!rowId) return false;
   const row = getClinicalRealOrderRowById(rowId);
   if (!row) return true;
+  if (target.dataset.realOrderLinkManual) {
+    const input = elements.clinicalRealImportDiagnosticRowsBody?.querySelector(`[data-real-order-link-input="${CSS.escape(rowId)}"]`) ||
+      elements.clinicalRealOrderErrorTableBody?.querySelector(`[data-real-order-link-input="${CSS.escape(rowId)}"]`);
+    const product = findProductByName(input?.value || "");
+    if (!product) {
+      showToastError("Producto de inventario no encontrado.");
+      return true;
+    }
+    const suggestion = suggestClinicalProductForDemandName(row.producto);
+    const confidence = product.id === suggestion.product?.id ? suggestion.confidence : 100;
+    const method = product.id === suggestion.product?.id ? suggestion.method : "manual desde trazabilidad";
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", confidence, method));
+    row.productoId = product.id;
+    await revalidateClinicalRealOrder({ silent: true });
+    renderClinicalSupply();
+    showToastSuccess("Fila vinculada desde trazabilidad.");
+    return true;
+  }
+  if (target.dataset.realOrderUnlink) {
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, null, "pendiente", 0, "desvinculado desde trazabilidad"));
+    row.productoId = null;
+    await revalidateClinicalRealOrder({ silent: true });
+    renderClinicalSupply();
+    showToastSuccess("Fila desvinculada.");
+    return true;
+  }
   if (target.dataset.realOrderReconcile) {
     state.clinicalSupply.activeTab = "conciliacion";
     state.clinicalSupply.reconcileMode = "monthly";
