@@ -1802,7 +1802,7 @@ function getClinicalQuantityParseState(value) {
   const parsed = parseClinicalNumber(value);
   const explicitZero = typeof value === "number"
     ? Object.is(value, 0) || value === 0
-    : /^0+([,.]0+)?$/.test(rawText);
+    : /^0+([,.]0+)?(?:\s*[a-zA-Z].*)?$/.test(rawText);
   const interpretable = !isEmpty && (parsed !== 0 || explicitZero);
   return { rawText, parsed, isEmpty, interpretable, explicitZero };
 }
@@ -2025,7 +2025,12 @@ function parseClinicalNumber(value) {
     clean = looksLikeThousands ? withoutCurrency.replace(/\./g, "") : withoutCurrency;
   }
   const number = Number(clean);
-  return Number.isFinite(number) ? number : 0;
+  if (Number.isFinite(number)) return number;
+  const leadingNumber = text.match(/^[\s$]*([-+]?\d+(?:[.,]\d+)?)/);
+  if (!leadingNumber) return 0;
+  const normalizedLeading = leadingNumber[1].replace(",", ".");
+  const parsedLeading = Number(normalizedLeading);
+  return Number.isFinite(parsedLeading) ? parsedLeading : 0;
 }
 
 function getClinicalProductByPacRow(row) {
