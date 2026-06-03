@@ -2912,22 +2912,23 @@ function getClinicalDemandDetectedRows() {
     })
     .map((row) => row.id));
   const aggregate = new Map();
-  const add = (name, type, quantity = 1) => {
+  const add = (name, type, quantity = 1, demandId = "") => {
     const cleanName = String(name || "").trim();
     if (!cleanName) return;
     const detectedType = normalizeClinicalDemandDetectedType(type);
     const key = `${normalizeClinicalMatchText(cleanName)}-${detectedType}`;
-    const current = aggregate.get(key) || { detectedName: cleanName, detectedType, frequency: 0, totalQuantity: 0 };
+    const current = aggregate.get(key) || { detectedName: cleanName, detectedType, frequency: 0, totalQuantity: 0, demandIds: new Set() };
     current.frequency += 1;
     current.totalQuantity += Number(quantity || 0);
+    if (demandId) current.demandIds.add(demandId);
     aggregate.set(key, current);
   };
   state.clinicalSupply.dailyEnteralItems
     .filter((row) => monthDemandIds.has(row.demandId))
-    .forEach((row) => add(row.product, /modulo/i.test(row.product) ? "modulo" : "enteral", row.volume || 1));
+    .forEach((row) => add(row.product, /modulo/i.test(row.product) ? "modulo" : "enteral", row.volume || 1, row.demandId));
   state.clinicalSupply.dailySupplyItems
     .filter((row) => monthDemandIds.has(row.demandId))
-    .forEach((row) => add(row.product, "insumo", row.quantity || 1));
+    .forEach((row) => add(row.product, "insumo", row.quantity || 1, row.demandId));
 
   return [...aggregate.values()].map((row) => {
     const link = getClinicalDemandProductLink(row.detectedName, row.detectedType);
@@ -2960,7 +2961,7 @@ function getClinicalDemandDetectedRows() {
       product = suggestion.product;
       status = "sugerido";
     }
-    return { ...row, sourceType: "daily_demand", sourceLabel: "Demanda diaria", link, linkedProduct: status === "vinculado" ? product : null, suggestedProduct: product || suggestion.product, status, confidence, method };
+    return { ...row, demandIds: [...row.demandIds], sourceType: "daily_demand", sourceLabel: "Demanda diaria", link, linkedProduct: status === "vinculado" ? product : null, suggestedProduct: product || suggestion.product, status, confidence, method };
   });
 }
 
@@ -3648,7 +3649,8 @@ function getClinicalRealImportMeta(row) {
 
 function getClinicalRealOrderComparison(row, allRows) {
   const rowCode = normalizeClinicalCode(row.codigo);
-  const duplicateCode = rowCode && allRows.filter((item) => normalizeClinicalCode(item.codigo) && normalizeClinicalCode(item.codigo) === rowCode).length > 1;
+  const duplicateCodeRows = rowCode ? allRows.filter((item) => normalizeClinicalCode(item.codigo) && normalizeClinicalCode(item.codigo) === rowCode) : [];
+  const duplicateCode = duplicateCodeRows.length > 1;
   const duplicateProduct = row.producto && allRows.filter((item) => normalize(item.producto) === normalize(row.producto)).length > 1;
   const pacRow = state.clinicalSupply.pacRows.find((item) =>
     (row.pacRowId && String(item.id) === String(row.pacRowId)) ||
@@ -3674,8 +3676,12 @@ function getClinicalRealOrderComparison(row, allRows) {
   const quantityEmpty = row.quantityEmpty === true || quantityState.isEmpty;
   const quantityInterpretable = row.quantityInterpretable === false ? false : quantityState.interpretable;
   const observationDetails = [];
-  if (duplicateCode) addClinicalRealValidation(validationDetails, "code", "Codigo PAC duplicado conflictivo");
-  if (duplicateProduct) addClinicalRealValidation(validationDetails, "import", "Producto duplicado");
+  const duplicateCodeConflict = duplicateCode && (!pacRow || !product);
+  const duplicateProductConflict = duplicateProduct && !product;
+  if (duplicateCodeConflict) addClinicalRealValidation(validationDetails, "code", "Codigo PAC duplicado conflictivo");
+  if (duplicateCode && !duplicateCodeConflict) observationDetails.push("Codigo repetido resuelto por conciliacion");
+  if (duplicateProductConflict) addClinicalRealValidation(validationDetails, "import", "Producto duplicado");
+  if (duplicateProduct && !duplicateProductConflict) observationDetails.push("Producto repetido resuelto por conciliacion");
   if (!rowCode) addClinicalRealValidation(validationDetails, "code", "Producto mensual sin codigo");
   if (quantityEmpty || !quantityInterpretable) addClinicalRealValidation(validationDetails, "quantity", "Cantidad vacia o no interpretable");
   if (pacRow && !product) addClinicalRealValidation(validationDetails, "reconciliation", "PAC pendiente de vinculo con inventario");
@@ -3702,7 +3708,9 @@ function getClinicalRealOrderComparison(row, allRows) {
       existing_product: Boolean(product),
       linked_product: Boolean(linkedProduct),
       duplicate_code: Boolean(duplicateCode),
+      duplicate_code_conflict: Boolean(duplicateCodeConflict),
       duplicate_product: Boolean(duplicateProduct),
+      duplicate_product_conflict: Boolean(duplicateProductConflict),
       observations: observationDetails,
       validation_category: getClinicalRealValidationCategory(validationDetails),
       validation_details: validationDetails,
@@ -3889,6 +3897,95 @@ async function ensureClinicalDemandLinksFromRows(rows = getClinicalDemandDetecte
   }
 }
 
+function isClinicalDemandReconciliationWarning(error = {}) {
+  const text = normalize(`${error.warningType || ""} ${error.message || ""}`);
+  return text.includes("producto no conciliado") || text.includes("demanda diaria pendiente de vinculo");
+}
+
+function refreshClinicalDemandWarningCounts() {
+  state.clinicalSupply.dailyDemands.forEach((demand) => {
+    const warningCount = state.clinicalSupply.dailyImportErrors.filter((row) => String(row.demandId) === String(demand.id)).length;
+    demand.warningCount = warningCount;
+    if (warningCount || demand.suspiciousReading) {
+      demand.status = "con errores";
+    } else if (demand.status === "con errores") {
+      demand.status = "cargada";
+    }
+  });
+}
+
+function rebuildClinicalDemandReconciliationWarnings(rows = getClinicalDemandDetectedRows()) {
+  const removedWarnings = state.clinicalSupply.dailyImportErrors.filter(isClinicalDemandReconciliationWarning);
+  state.clinicalSupply.dailyImportErrors = state.clinicalSupply.dailyImportErrors.filter((error) => !isClinicalDemandReconciliationWarning(error));
+  rows.filter((row) => !["vinculado", "ignorado"].includes(row.status)).forEach((row) => {
+    (row.demandIds || [""]).forEach((demandId) => {
+      const demand = state.clinicalSupply.dailyDemands.find((item) => String(item.id) === String(demandId));
+      pushClinicalDemandWarning(state.clinicalSupply.dailyImportErrors, demandId || "", "", `Demanda diaria pendiente de vinculo: ${row.detectedName}`, null, {
+        fileName: demand?.filename || "",
+        demandDate: demand?.demandDate || "",
+        warningType: "producto no conciliado",
+        severity: "media",
+        suggestedAction: "Ir a conciliacion y vincular el producto detectado."
+      });
+    });
+  });
+  refreshClinicalDemandWarningCounts();
+  return removedWarnings;
+}
+
+async function persistClinicalDemandRevalidationWarnings(removedWarnings = []) {
+  if (!state.currentUser?.id || !supabaseClient) return;
+  const removedIds = removedWarnings.map((row) => row.id).filter((id) => /^[0-9a-f-]{36}$/i.test(String(id)));
+  if (removedIds.length) {
+    const { error } = await supabaseClient.from("clinical_daily_import_errors").delete().in("id", removedIds);
+    if (error) throw error;
+  }
+  const newWarnings = state.clinicalSupply.dailyImportErrors.filter((row) =>
+    isClinicalDemandReconciliationWarning(row) &&
+    /^[0-9a-f-]{36}$/i.test(String(row.demandId)) &&
+    String(row.id || "").startsWith("demand-error-")
+  );
+  if (newWarnings.length) {
+    const payload = newWarnings.map((row) => ({
+      daily_demand_id: row.demandId,
+      file_name: row.fileName || null,
+      sheet_name: row.sheetName || null,
+      row_number: row.rowNumber,
+      cell_ref: row.cellRef || null,
+      warning_type: row.warningType || "producto no conciliado",
+      severity: row.severity || "media",
+      message: row.message || "",
+      suggested_action: row.suggestedAction || null,
+      status: row.status || "pendiente",
+      reviewed_at: row.reviewedAt || null,
+      reviewed_by: row.reviewedBy || null
+    }));
+    const { data, error } = await supabaseClient.from("clinical_daily_import_errors").insert(payload).select("*");
+    if (error) throw error;
+    const savedByKey = new Map((data || []).map((row) => [`${row.daily_demand_id}|${normalize(row.message || "")}`, row]));
+    state.clinicalSupply.dailyImportErrors = state.clinicalSupply.dailyImportErrors.map((row) => {
+      const saved = savedByKey.get(`${row.demandId}|${normalize(row.message || "")}`);
+      return saved ? {
+        ...row,
+        id: saved.id,
+        warningType: saved.warning_type || row.warningType,
+        severity: saved.severity || row.severity,
+        suggestedAction: saved.suggested_action || row.suggestedAction
+      } : row;
+    });
+  }
+  const demandIds = [...new Set(state.clinicalSupply.dailyDemands.map((row) => row.id).filter((id) => /^[0-9a-f-]{36}$/i.test(String(id))))];
+  const demandUpdates = await Promise.all(demandIds.map((demandId) => {
+    const demand = state.clinicalSupply.dailyDemands.find((row) => String(row.id) === String(demandId));
+    return supabaseClient.from("clinical_daily_demands").update({
+      warning_count: Number(demand?.warningCount || 0),
+      status: demand?.status || "cargada"
+    }).eq("id", demandId);
+  }));
+  const failed = demandUpdates.find((result) => result.error);
+  if (failed?.error) throw failed.error;
+}
+
 async function revalidateClinicalPac() {
   await ensureClinicalPacLinksFromRows();
   commitClinicalCurrentOrder(buildClinicalOrderRows());
@@ -3896,27 +3993,28 @@ async function revalidateClinicalPac() {
   showToastSuccess("PAC revalidado con conciliacion.");
 }
 
-async function revalidateClinicalDemandLinks() {
-  await ensureClinicalDemandLinksFromRows();
+async function revalidateClinicalDemandLinks({ silent = false } = {}) {
   const rows = getClinicalDemandDetectedRows();
-  state.clinicalSupply.dailyImportErrors = state.clinicalSupply.dailyImportErrors.filter((error) => normalize(error.warningType) !== "producto no conciliado");
-  rows.filter((row) => !["vinculado", "ignorado"].includes(row.status)).forEach((row) => {
-    pushClinicalDemandWarning(state.clinicalSupply.dailyImportErrors, "", "", `Demanda diaria pendiente de vinculo: ${row.detectedName}`, null, {
-      warningType: "producto no conciliado",
-      severity: "media",
-      suggestedAction: "Ir a conciliacion y vincular el producto detectado."
-    });
-  });
+  await ensureClinicalDemandLinksFromRows(rows);
+  const refreshedRows = getClinicalDemandDetectedRows();
+  const removedWarnings = rebuildClinicalDemandReconciliationWarnings(refreshedRows);
+  try {
+    await persistClinicalDemandRevalidationWarnings(removedWarnings);
+    setClinicalSupabaseReady(true);
+  } catch (error) {
+    setClinicalSupabaseReady(false);
+    console.warn("Advertencias de demanda revalidadas solo localmente", error);
+  }
   saveClinicalSupplyState();
   renderClinicalSupply();
-  showToastSuccess("Demanda diaria revalidada.");
+  if (!silent) showToastSuccess("Demanda diaria revalidada.");
 }
 
 async function revalidateClinicalAllLinks() {
   await ensureClinicalPacLinksFromRows();
   await ensureClinicalMonthlyOrderLinksFromRows();
-  await ensureClinicalDemandLinksFromRows();
   await revalidateClinicalRealOrder({ silent: true });
+  await revalidateClinicalDemandLinks({ silent: true });
   commitClinicalCurrentOrder(buildClinicalOrderRows());
   renderClinicalSupply();
   showToastSuccess("Conciliacion revalidada completa.");
