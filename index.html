@@ -335,6 +335,7 @@
                 <option value="duplicados">Duplicados</option>
               </select>
               <button class="btn" type="button" id="clinicalRevalidateRealOrderBtn">Revalidar pedido real</button>
+              <button class="btn primary" type="button" id="clinicalSaveRealImportBtn">Guardar pedido real reconocido</button>
               <button class="btn" type="button" id="clinicalRegenerateWithLinksBtn">Regenerar usando conciliacion</button>
             </div>
             <section class="clinical-import-diagnostic" id="clinicalRealImportDiagnostic" hidden>
@@ -565,11 +566,7 @@
                     Importar mes completo
                     <input id="clinicalDemandMonthFile" type="file" accept=".xlsx,.xls,.csv,.txt" multiple hidden>
                   </label>
-                  <select id="clinicalDemandDuplicatePolicy" class="clinical-select">
-                    <option value="skip">Saltar duplicados</option>
-                    <option value="replace">Reemplazar duplicados</option>
-                    <option value="version">Crear version nueva</option>
-                  </select>
+                  <button class="btn primary" type="button" id="clinicalDemandSaveImportBtn">Guardar fichas reconocidas</button>
                 </div>
               </article>
               <article class="clinical-card">
