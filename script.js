@@ -1942,6 +1942,10 @@ function isClinicalPlaceholderProductName(value = "") {
   return false;
 }
 
+function isClinicalDateLikeText(value = "") {
+  return /\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b/.test(String(value || "").trim());
+}
+
 function isClinicalStructuralImportRow(cells = [], parserType = "") {
   const normalizedCells = cells.map(normalizeClinicalHeader).filter(Boolean);
   if (!normalizedCells.length) return true;
@@ -1957,6 +1961,25 @@ function isClinicalStructuralImportRow(cells = [], parserType = "") {
   return false;
 }
 
+function isClinicalQuantityCandidateCell(value = "") {
+  const quantityState = getClinicalQuantityParseState(value);
+  const text = String(value ?? "").trim();
+  if (!quantityState.interpretable) return false;
+  if (isClinicalDateLikeText(text)) return false;
+  if (/^[A-Z]+[-\s]*\d+$/i.test(text)) return false;
+  if (/[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(text) && !/^0+([,.]0+)?(?:\s*[a-zA-Z].*)?$/.test(text)) return false;
+  return true;
+}
+
+function getClinicalFlexibleQuantityHeaderScore(header = "") {
+  const clean = normalizeClinicalHeader(header);
+  if (!clean) return 0;
+  if (["solicitud", "solciitud", "pedido", "cantidad", "cantidad kg", "cant", "unidades"].includes(clean)) return 5;
+  if (/solicitud|solciitud|pedido|cantidad|unidades|cant/.test(clean)) return 4;
+  if (/pac|precio|valor|total|recepcion|orden|proveedor|fecha|codigo|cod/.test(clean)) return -3;
+  return 0;
+}
+
 function findClinicalProductIndexLeftOfQuantity(cells = [], quantityIndex = -1) {
   for (let index = quantityIndex - 1; index >= 0; index -= 1) {
     const productCell = String(cells[index] ?? "").trim();
@@ -1967,6 +1990,104 @@ function findClinicalProductIndexLeftOfQuantity(cells = [], quantityIndex = -1) 
     return index;
   }
   return -1;
+}
+
+function findClinicalProductIndexNearQuantity(cells = [], quantityIndex = -1) {
+  const leftIndex = findClinicalProductIndexLeftOfQuantity(cells, quantityIndex);
+  if (leftIndex >= 0) return leftIndex;
+  for (let index = quantityIndex + 1; index < cells.length; index += 1) {
+    const productCell = String(cells[index] ?? "").trim();
+    if (!productCell) continue;
+    if (!/[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(productCell)) continue;
+    if (isClinicalLikelyDateOrCode(productCell)) continue;
+    if (isClinicalPlaceholderProductName(productCell)) continue;
+    return index;
+  }
+  return -1;
+}
+
+function findClinicalCodeNearProduct(cells = [], productIndex = -1) {
+  const candidates = [productIndex - 2, productIndex - 1, productIndex + 1, productIndex + 2]
+    .filter((index) => index >= 0 && index < cells.length);
+  const codeIndex = candidates.find((index) => /^[A-Z]+-\d+$/i.test(normalizeClinicalCode(cells[index])));
+  return codeIndex >= 0 ? normalizeClinicalCode(cells[codeIndex]) : "";
+}
+
+function parseClinicalFlexibleProductQuantityRows(sheetName, matrix = [], diagnostic, {
+  parserType = "flexible",
+  startIndex = 0,
+  headers = [],
+  category = ""
+} = {}) {
+  const rows = [];
+  matrix.slice(startIndex).forEach((sourceRow, offset) => {
+    const excelRowNumber = startIndex + offset + 1;
+    const cells = sourceRow.map((cell) => String(cell ?? "").trim());
+    if (!cells.some(Boolean) || isClinicalStructuralImportRow(cells, parserType)) return;
+    const quantityCandidates = cells
+      .map((cell, index) => ({
+        index,
+        cell,
+        quantityState: getClinicalQuantityParseState(cell),
+        headerScore: getClinicalFlexibleQuantityHeaderScore(headers[index] || ""),
+        productIndex: findClinicalProductIndexNearQuantity(cells, index)
+      }))
+      .filter((candidate) => isClinicalQuantityCandidateCell(candidate.cell) && candidate.productIndex >= 0)
+      .sort((a, b) => b.headerScore - a.headerScore || Math.abs(a.index - a.productIndex) - Math.abs(b.index - b.productIndex));
+    const candidate = quantityCandidates[0];
+    if (!candidate) return;
+    const product = cells[candidate.productIndex];
+    const code = findClinicalCodeNearProduct(cells, candidate.productIndex);
+    rows.push(createClinicalParsedCentralRow({
+      codigo: code,
+      producto: product,
+      categoria: category || getClinicalCentralCategory(parserType, sheetName),
+      solicitudRaw: candidate.cell,
+      excelRowNumber,
+      quantityColumnName: getClinicalColumnLabel(headers, candidate.index) || `Columna ${candidate.index + 1}`,
+      quantityColumnIndex: candidate.index + 1,
+      sheetName,
+      observation: `Lectura flexible: producto columna ${candidate.productIndex + 1}, cantidad columna ${candidate.index + 1}`
+    }));
+    diagnostic.filasLeidas += 1;
+  });
+  if (rows.length) {
+    diagnostic.errores.push("Hoja leida con detector flexible producto/cantidad.");
+  }
+  return rows;
+}
+
+function extractClinicalFlexibleProductQuantityRow(sheetName, sourceRow = [], {
+  parserType = "flexible",
+  headers = [],
+  excelRowNumber = null,
+  category = ""
+} = {}) {
+  const cells = sourceRow.map((cell) => String(cell ?? "").trim());
+  if (!cells.some(Boolean) || isClinicalStructuralImportRow(cells, parserType)) return null;
+  const quantityCandidates = cells
+    .map((cell, index) => ({
+      index,
+      cell,
+      headerScore: getClinicalFlexibleQuantityHeaderScore(headers[index] || ""),
+      productIndex: findClinicalProductIndexNearQuantity(cells, index)
+    }))
+    .filter((candidate) => isClinicalQuantityCandidateCell(candidate.cell) && candidate.productIndex >= 0)
+    .sort((a, b) => b.headerScore - a.headerScore || Math.abs(a.index - a.productIndex) - Math.abs(b.index - b.productIndex));
+  const candidate = quantityCandidates[0];
+  if (!candidate) return null;
+  const product = cells[candidate.productIndex];
+  return createClinicalParsedCentralRow({
+    codigo: findClinicalCodeNearProduct(cells, candidate.productIndex),
+    producto: product,
+    categoria: category || getClinicalCentralCategory(parserType, sheetName),
+    solicitudRaw: candidate.cell,
+    excelRowNumber,
+    quantityColumnName: getClinicalColumnLabel(headers, candidate.index) || `Columna ${candidate.index + 1}`,
+    quantityColumnIndex: candidate.index + 1,
+    sheetName,
+    observation: `Lectura flexible: producto columna ${candidate.productIndex + 1}, cantidad columna ${candidate.index + 1}`
+  });
 }
 
 function looksLikeClinicalVegetableQuantitySheet(matrix = []) {
@@ -2351,6 +2472,15 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
   };
 
   if (!parserType) {
+    const flexibleRows = parseClinicalFlexibleProductQuantityRows(sheetName, matrix, sheetDiagnostic, {
+      parserType: "flexible",
+      category: getClinicalCentralCategory("", sheetName)
+    });
+    if (flexibleRows.length) {
+      sheetDiagnostic.parser = "flexible";
+      sheetDiagnostic.encabezado = "Detector flexible";
+      return { rows: flexibleRows, diagnostic: sheetDiagnostic };
+    }
     sheetDiagnostic.errores.push("Hoja omitida: no corresponde a Pedido Central Nutricion.");
     matrix.forEach((sourceRow, rowIndex) => {
       const cells = sourceRow.map((cell) => String(cell ?? "").trim());
@@ -2387,6 +2517,14 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
   }
 
   if (headerIndex < 0) {
+    const flexibleRows = parseClinicalFlexibleProductQuantityRows(sheetName, matrix, sheetDiagnostic, {
+      parserType,
+      category: getClinicalCentralCategory(parserType, sheetName)
+    });
+    if (flexibleRows.length) {
+      sheetDiagnostic.encabezado = "Detector flexible";
+      return { rows: flexibleRows, diagnostic: sheetDiagnostic };
+    }
     sheetDiagnostic.errores.push(`No se encontro fila de encabezado para ${parserType}.`);
     matrix.forEach((sourceRow, rowIndex) => {
       const cells = sourceRow.map((cell) => String(cell ?? "").trim());
@@ -2467,6 +2605,16 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
     }
   }
   if (missing.length) {
+    const flexibleRows = parseClinicalFlexibleProductQuantityRows(sheetName, matrix, sheetDiagnostic, {
+      parserType,
+      headers,
+      startIndex: headerIndex + 1,
+      category: getClinicalCentralCategory(parserType, sheetName)
+    });
+    if (flexibleRows.length) {
+      sheetDiagnostic.errores.push(`Columnas no detectadas (${missing.join(", ")}), se uso detector flexible.`);
+      return { rows: flexibleRows, diagnostic: sheetDiagnostic };
+    }
     sheetDiagnostic.errores.push(`Columnas no detectadas: ${missing.join(", ")}.`);
     matrix.slice(headerIndex + 1).forEach((sourceRow, offset) => {
       const cells = sourceRow.map((cell) => String(cell ?? "").trim());
@@ -2495,6 +2643,17 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
     });
     const hasIdentity = Boolean(normalizedRow.producto || normalizedRow.codigo);
     if (!hasIdentity) {
+      const flexibleRow = extractClinicalFlexibleProductQuantityRow(sheetName, sourceRow, {
+        parserType,
+        headers,
+        excelRowNumber: headerIndex + offset + 2,
+        category: getClinicalCentralCategory(parserType, sheetName)
+      });
+      if (flexibleRow) {
+        sheetDiagnostic.filasLeidas += 1;
+        rows.push(flexibleRow);
+        return;
+      }
       const quantityState = getClinicalQuantityParseState(normalizedRow.quantityRawValue);
       pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, cells, {
         excelRowNumber: headerIndex + offset + 2,
@@ -2511,6 +2670,17 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
       return;
     }
     if (!normalizedRow.quantityInterpretable) {
+      const flexibleRow = extractClinicalFlexibleProductQuantityRow(sheetName, sourceRow, {
+        parserType,
+        headers,
+        excelRowNumber: headerIndex + offset + 2,
+        category: getClinicalCentralCategory(parserType, sheetName)
+      });
+      if (flexibleRow) {
+        sheetDiagnostic.filasLeidas += 1;
+        rows.push(flexibleRow);
+        return;
+      }
       pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, cells, {
         excelRowNumber: headerIndex + offset + 2,
         headers,
@@ -2928,16 +3098,24 @@ function renderClinicalRealImportDiagnostics() {
   });
   const validationRows = state.clinicalSupply.realOrderRows.map((row) => getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows));
   const excelRowsTotal = Number(diagnostics.filasExcel || 0) || sheets.reduce((sum, sheet) => sum + Number(sheet.filasTotales || 0), 0) || rowDetails.length;
+  const discardedCount = sheets.reduce((sum, sheet) => sum + Number(sheet.filasDescartadas || 0), 0) ||
+    rowDetails.filter((row) => /descartado/i.test(row.estado_final || "")).length ||
+    diagnostics.filasDescartadas ||
+    0;
+  const importErrorCount = sheets.reduce((sum, sheet) => sum + Number(sheet.filasConError || 0), 0) ||
+    diagnosticDetails.filter((row) => /correccion|error/i.test(row.estado_final || "") || row.motivo_descarte).length ||
+    diagnostics.filasConError ||
+    0;
   elements.clinicalRealImportDiagnosticMeta.textContent = diagnostics.archivo || "Ultima importacion";
   renderClinicalSummary(elements.clinicalRealImportDiagnosticSummary, [
     { title: "Hojas detectadas", caption: "Excel", value: formatNumber(sheets.length) },
     { title: "Filas desde Excel", caption: "No vacias", value: formatNumber(excelRowsTotal) },
     { title: "Importadas", caption: "Reconocidas", value: formatNumber(state.clinicalSupply.realOrderRows.length || diagnostics.filasImportadas || 0) },
-    { title: "Descartadas", caption: "Con motivo", value: formatNumber(rowDetails.filter((row) => /descartado/i.test(row.estado_final || "")).length || diagnostics.filasDescartadas || 0) },
-    { title: "Con error", caption: "Cantidad/datos", value: formatNumber(rowDetails.filter((row) => /correccion|error/i.test(row.estado_final || "") || row.motivo_descarte).length || diagnostics.filasConError || 0) },
+    { title: "Descartadas", caption: "Parser", value: formatNumber(discardedCount) },
+    { title: "Con error", caption: "Lectura/cantidad", value: formatNumber(importErrorCount) },
     { title: "Pendiente conc.", caption: "Inventario", value: formatNumber(validationRows.filter((row) => row.validationCategory === "reconciliation").length || diagnostics.filasPendientesConciliacion || 0) },
     { title: "Sin PAC", caption: "Fuera del PAC", value: formatNumber(validationRows.filter((row) => row.validationDetails.some((item) => item.message === "Codigo no existe en PAC")).length) },
-    { title: "Errores lectura", caption: "Hojas", value: formatNumber(errors.length) }
+    { title: "Avisos parser", caption: "Hojas", value: formatNumber(errors.length) }
   ]);
   elements.clinicalRealImportDiagnosticBody.innerHTML = sheets.length
     ? sheets.map((sheet) => `
