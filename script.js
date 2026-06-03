@@ -2429,12 +2429,45 @@ function renderClinicalRealOrderErrors() {
         <td>${escapeHtml(row.excelRowNumber || "-")}</td>
         <td>${escapeHtml(row.quantityColumnName || (row.quantityColumnIndex ? `Columna ${row.quantityColumnIndex}` : "-"))}</td>
         <td>${escapeHtml(String(row.quantityRawValue ?? row.cantidadTexto ?? "")) || "-"}</td>
-        <td>${formatNumber(row.quantityParsedValue ?? row.cantidad ?? 0)}</td>
+        <td><input class="clinical-small-input" type="text" value="${escapeHtml(row.quantityParsedValue ?? row.cantidad ?? 0)}" data-real-order-quantity="${escapeHtml(row.id || "")}" title="Editar cantidad parseada"></td>
         <td>${escapeHtml(getClinicalRealValidationLabel(row.validationCategory))}</td>
         <td>${escapeHtml(row.validations.join(" | "))}</td>
       </tr>
     `).join("")
     : '<tr><td colspan="11" class="empty">Sin errores para este filtro.</td></tr>';
+}
+
+async function updateClinicalRealOrderQuantity(rowId, value) {
+  const row = state.clinicalSupply.realOrderRows.find((item) => String(item.id) === String(rowId));
+  if (!row) return;
+  const parsed = parseClinicalNumber(value);
+  const rawText = String(value ?? "").trim();
+  row.cantidad = parsed;
+  row.cantidadTexto = rawText;
+  row.quantityRawValue = rawText;
+  row.quantityParsedValue = parsed;
+  row.quantityInterpretable = rawText !== "";
+  row.quantityEmpty = rawText === "";
+  applyClinicalRealComparisonToRow(row, state.clinicalSupply.realOrderRows);
+  saveClinicalSupplyState();
+
+  if (state.currentUser?.id && supabaseClient && /^[0-9a-f-]{36}$/i.test(String(row.id))) {
+    const { error } = await supabaseClient
+      .from("clinical_real_order_items")
+      .update({
+        quantity: Number(row.cantidad || 0),
+        product_id: row.productoId || null,
+        pac_item_id: row.pacRowId && !String(row.pacRowId).startsWith("pac-") ? row.pacRowId : null,
+        monthly_order_item_id: row.orderItemId || null,
+        comparison: row.comparison || {},
+        validations: row.validations || []
+      })
+      .eq("id", row.id);
+    if (error) throw error;
+  }
+
+  renderClinicalSupply();
+  showToastSuccess("Cantidad del pedido real actualizada.");
 }
 
 function renderClinicalBreaks() {
@@ -3458,11 +3491,13 @@ async function saveClinicalRealOrderImportToSupabase(rows, filename = "") {
   if (!state.clinicalSupply.currentOrderId) {
     await saveClinicalOrderToSupabase(orderRows, "generated");
   }
+  const year = Number(state.clinicalSupply.pacYear);
+  const month = Number(state.clinicalSupply.monthIndex) + 1;
   const { data: importRow, error } = await supabaseClient
     .from("clinical_real_order_imports")
     .insert({
-      year: Number(state.clinicalSupply.pacYear),
-      month: Number(state.clinicalSupply.monthIndex) + 1,
+      year,
+      month,
       pac_year_id: pacYearId,
       monthly_order_id: state.clinicalSupply.currentOrderId || null,
       filename: filename || null,
@@ -3498,6 +3533,15 @@ async function saveClinicalRealOrderImportToSupabase(rows, filename = "") {
     if (insertError) throw insertError;
     state.clinicalSupply.realOrderRows = (insertedItems || []).map(mapClinicalRealItemFromDb);
   }
+
+  const { error: deletePreviousError } = await supabaseClient
+    .from("clinical_real_order_imports")
+    .delete()
+    .eq("year", year)
+    .eq("month", month)
+    .eq("imported_by", state.currentUser.id)
+    .neq("id", importRow.id);
+  if (deletePreviousError) throw deletePreviousError;
 
   state.clinicalSupply.lastRealImportId = importRow.id;
   await loadClinicalHistoryFromSupabase();
@@ -7658,6 +7702,11 @@ elements.clinicalRealOrderErrorFilter?.addEventListener("change", (event) => {
   state.clinicalSupply.realOrderErrorFilter = event.target.value;
   saveClinicalSupplyState();
   renderClinicalRealOrderErrors();
+});
+elements.clinicalRealOrderErrorTableBody?.addEventListener("change", (event) => {
+  const rowId = event.target.dataset.realOrderQuantity;
+  if (!rowId) return;
+  updateClinicalRealOrderQuantity(rowId, event.target.value).catch((error) => showError("No se pudo actualizar cantidad del pedido real", error));
 });
 elements.clinicalRevalidateRealOrderBtn?.addEventListener("click", async () => {
   try {

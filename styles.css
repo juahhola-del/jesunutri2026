@@ -720,7 +720,8 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 .clinical-budget-fields input,
 .clinical-select,
 .clinical-link-input,
-.clinical-final-input {
+.clinical-final-input,
+.clinical-small-input {
   min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1000,6 +1001,11 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 
 .clinical-final-input {
   width: 92px;
+}
+
+.clinical-small-input {
+  width: 84px;
+  min-height: 34px;
 }
 
 .clinical-risk,
