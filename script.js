@@ -1519,6 +1519,57 @@ function getClinicalPacTotal() {
   return state.clinicalSupply.pacRows.reduce((sum, row) => sum + Number(row.totalValorizado || 0), 0);
 }
 
+function isClinicalMonthlyOrderScopeRow(row = {}) {
+  const category = normalize(`${row.categoria || row.category || row.sourceCategory || ""}`);
+  const product = normalize(`${row.producto || row.product || row.detectedName || ""}`);
+
+  if (product.includes("pocillo")) return true;
+
+  const excludedCategories = ["economato", "aseo", "mantencion", "mantenimiento", "limpieza", "ropa", "enfermeria"];
+  if (excludedCategories.some((word) => category.includes(word))) return false;
+
+  const excludedProducts = [
+    "detergente",
+    "cloro",
+    "lysoform",
+    "limpiador",
+    "limpia vidrios",
+    "jabon liquido",
+    "toalla papel",
+    "antisarro",
+    "desengrasante",
+    "mascarilla",
+    "delantal"
+  ];
+  if (excludedProducts.some((word) => product.includes(word))) return false;
+
+  const allowedCategories = [
+    "abarrotes",
+    "verduras",
+    "verdura",
+    "enterales",
+    "enteral",
+    "infantil",
+    "desechables",
+    "desechable",
+    "carnes",
+    "carne",
+    "lacteos",
+    "lacteo",
+    "frutas",
+    "fruta",
+    "alimentos",
+    "alimento",
+    "nutricion"
+  ];
+  if (!category) return true;
+  return allowedCategories.some((word) => category.includes(word));
+}
+
+function getClinicalMonthlyScopedOrderRows(rows = getClinicalCurrentOrderRows()) {
+  return rows.filter(isClinicalMonthlyOrderScopeRow);
+}
+
 function getClinicalOrderTotal(rows = getClinicalCurrentOrderRows()) {
   return rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
 }
@@ -1739,6 +1790,9 @@ function getClinicalCentralCategory(parserType = "", sheetName = "") {
   if (key.includes("enterales")) return "Enterales";
   if (key.includes("infantil")) return "Infantil";
   if (key.includes("verduras") || key.includes("verdura")) return "Verduras";
+  if (key.includes("carnes") || key.includes("carne")) return "Carnes";
+  if (key.includes("lacteos") || key.includes("lacteo")) return "Lacteos";
+  if (key.includes("frutas") || key.includes("fruta")) return "Frutas";
   return String(sheetName || parserType || "").trim();
 }
 
@@ -2110,6 +2164,9 @@ function detectClinicalCentralSheetParser(sheetName = "", matrix = []) {
   if (sheetKey.includes("enterales")) return "enterales";
   if (sheetKey.includes("infantil")) return "infantil";
   if (sheetKey.includes("verduras") || sheetKey.includes("verdura")) return "verduras";
+  if (sheetKey.includes("carnes") || sheetKey.includes("carne")) return "carnes";
+  if (sheetKey.includes("lacteos") || sheetKey.includes("lacteo")) return "lacteos";
+  if (sheetKey.includes("frutas") || sheetKey.includes("fruta")) return "frutas";
   if (looksLikeClinicalVegetableQuantitySheet(matrix)) return "verduras";
   return "";
 }
@@ -2466,15 +2523,6 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
   };
 
   if (!parserType) {
-    const flexibleRows = parseClinicalFlexibleProductQuantityRows(sheetName, matrix, sheetDiagnostic, {
-      parserType: "flexible",
-      category: getClinicalCentralCategory("", sheetName)
-    });
-    if (flexibleRows.length) {
-      sheetDiagnostic.parser = "flexible";
-      sheetDiagnostic.encabezado = "Detector flexible";
-      return { rows: flexibleRows, diagnostic: sheetDiagnostic };
-    }
     sheetDiagnostic.errores.push("Hoja omitida: no corresponde a Pedido Central Nutricion.");
     matrix.forEach((sourceRow, rowIndex) => {
       const cells = sourceRow.map((cell) => String(cell ?? "").trim());
@@ -2892,7 +2940,9 @@ function getClinicalSavedOrderKey() {
 }
 
 function getClinicalCurrentOrderRows() {
-  return state.clinicalSupply.orderRows.filter((row) => row.orderKey === getClinicalSavedOrderKey());
+  return state.clinicalSupply.orderRows
+    .filter((row) => row.orderKey === getClinicalSavedOrderKey())
+    .filter(isClinicalMonthlyOrderScopeRow);
 }
 
 function getClinicalRealOrderByProduct(row) {
@@ -2906,7 +2956,7 @@ function buildClinicalOrderRows() {
   const existingRows = new Map(getClinicalCurrentOrderRows().map((row) => [row.pacRowId, row]));
   const orderKey = getClinicalSavedOrderKey();
 
-  return state.clinicalSupply.pacRows.map((pacRow) => {
+  return state.clinicalSupply.pacRows.filter(isClinicalMonthlyOrderScopeRow).map((pacRow) => {
     const product = getClinicalProductByPacRow(pacRow);
     const requiresReconciliation = !Boolean(product);
     const stockActual = product ? getProductStockTotal(product.id) : null;
@@ -3638,7 +3688,9 @@ function getFilteredClinicalReconciliationRows() {
 }
 
 function getClinicalMonthlyReconciliationRows() {
-  const realRows = state.clinicalSupply.realOrderRows.map((row) => ({ ...row, monthlySource: "clinical_real_order_items" }));
+  const realRows = state.clinicalSupply.realOrderRows
+    .filter(isClinicalMonthlyOrderScopeRow)
+    .map((row) => ({ ...row, monthlySource: "clinical_real_order_items" }));
   const realKeys = new Set(realRows.map((row) => `${normalizeClinicalCode(row.codigo)}|${normalizeClinicalMatchText(row.producto)}`));
   const orderRows = getClinicalCurrentOrderRows()
     .filter((row) => !realKeys.has(`${normalizeClinicalCode(row.codigo)}|${normalizeClinicalMatchText(row.producto)}`))
@@ -4536,6 +4588,7 @@ async function ensureClinicalPacYearSaved({ replaceItems = false } = {}) {
 
 async function saveClinicalBudgetSnapshot(monthlyOrderId = state.clinicalSupply.currentOrderId, rows = getClinicalCurrentOrderRows()) {
   if (!state.currentUser?.id || !state.clinicalSupply.pacYearId) return;
+  rows = getClinicalMonthlyScopedOrderRows(rows);
   const orderTotal = getClinicalOrderTotal(rows);
   const approved = Number(state.clinicalSupply.budgetApproved || 0);
   const requested = Number(state.clinicalSupply.budgetRequested || 0);
@@ -4575,6 +4628,7 @@ async function saveClinicalBudgetSnapshot(monthlyOrderId = state.clinicalSupply.
 }
 
 async function saveClinicalOrderToSupabase(rows, status = "generated") {
+  rows = getClinicalMonthlyScopedOrderRows(rows);
   const pacYearId = await ensureClinicalPacYearSaved({ replaceItems: false });
   const total = getClinicalOrderTotal(rows);
   const month = Number(state.clinicalSupply.monthIndex) + 1;
@@ -4760,6 +4814,7 @@ function getClinicalRealOrderComparison(row, allRows) {
 }
 
 async function saveClinicalRealOrderImportToSupabase(rows, filename = "") {
+  rows = rows.filter(isClinicalMonthlyOrderScopeRow);
   const pacYearId = await ensureClinicalPacYearSaved({ replaceItems: false });
   const orderRows = getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows();
   if (!state.clinicalSupply.currentOrderId) {
@@ -4848,7 +4903,7 @@ function applyClinicalRealComparisonToRow(row, allRows = state.clinicalSupply.re
 }
 
 function getClinicalRealOrderErrorRows() {
-  const rows = state.clinicalSupply.realOrderRows.map((row) => {
+  const rows = state.clinicalSupply.realOrderRows.filter(isClinicalMonthlyOrderScopeRow).map((row) => {
     const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
     return { ...row, ...comparison, validationCategory: comparison.validationCategory };
   });
@@ -4873,7 +4928,9 @@ async function revalidateClinicalRealOrder({ silent = false } = {}) {
     setClinicalSupabaseReady(false);
     console.warn("Pendientes PAC guardados solo localmente", error);
   }
-  const rows = state.clinicalSupply.realOrderRows.map((row) => applyClinicalRealComparisonToRow(row));
+  const rows = state.clinicalSupply.realOrderRows
+    .map((row) => applyClinicalRealComparisonToRow(row))
+    .filter(isClinicalMonthlyOrderScopeRow);
   state.clinicalSupply.realOrderRows = rows;
   await ensureClinicalMonthlyOrderLinksFromRows(rows);
   saveClinicalSupplyState();
@@ -4902,6 +4959,7 @@ async function revalidateClinicalRealOrder({ silent = false } = {}) {
 
 async function ensureClinicalMonthlyOrderLinksFromRows(rows = state.clinicalSupply.realOrderRows) {
   const pendingRows = rows.filter((row) => {
+    if (!isClinicalMonthlyOrderScopeRow(row)) return false;
     const existing = getClinicalLinkForImportedRecord("monthly", row);
     if (existing?.ignored || existing?.productoId) return false;
     const comparison = getClinicalRealOrderComparison(row, rows);
@@ -5077,9 +5135,10 @@ function scheduleClinicalPacMetadataSave() {
 
 function commitClinicalCurrentOrder(rows) {
   const orderKey = getClinicalSavedOrderKey();
+  const scopedRows = getClinicalMonthlyScopedOrderRows(rows);
   state.clinicalSupply.orderRows = [
     ...state.clinicalSupply.orderRows.filter((row) => row.orderKey !== orderKey),
-    ...rows
+    ...scopedRows
   ];
   saveClinicalSupplyState();
 }
@@ -6488,6 +6547,7 @@ async function importClinicalRealOrderFile(file) {
     console.warn("Pendientes PAC guardados solo localmente", error);
   }
   state.clinicalSupply.realOrderRows = state.clinicalSupply.realOrderRows.map((row) => applyClinicalRealComparisonToRow(row));
+  state.clinicalSupply.realOrderRows = state.clinicalSupply.realOrderRows.filter(isClinicalMonthlyOrderScopeRow);
   await ensureClinicalMonthlyOrderLinksFromRows(state.clinicalSupply.realOrderRows);
   state.clinicalSupply.pendingRealOrderImport = {
     filename: file?.name || "",
