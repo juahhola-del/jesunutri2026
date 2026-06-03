@@ -191,7 +191,7 @@ const state = {
       status: "pendiente"
     },
     demandReconcileFilter: "all",
-    reconcileMode: "pac",
+    reconcileMode: "all",
     history: {
       pacYears: [],
       monthlyOrders: [],
@@ -1158,7 +1158,9 @@ async function persistClinicalProductLink(link) {
     return saved;
   } catch (error) {
     setClinicalSupabaseReady(false);
-    throw error;
+    console.warn("Vinculo de conciliacion guardado solo localmente", error);
+    upsertClinicalProductLink(link);
+    return link;
   }
 }
 
@@ -1285,7 +1287,10 @@ async function persistClinicalDemandProductLink(link) {
     return demandSaved;
   } catch (error) {
     setClinicalSupabaseReady(false);
-    throw error;
+    console.warn("Vinculo de demanda guardado solo localmente", error);
+    upsertClinicalProductLink(link);
+    upsertClinicalDemandProductLink(link);
+    return link;
   }
 }
 
@@ -1330,7 +1335,7 @@ function loadClinicalSupplyLocalState() {
       dailyDemandProductLinks: Array.isArray(saved.dailyDemandProductLinks) ? saved.dailyDemandProductLinks : [],
       dailyWarningFilters: { file: "all", severity: "all", type: "all", status: "pendiente", ...(saved.dailyWarningFilters || {}) },
       demandReconcileFilter: saved.demandReconcileFilter || "all",
-      reconcileMode: saved.reconcileMode || "pac",
+      reconcileMode: saved.reconcileMode || "all",
       history: { ...getClinicalDefaultHistory(), ...(saved.history || {}) }
     };
     return true;
@@ -3276,9 +3281,72 @@ function getFilteredClinicalDemandReconciliationRows() {
   return rows.filter((row) => normalizeClinicalMatchStatus(row.status) === normalizeClinicalMatchStatus(filter));
 }
 
+function getClinicalReconciliationAuditEvidence() {
+  const links = state.clinicalSupply.productLinks || [];
+  const bySource = (sourceType) => links.filter((link) => (link.sourceType || "pac") === sourceType);
+  const pacRows = getClinicalReconciliationRows();
+  const monthlyRows = getClinicalMonthlyReconciliationRows();
+  const demandRows = getClinicalDemandDetectedRows();
+  return {
+    reconcileMode: state.clinicalSupply.reconcileMode || "all",
+    clinical_product_links: {
+      pac: bySource("pac").length,
+      monthly_order: bySource("monthly_order").length,
+      daily_demand: bySource("daily_demand").length,
+      samples: links.slice(0, 12).map((link) => ({
+        source_type: link.sourceType || "pac",
+        source_record_id: link.sourceRecordId || "",
+        source_code: link.sourceCode || link.pacCodigo || "",
+        source_name: link.sourceName || link.pacProducto || "",
+        match_status: link.matchStatus || "",
+        producto_id: link.productoId || ""
+      }))
+    },
+    clinical_real_order_items_or_local_rows: {
+      total: state.clinicalSupply.realOrderRows.length,
+      pending: monthlyRows.filter((row) => !["vinculado", "ignorado"].includes(row.status)).length,
+      samples: monthlyRows.slice(0, 12).map((row) => ({
+        sourceType: row.sourceType,
+        sourceRecordId: row.id || "",
+        codigo: row.codigo || "",
+        producto: row.producto || "",
+        status: row.status,
+        method: row.method || "",
+        link_id: row.link?.id || ""
+      }))
+    },
+    clinical_daily_supply_items_or_local_rows: {
+      total: state.clinicalSupply.dailySupplyItems.length,
+      detected_for_reconciliation: demandRows.length,
+      pending: demandRows.filter((row) => !["vinculado", "ignorado"].includes(row.status)).length,
+      samples: demandRows.slice(0, 12).map((row) => ({
+        sourceType: row.sourceType,
+        detectedName: row.detectedName,
+        detectedType: row.detectedType,
+        status: row.status,
+        method: row.method || "",
+        link_id: row.link?.id || "",
+        demandIds: row.demandIds || []
+      }))
+    },
+    clinical_daily_import_errors: {
+      total: state.clinicalSupply.dailyImportErrors.length,
+      reconciliation_warnings: state.clinicalSupply.dailyImportErrors.filter(isClinicalDemandReconciliationWarning).length
+    },
+    render_rows: {
+      pac: pacRows.length,
+      monthly_order: monthlyRows.length,
+      daily_demand: demandRows.length,
+      all: pacRows.length + monthlyRows.length + demandRows.length
+    }
+  };
+}
+
+window.getClinicalReconciliationAuditEvidence = getClinicalReconciliationAuditEvidence;
+
 function renderClinicalReconciliation() {
   if (!elements.clinicalReconcileTableBody) return;
-  const mode = state.clinicalSupply.reconcileMode === "demanda" ? "daily_demand" : (state.clinicalSupply.reconcileMode || "pac");
+  const mode = state.clinicalSupply.reconcileMode === "demanda" ? "daily_demand" : (state.clinicalSupply.reconcileMode || "all");
   state.clinicalSupply.reconcileMode = mode;
   if (elements.clinicalReconcileMode) elements.clinicalReconcileMode.value = mode;
   if (elements.clinicalPacReconcilePanel) elements.clinicalPacReconcilePanel.hidden = false;
@@ -5185,6 +5253,7 @@ async function importClinicalDemandFile(file) {
   const duplicate = getClinicalDemandDuplicate(parsed.demand.demandDate);
   if (duplicate) removeClinicalDemandLocal(duplicate.id);
   mergeClinicalDemandImport(parsed);
+  await ensureClinicalDemandLinksFromRows(getClinicalDemandDetectedRows());
   state.clinicalSupply.pendingDailyDemandIds = [
     parsed.demand.id,
     ...(state.clinicalSupply.pendingDailyDemandIds || []).filter((id) => String(id) !== String(parsed.demand.id) && String(id) !== String(duplicate?.id || ""))
@@ -5244,6 +5313,7 @@ async function importClinicalDemandMonthFiles(fileList) {
         state.clinicalSupply.pendingDailyDemandIds = (state.clinicalSupply.pendingDailyDemandIds || []).filter((id) => String(id) !== String(duplicate.id));
       }
       mergeClinicalDemandImport(parsed);
+      await ensureClinicalDemandLinksFromRows(getClinicalDemandDetectedRows());
       state.clinicalSupply.pendingDailyDemandIds = [
         parsed.demand.id,
         ...(state.clinicalSupply.pendingDailyDemandIds || []).filter((id) => String(id) !== String(parsed.demand.id))
@@ -5758,6 +5828,7 @@ async function importClinicalRealOrderFile(file) {
     console.warn("Pendientes PAC guardados solo localmente", error);
   }
   state.clinicalSupply.realOrderRows = state.clinicalSupply.realOrderRows.map((row) => applyClinicalRealComparisonToRow(row));
+  await ensureClinicalMonthlyOrderLinksFromRows(state.clinicalSupply.realOrderRows);
   state.clinicalSupply.pendingRealOrderImport = {
     filename: file?.name || "",
     year: Number(state.clinicalSupply.pacYear),
@@ -7992,6 +8063,9 @@ document.addEventListener("click", (event) => {
   const clinicalTab = event.target.closest("[data-clinical-tab]");
   if (clinicalTab) {
     state.clinicalSupply.activeTab = clinicalTab.dataset.clinicalTab;
+    if (state.clinicalSupply.activeTab === "conciliacion" && !clinicalTab.dataset.clinicalFilterShortcut) {
+      state.clinicalSupply.reconcileMode = "all";
+    }
     if (clinicalTab.dataset.clinicalFilterShortcut) {
       state.clinicalSupply.reconcileFilter = normalizeClinicalReconcileFilter(clinicalTab.dataset.clinicalFilterShortcut);
     }
