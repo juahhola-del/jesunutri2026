@@ -347,6 +347,12 @@
                 <span id="clinicalRealImportDiagnosticMeta"></span>
               </div>
               <div class="clinical-summary-grid compact" id="clinicalRealImportDiagnosticSummary"></div>
+              <div class="clinical-diagnostic-header subheader">
+                <div>
+                  <h3>Resumen por hoja</h3>
+                  <p>Parser elegido, filas detectadas desde Excel, importadas, descartadas y errores.</p>
+                </div>
+              </div>
               <div class="table-wrap">
                 <table class="clinical-table diagnostic-table">
                   <thead>
@@ -354,7 +360,7 @@
                       <th>Hoja detectada</th>
                       <th>Parser</th>
                       <th>Encabezado</th>
-                      <th>Filas totales</th>
+                      <th>Filas desde Excel</th>
                       <th>Importadas</th>
                       <th>Descartadas</th>
                       <th>Con error</th>
@@ -364,6 +370,12 @@
                   </thead>
                   <tbody id="clinicalRealImportDiagnosticBody"></tbody>
                 </table>
+              </div>
+              <div class="clinical-diagnostic-header subheader">
+                <div>
+                  <h3>Filas descartadas y trazabilidad</h3>
+                  <p>Auditoria por fila: hoja, fila Excel, codigo, nombre, cantidad detectada, valor leido, estado y motivo.</p>
+                </div>
               </div>
               <div class="table-wrap">
                 <table class="clinical-table diagnostic-table">
@@ -376,7 +388,7 @@
                       <th>Codigo normalizado</th>
                       <th>Nombre crudo</th>
                       <th>Nombre normalizado</th>
-                      <th>Columna cantidad</th>
+                      <th>Columna cantidad detectada</th>
                       <th>Valor crudo</th>
                       <th>Valor parseado</th>
                       <th>PAC item</th>
