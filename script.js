@@ -8747,7 +8747,7 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  const reconciliationAction = event.target.closest("[data-link-manual], [data-link-unlink], [data-link-ignore], [data-link-create-product], [data-monthly-manual], [data-monthly-unlink], [data-monthly-ignore], [data-pac-recalc-annual], [data-pac-review-inconsistency], [data-demand-link-manual], [data-demand-link-unlink], [data-demand-link-ignore], [data-demand-link-create]");
+  const reconciliationAction = event.target.closest("[data-link-manual], [data-link-unlink], [data-link-ignore], [data-link-create-product], [data-monthly-manual], [data-monthly-unlink], [data-monthly-ignore], [data-monthly-create], [data-pac-recalc-annual], [data-pac-review-inconsistency], [data-demand-link-manual], [data-demand-link-unlink], [data-demand-link-ignore], [data-demand-link-create]");
   if (reconciliationAction) {
     handleClinicalReconciliationAction(reconciliationAction).catch((error) => showError("No se pudo actualizar conciliacion", error));
     return;
