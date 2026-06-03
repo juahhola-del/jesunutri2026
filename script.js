@@ -1942,6 +1942,21 @@ function isClinicalPlaceholderProductName(value = "") {
   return false;
 }
 
+function isClinicalStructuralImportRow(cells = [], parserType = "") {
+  const normalizedCells = cells.map(normalizeClinicalHeader).filter(Boolean);
+  if (!normalizedCells.length) return true;
+  const text = normalizedCells.join(" ");
+  const hasQuantity = cells.some((cell) => getClinicalQuantityParseState(cell).interpretable && !isClinicalLikelyDateOrCode(cell));
+  const hasCode = cells.some((cell) => /^[A-Z]+-\d+$/i.test(normalizeClinicalCode(cell)));
+  const hasHeaderCode = normalizedCells.some((cell) => cell === "codigo" || cell === "cod");
+  const hasHeaderProduct = normalizedCells.some((cell) => ["producto", "descripcion", "detalle", "nombre formula", "formula", "insumo"].includes(cell));
+  const hasHeaderQuantity = normalizedCells.some((cell) => ["pedido", "solicitud", "solciitud", "cantidad", "cantidad kg", "unidades"].includes(cell));
+  if (hasHeaderCode && (hasHeaderProduct || hasHeaderQuantity)) return true;
+  if (parserType === "calendario_recepciones" && !hasQuantity && !hasCode) return true;
+  if (!hasQuantity && !hasCode && /(calendario|pedido|pedidos|formulas|formula|verduras congeladas|carnes|lacteos|desechable|seccion|geonox|mensual)/.test(text)) return true;
+  return false;
+}
+
 function findClinicalProductIndexLeftOfQuantity(cells = [], quantityIndex = -1) {
   for (let index = quantityIndex - 1; index >= 0; index -= 1) {
     const productCell = String(cells[index] ?? "").trim();
@@ -2119,7 +2134,8 @@ function findClinicalProductTextAfterColumn(cells = [], startIndex = -1) {
     const value = String(cells[index] ?? "").trim();
     if (!value) continue;
     if (/^\d+([.,]\d+)?$/.test(value) || isClinicalLikelyDateOrCode(value)) continue;
-    if (/pac|solicitud|fecha|codigo|rebajado/i.test(value)) continue;
+    if (/pac|solicitud|fecha|codigo|rebajado|producto|nombre formula|empresa|orden|recepci[oó]n|unidades/i.test(value)) continue;
+    if (isClinicalPlaceholderProductName(value)) continue;
     return value;
   }
   return "";
@@ -2183,9 +2199,10 @@ function parseClinicalCalendarReceptionSheet(sheetName, matrix = [], diagnostic)
     const rowCode = normalizeClinicalCode(getClinicalCell(cells, columns.codigo));
     const rowDate = getClinicalCell(cells, columns.fecha);
     const product = findClinicalProductTextAfterColumn(cells, columns.solicitud);
+    if (!quantityState.interpretable && !rowCode && isClinicalStructuralImportRow(cells, "calendario_recepciones")) return;
     if (rowCode) currentCode = rowCode;
     if (rowDate) currentDate = rowDate;
-    if (product) currentProduct = product;
+    if (product && (quantityState.interpretable || rowCode)) currentProduct = product;
     if (!quantityState.interpretable || !currentCode) {
       if (cells.some(Boolean)) {
         pushClinicalDiscardedImportRow(diagnostic, sheetName, cells, {
@@ -2470,6 +2487,8 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
   matrix.slice(headerIndex + 1).forEach((sourceRow, offset) => {
     const hasAnyCell = sourceRow.some((cell) => String(cell ?? "").trim());
     if (!hasAnyCell) return;
+    const cells = sourceRow.map((cell) => String(cell ?? "").trim());
+    if (isClinicalStructuralImportRow(cells, parserType)) return;
     const normalizedRow = normalizeClinicalCentralRow(sourceRow, columns, parserType, sheetName, {
       excelRowNumber: headerIndex + offset + 2,
       headers
@@ -2477,7 +2496,7 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
     const hasIdentity = Boolean(normalizedRow.producto || normalizedRow.codigo);
     if (!hasIdentity) {
       const quantityState = getClinicalQuantityParseState(normalizedRow.quantityRawValue);
-      pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, sourceRow.map((cell) => String(cell ?? "").trim()), {
+      pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, cells, {
         excelRowNumber: headerIndex + offset + 2,
         headers,
         columns,
@@ -2492,7 +2511,7 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
       return;
     }
     if (!normalizedRow.quantityInterpretable) {
-      pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, sourceRow.map((cell) => String(cell ?? "").trim()), {
+      pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, cells, {
         excelRowNumber: headerIndex + offset + 2,
         headers,
         columns,
