@@ -1730,6 +1730,14 @@ function matchesClinicalSourceType(actual = "", expected = "") {
   return normalizeClinicalSourceType(actual || "pac") === normalizeClinicalSourceType(expected || "pac");
 }
 
+function normalizeClinicalReconcileMode(mode = "all") {
+  const clean = String(mode || "all").trim();
+  if (clean === "demanda" || clean === "daily_demand") return "demand";
+  if (clean === "monthly_order") return "monthly";
+  if (["all", "pac", "monthly", "demand"].includes(clean)) return clean;
+  return "pac";
+}
+
 function getClinicalCentralCategory(parserType = "", sheetName = "") {
   const key = normalize(parserType || sheetName);
   if (key.includes("abarrotes")) return "Abarrotes";
@@ -3273,7 +3281,24 @@ function getFilteredClinicalReconciliationRows() {
 }
 
 function getClinicalMonthlyReconciliationRows() {
-  return state.clinicalSupply.realOrderRows.map((row) => {
+  const realRows = state.clinicalSupply.realOrderRows.map((row) => ({ ...row, monthlySource: "clinical_real_order_items" }));
+  const realKeys = new Set(realRows.map((row) => `${normalizeClinicalCode(row.codigo)}|${normalizeClinicalMatchText(row.producto)}`));
+  const orderRows = getClinicalCurrentOrderRows()
+    .filter((row) => !realKeys.has(`${normalizeClinicalCode(row.codigo)}|${normalizeClinicalMatchText(row.producto)}`))
+    .map((row) => ({
+      ...row,
+      id: `monthly-order-${row.id || row.pacRowId || normalizeClinicalCode(row.codigo) || normalizeClinicalMatchText(row.producto)}`,
+      cantidad: Number(row.pedidoFinal ?? row.suggestedOrder ?? row.pedidoSugerido ?? 0),
+      cantidadTexto: String(row.pedidoFinal ?? row.pedidoSugerido ?? ""),
+      quantityRawValue: row.pedidoFinal ?? row.pedidoSugerido ?? "",
+      quantityParsedValue: Number(row.pedidoFinal ?? row.pedidoSugerido ?? 0),
+      quantityInterpretable: true,
+      quantityEmpty: false,
+      hojaOrigen: "clinical_monthly_order_items",
+      excelRowNumber: "",
+      monthlySource: "clinical_monthly_order_items"
+    }));
+  return [...realRows, ...orderRows].map((row) => {
     const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
     const link = getClinicalLinkForImportedRecord("monthly_order", row);
     const linkedProduct = normalizeClinicalMatchStatus(link?.matchStatus) === "vinculado" && link?.productoId ? findProductById(link.productoId) : null;
@@ -3315,6 +3340,7 @@ function getClinicalMonthlyReconciliationRows() {
       ...row,
       sourceType: "monthly",
       sourceLabel: "Pedido mensual",
+      monthlySource: row.monthlySource || "clinical_real_order_items",
       codigo: normalizeClinicalCode(row.codigo),
       producto: row.producto || "",
       link,
@@ -3458,14 +3484,73 @@ function getClinicalReconciliationAuditEvidence() {
     },
     render_rows: {
       pac: pacRows.length,
-      monthly_order: monthlyRows.length,
-      daily_demand: demandRows.length,
+      monthly: monthlyRows.length,
+      demand: demandRows.length,
+      monthly_order_alias: monthlyRows.length,
+      daily_demand_alias: demandRows.length,
       all: pacRows.length + monthlyRows.length + demandRows.length
     }
   };
 }
 
 window.getClinicalReconciliationAuditEvidence = getClinicalReconciliationAuditEvidence;
+
+function getClinicalReconciliationRenderAudit() {
+  const mode = normalizeClinicalReconcileMode(state.clinicalSupply.reconcileMode || "all");
+  const filter = normalizeClinicalReconcileFilter(state.clinicalSupply.reconcileFilter || "pendientes");
+  const pacRows = getClinicalReconciliationRows();
+  const monthlyRows = getClinicalMonthlyReconciliationRows();
+  const demandRows = getClinicalDemandDetectedRows();
+  const modeRows = mode === "monthly"
+    ? monthlyRows
+    : mode === "demand"
+      ? demandRows
+      : mode === "all"
+        ? [...pacRows, ...monthlyRows, ...demandRows]
+        : pacRows;
+  const filteredRows = filter === "all"
+    ? modeRows
+    : filter === "pendientes"
+      ? modeRows.filter((row) => !["vinculado", "ignorado"].includes(row.status))
+      : filter === "inconsistencies"
+        ? modeRows.filter((row) => new Set(getClinicalPacInconsistencies().map((item) => item.id)).has(row.id))
+        : modeRows.filter((row) => normalizeClinicalMatchStatus(row.status) === normalizeClinicalMatchStatus(filter));
+  const demandMonthIds = new Set(state.clinicalSupply.dailyDemands
+    .filter((row) => {
+      const [rowYear, rowMonth] = String(row.demandDate || "").split("-").map(Number);
+      return rowYear === Number(state.clinicalSupply.pacYear) && rowMonth === Number(state.clinicalSupply.monthIndex) + 1;
+    })
+    .map((row) => row.id));
+  return {
+    mode_raw: state.clinicalSupply.reconcileMode || "all",
+    mode_normalized: mode,
+    filter,
+    found_rows: {
+      pac: pacRows.length,
+      monthly_from_clinical_real_order_items: monthlyRows.filter((row) => row.monthlySource === "clinical_real_order_items").length,
+      monthly_from_clinical_monthly_order_items: monthlyRows.filter((row) => row.monthlySource === "clinical_monthly_order_items").length,
+      monthly_total: monthlyRows.length,
+      daily_supply_items_loaded: state.clinicalSupply.dailySupplyItems.length,
+      daily_demands_loaded: state.clinicalSupply.dailyDemands.length,
+      daily_demands_in_active_month: demandMonthIds.size,
+      daily_demand_detected_rows: demandRows.length
+    },
+    render_pipeline: {
+      rows_after_mode: modeRows.length,
+      rows_rendered_after_filter: filteredRows.length,
+      rows_filtered_by_mode: pacRows.length + monthlyRows.length + demandRows.length - modeRows.length,
+      rows_filtered_by_status_filter: modeRows.length - filteredRows.length
+    },
+    exact_reasons: {
+      monthly_order_hidden_before_fix: "El modo podia quedar como monthly, pero renderClinicalReconciliation solo comparaba monthly_order; entonces caia al caso PAC.",
+      daily_demand_hidden_before_fix: "El modo podia quedar como demand, pero renderClinicalReconciliation solo comparaba daily_demand; entonces caia al caso PAC.",
+      monthly_order_items_missing_before_fix: "getClinicalMonthlyReconciliationRows leia solo realOrderRows; clinical_monthly_order_items no se agregaba a conciliacion.",
+      daily_supply_items_missing_when_zero: "getClinicalDemandDetectedRows agrega solo insumos cuyo daily_demand_id existe en dailyDemands cargadas y pertenece al ano/mes activo."
+    }
+  };
+}
+
+window.getClinicalReconciliationRenderAudit = getClinicalReconciliationRenderAudit;
 
 function getClinicalRealImportAuditReport() {
   const diagnostics = state.clinicalSupply.realImportDiagnostics || createClinicalRealImportDiagnostics("");
@@ -3525,19 +3610,23 @@ window.getClinicalRealImportAuditReport = getClinicalRealImportAuditReport;
 
 function renderClinicalReconciliation() {
   if (!elements.clinicalReconcileTableBody) return;
-  const mode = state.clinicalSupply.reconcileMode === "demanda" ? "daily_demand" : (state.clinicalSupply.reconcileMode || "all");
+  const mode = normalizeClinicalReconcileMode(state.clinicalSupply.reconcileMode || "all");
   state.clinicalSupply.reconcileMode = mode;
   if (elements.clinicalReconcileMode) elements.clinicalReconcileMode.value = mode;
-  if (elements.clinicalPacReconcilePanel) elements.clinicalPacReconcilePanel.hidden = false;
-  if (elements.clinicalDemandReconcilePanel) elements.clinicalDemandReconcilePanel.hidden = true;
-  if (elements.clinicalReconcileFilter) elements.clinicalReconcileFilter.hidden = false;
+  if (elements.clinicalPacReconcilePanel) elements.clinicalPacReconcilePanel.hidden = mode === "demand";
+  if (elements.clinicalDemandReconcilePanel) elements.clinicalDemandReconcilePanel.hidden = mode !== "demand";
+  if (elements.clinicalReconcileFilter) elements.clinicalReconcileFilter.hidden = mode === "demand";
   if (elements.clinicalDemandReconcileFilter) {
-    elements.clinicalDemandReconcileFilter.hidden = true;
+    elements.clinicalDemandReconcileFilter.hidden = mode !== "demand";
     elements.clinicalDemandReconcileFilter.value = normalizeClinicalReconcileFilter(state.clinicalSupply.demandReconcileFilter || "all");
   }
   elements.clinicalAcceptHighConfidenceBtn.hidden = !["pac", "all"].includes(mode);
   elements.clinicalLinkReviewedBtn.hidden = true;
   elements.clinicalCreateMissingProductsBtn.hidden = mode !== "pac";
+  if (mode === "demand") {
+    renderClinicalDemandReconciliation();
+    return;
+  }
   state.clinicalSupply.reconcileFilter = normalizeClinicalReconcileFilter(state.clinicalSupply.reconcileFilter || "pendientes");
   elements.clinicalReconcileFilter.value = state.clinicalSupply.reconcileFilter;
   const pacRows = getClinicalReconciliationRows();
@@ -3550,9 +3639,9 @@ function renderClinicalReconciliation() {
     categoria: row.detectedType,
     unidad: row.linkedProduct?.unidad_default || "-"
   }));
-  const rows = mode === "monthly_order"
+  const rows = mode === "monthly"
     ? monthlyRows
-    : mode === "daily_demand"
+    : mode === "demand"
       ? demandRows
       : mode === "all"
         ? [...pacRows, ...monthlyRows, ...demandRows]
@@ -3571,7 +3660,7 @@ function renderClinicalReconciliation() {
   const pending = rows.filter((row) => !["vinculado", "ignorado"].includes(row.status)).length;
 
   renderClinicalSummary(elements.clinicalReconcileSummary, [
-    { title: mode === "monthly_order" ? "Total pedido" : mode === "daily_demand" ? "Total demanda" : mode === "all" ? "Total importados" : "Total PAC", caption: "Registros", value: formatNumber(rows.length) },
+    { title: mode === "monthly" ? "Total pedido" : mode === "demand" ? "Total demanda" : mode === "all" ? "Total importados" : "Total PAC", caption: "Registros", value: formatNumber(rows.length) },
     { title: "Vinculados", caption: "Inventario", value: formatNumber(linked) },
     { title: "Pendientes", caption: "Por revisar", value: formatNumber(pending) },
     { title: "Ignorados", caption: "No aplica", value: formatNumber(ignored) },
@@ -3595,7 +3684,7 @@ function renderClinicalReconciliation() {
         const isLinked = row.status === "vinculado";
         const isIgnored = row.status === "ignorado";
         const rowClass = isLinked ? "row-linked" : isIgnored ? "row-ignored" : hasSuggestion ? "row-suggested" : "";
-        const linkPrefix = row.sourceType === "monthly_order" ? "monthly" : row.sourceType === "daily_demand" ? "demand-link" : "link";
+        const linkPrefix = matchesClinicalSourceType(row.sourceType, "monthly") ? "monthly" : matchesClinicalSourceType(row.sourceType, "demand") ? "demand-link" : "link";
         const rowId = row.id || `${row.sourceType}-${normalizeClinicalCode(row.codigo)}-${normalizeClinicalMatchText(row.producto)}`;
         const inputAttr = linkPrefix === "demand-link" ? "data-demand-link-input" : `data-${linkPrefix}-input`;
         const manualAttr = linkPrefix === "demand-link" ? "data-demand-link-manual" : `data-${linkPrefix}-manual`;
@@ -8804,7 +8893,7 @@ elements.clinicalDemandItemList?.addEventListener("change", (event) => {
 elements.clinicalDemandSaveManualBtn.addEventListener("click", saveClinicalDemandManualEdit);
 elements.clinicalDemandMarkReviewedBtn.addEventListener("click", markClinicalDemandReviewed);
 elements.clinicalReconcileMode.addEventListener("change", (event) => {
-  state.clinicalSupply.reconcileMode = event.target.value;
+  state.clinicalSupply.reconcileMode = normalizeClinicalReconcileMode(event.target.value);
   saveClinicalSupplyState();
   renderClinicalSupply();
 });
