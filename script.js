@@ -915,6 +915,22 @@ function findProductById(id) {
   return state.products.find((product) => String(product.id) === String(id));
 }
 
+function upsertProductInLocalCatalog(product = {}) {
+  if (!product?.id) return;
+  const normalizedProduct = {
+    ...product,
+    nombre_normalizado: product.nombre_normalizado || normalize(product.nombre),
+    consumo_promedio_diario: Number(product.consumo_promedio_diario || 0),
+    favorito: Boolean(product.favorito),
+    activo: product.activo !== false
+  };
+  state.products = [
+    ...state.products.filter((item) => String(item.id) !== String(product.id)),
+    normalizedProduct
+  ].sort((a, b) => String(a.nombre || "").localeCompare(String(b.nombre || "")));
+  renderProductSuggestions();
+}
+
 function normalizeClinicalMatchText(value) {
   return normalize(value)
     .replace(/\byogurth\b/g, "yogurt")
@@ -4117,6 +4133,8 @@ function inferClinicalUnitFromPacName(name = "") {
 async function createInventoryProductFromPacRow(row) {
   if (!state.currentUser?.id) throw new Error("Usuario no autenticado.");
   const name = row.producto || row.codigo || "Producto PAC";
+  const existing = findProductByClinicalName(name).product;
+  if (existing) return existing;
   const payload = {
     nombre: name,
     nombre_normalizado: normalize(name),
@@ -4127,29 +4145,46 @@ async function createInventoryProductFromPacRow(row) {
     consumo_promedio_diario: 0,
     activo: true
   };
-  let { data, error } = await supabaseClient
-    .from("productos_insumos")
-    .insert(payload)
-    .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,critico,consumo_promedio_diario,favorito,activo")
-    .single();
-  if (error && /consumo_promedio_diario|favorito|critico/i.test(getSupabaseErrorMessage(error))) {
-    const fallback = await supabaseClient
+  let { data, error } = await withTimeout(
+    supabaseClient
       .from("productos_insumos")
-      .insert({
-        nombre: payload.nombre,
-        nombre_normalizado: payload.nombre_normalizado,
-        categoria: payload.categoria,
-        unidad_default: payload.unidad_default,
-        stock_minimo: 0,
-        activo: true
-      })
-      .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,activo")
-      .single();
+      .insert(payload)
+      .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,critico,consumo_promedio_diario,favorito,activo")
+      .single(),
+    12000,
+    "Supabase no respondio al crear producto"
+  );
+  if (error && /consumo_promedio_diario|favorito|critico/i.test(getSupabaseErrorMessage(error))) {
+    const fallback = await withTimeout(
+      supabaseClient
+        .from("productos_insumos")
+        .insert({
+          nombre: payload.nombre,
+          nombre_normalizado: payload.nombre_normalizado,
+          categoria: payload.categoria,
+          unidad_default: payload.unidad_default,
+          stock_minimo: 0,
+          activo: true
+        })
+        .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,activo")
+        .single(),
+      12000,
+      "Supabase no respondio al crear producto"
+    );
     data = fallback.data;
     error = fallback.error;
   }
+  if (error && /duplicate key|llave duplicada|unique|uq_|nombre_normalizado/i.test(getSupabaseErrorMessage(error))) {
+    const duplicate = findProductByClinicalName(name).product;
+    if (duplicate) return duplicate;
+    await withTimeout(loadProductsFromSupabase(), 8000, "No se pudo refrescar catalogo de productos");
+    const refreshedDuplicate = findProductByClinicalName(name).product;
+    if (refreshedDuplicate) return refreshedDuplicate;
+  }
   if (error) throw error;
-  await loadProductsFromSupabase();
+  upsertProductInLocalCatalog(data);
+  withTimeout(loadProductsFromSupabase(), 8000, "No se pudo refrescar catalogo de productos")
+    .catch((refreshError) => console.warn("Catalogo local actualizado; refresco completo pendiente", refreshError));
   return findProductById(data.id) || data;
 }
 
@@ -4328,12 +4363,23 @@ async function handleClinicalMonthlyReconciliationAction(target, rowKey) {
     return true;
   }
   if (target.dataset.monthlyCreate) {
-    const product = await createInventoryProductFromPacRow({ producto: row.producto || row.codigo || "Producto pedido mensual", codigo: normalizeClinicalCode(row.codigo), categoria: row.categoria });
-    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", 100, "creado desde pedido mensual"));
-    await refreshInventory();
-    await revalidateClinicalRealOrder({ silent: true });
-    renderClinicalSupply();
-    showToastSuccess("Producto de pedido mensual creado y vinculado.");
+    const originalText = target.textContent;
+    target.disabled = true;
+    target.textContent = "Creando...";
+    try {
+      const product = await createInventoryProductFromPacRow({ producto: row.producto || row.codigo || "Producto pedido mensual", codigo: normalizeClinicalCode(row.codigo), categoria: row.categoria });
+      await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", 100, "creado desde pedido mensual"));
+      try {
+        await withTimeout(revalidateClinicalRealOrder({ silent: true }), 12000, "Producto creado, pero la revalidacion del pedido mensual tardo demasiado");
+      } catch (revalidateError) {
+        console.warn("Pedido mensual creado/vinculado; revalidacion pendiente", revalidateError);
+      }
+      renderClinicalSupply();
+      showToastSuccess("Producto de pedido mensual creado y vinculado.");
+    } finally {
+      target.disabled = false;
+      target.textContent = originalText;
+    }
     return true;
   }
   return true;
