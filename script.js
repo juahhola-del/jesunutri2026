@@ -1313,34 +1313,17 @@ function mapClinicalDemandProductLinkFromDb(row) {
 
 async function loadClinicalDemandProductLinksFromSupabase() {
   if (!state.currentUser?.id) return;
-  const { data, error } = await supabaseClient
-    .from("clinical_demand_product_links")
-    .select("*")
-    .eq("created_by", state.currentUser.id)
-    .order("updated_at", { ascending: false });
-  if (error) throw error;
-  state.clinicalSupply.dailyDemandProductLinks = (data || []).map(mapClinicalDemandProductLinkFromDb);
+  state.clinicalSupply.dailyDemandProductLinks = state.clinicalSupply.productLinks
+    .filter((link) => matchesClinicalSourceType(link.sourceType, "demand"))
+    .map((link) => ({
+      ...link,
+      detectedName: link.detectedName || link.sourceName || link.pacProducto || "",
+      detectedType: normalizeClinicalDemandDetectedType(link.detectedType || link.sourceCategory || "")
+    }));
 }
 
 async function saveClinicalDemandProductLinkToSupabase(link) {
-  if (!state.currentUser?.id) throw new Error("Usuario no autenticado.");
-  const payload = {
-    detected_name: link.detectedName || "",
-    detected_type: normalizeClinicalDemandDetectedType(link.detectedType || ""),
-    producto_id: link.productoId || null,
-    match_status: link.matchStatus || "vinculado",
-    match_confidence: Number(link.matchConfidence || 0),
-    match_method: link.matchMethod || null,
-    ignored: Boolean(link.ignored),
-    updated_at: new Date().toISOString()
-  };
-  const { data, error } = await supabaseClient
-    .from("clinical_demand_product_links")
-    .upsert(payload, { onConflict: "detected_name,detected_type,created_by" })
-    .select("*")
-    .single();
-  if (error) throw error;
-  return mapClinicalDemandProductLinkFromDb(data);
+  return saveClinicalProductLinkToSupabase(buildClinicalDemandProductLink(link, link.productoId ? findProductById(link.productoId) : null, link.matchStatus, link.matchConfidence, link.matchMethod));
 }
 
 async function persistClinicalDemandProductLink(link) {
@@ -1353,11 +1336,6 @@ async function persistClinicalDemandProductLink(link) {
     };
     upsertClinicalProductLink(demandSaved);
     upsertClinicalDemandProductLink(demandSaved);
-    try {
-      await saveClinicalDemandProductLinkToSupabase(link);
-    } catch (legacyError) {
-      console.warn("Vinculo demanda legado omitido", legacyError);
-    }
     setClinicalSupabaseReady(true);
     return demandSaved;
   } catch (error) {
