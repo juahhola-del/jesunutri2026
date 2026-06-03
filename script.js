@@ -3506,6 +3506,12 @@ async function saveClinicalRealOrderImportToSupabase(rows, filename = "") {
 }
 
 function applyClinicalRealComparisonToRow(row, allRows = state.clinicalSupply.realOrderRows) {
+  const quantityState = getClinicalQuantityParseState(getClinicalRealQuantityRaw(row));
+  row.cantidad = quantityState.parsed;
+  row.quantityParsedValue = quantityState.parsed;
+  row.quantityInterpretable = quantityState.interpretable;
+  row.quantityEmpty = quantityState.isEmpty;
+  row.cantidadTexto = quantityState.rawText;
   const comparison = getClinicalRealOrderComparison(row, allRows);
   row.codigo = normalizeClinicalCode(row.codigo);
   if (comparison.pacRow) {
@@ -3563,6 +3569,7 @@ async function revalidateClinicalRealOrder({ silent = false } = {}) {
         pac_item_id: row.pacRowId && !String(row.pacRowId).startsWith("pac-") ? row.pacRowId : null,
         monthly_order_item_id: row.orderItemId || null,
         code: normalizeClinicalCode(row.codigo) || null,
+        quantity: Number(row.cantidad || 0),
         comparison: row.comparison || {},
         validations: row.validations || []
       })
