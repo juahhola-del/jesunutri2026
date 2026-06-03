@@ -1942,6 +1942,18 @@ function isClinicalPlaceholderProductName(value = "") {
   return false;
 }
 
+function findClinicalProductIndexLeftOfQuantity(cells = [], quantityIndex = -1) {
+  for (let index = quantityIndex - 1; index >= 0; index -= 1) {
+    const productCell = String(cells[index] ?? "").trim();
+    if (!productCell) continue;
+    if (!/[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(productCell)) continue;
+    if (isClinicalLikelyDateOrCode(productCell)) continue;
+    if (isClinicalPlaceholderProductName(productCell)) continue;
+    return index;
+  }
+  return -1;
+}
+
 function looksLikeClinicalVegetableQuantitySheet(matrix = []) {
   const rows = matrix.map((row) => row.map((cell) => String(cell ?? "").trim()));
   const hasQuantityHeader = rows.some((row) => row.some((cell) => {
@@ -1951,12 +1963,9 @@ function looksLikeClinicalVegetableQuantitySheet(matrix = []) {
   const adjacentPairs = rows.reduce((count, row) => {
     const pairIndex = row.findIndex((cell, index) => {
       const quantityState = getClinicalQuantityParseState(cell);
-      const product = String(row[index - 1] ?? "").trim();
       return index > 0 &&
         quantityState.interpretable &&
-        product &&
-        /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(product) &&
-        !isClinicalPlaceholderProductName(product);
+        findClinicalProductIndexLeftOfQuantity(row, index) >= 0;
     });
     return count + (pairIndex >= 0 ? 1 : 0);
   }, 0);
@@ -2231,14 +2240,7 @@ function parseClinicalVegetableQuantityTable(sheetName, matrix = [], diagnostic)
     if (!cells.some(Boolean)) return;
     const rawQuantity = cells[qtyIndex];
     const quantityState = getClinicalQuantityParseState(rawQuantity);
-    const productIndex = [qtyIndex - 1, qtyIndex - 2, qtyIndex - 3]
-      .find((index) => {
-        const productCell = String(cells[index] ?? "").trim();
-        return index >= 0 &&
-          productCell &&
-          /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(productCell) &&
-          !isClinicalPlaceholderProductName(productCell);
-      });
+    const productIndex = findClinicalProductIndexLeftOfQuantity(cells, qtyIndex);
     const product = productIndex >= 0 ? cells[productIndex] : "";
     if (!product || !quantityState.interpretable) {
       pushClinicalDiscardedImportRow(diagnostic, sheetName, cells, {
@@ -2395,15 +2397,12 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
       const pair = cells
         .map((cell, index) => ({ cell, index, quantityState: getClinicalQuantityParseState(cell) }))
         .find(({ index, quantityState }) => {
-          const productCell = String(cells[index - 1] ?? "").trim();
           return index > 0 &&
             quantityState.interpretable &&
-            productCell &&
-            /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(productCell) &&
-            !isClinicalPlaceholderProductName(productCell);
+            findClinicalProductIndexLeftOfQuantity(cells, index) >= 0;
         });
       const qtyIndex = pair?.index ?? -1;
-      const productIndex = qtyIndex > 0 ? qtyIndex - 1 : -1;
+      const productIndex = qtyIndex > 0 ? findClinicalProductIndexLeftOfQuantity(cells, qtyIndex) : -1;
       if (productIndex < 0 || qtyIndex < 0 || productIndex === qtyIndex) {
         pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, cells, {
           excelRowNumber: headerIndex + offset + 1,
