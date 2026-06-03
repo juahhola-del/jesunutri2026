@@ -3197,14 +3197,10 @@ function renderClinicalRealImportDiagnostics() {
         const productValue = row.producto_inventario_nombre || "";
         return `
         <tr class="${rowClass}">
-          <td>${escapeHtml(row.hoja_origen || "-")}</td>
-          <td>${escapeHtml(row.categoria || "-")}</td>
-          <td>${escapeHtml(row.fila_excel || "-")}</td>
           <td>${escapeHtml(String(row.codigo_crudo ?? "")) || "-"}</td>
           <td>${escapeHtml(row.codigo_normalizado || "-")}</td>
           <td><strong>${escapeHtml(String(row.nombre_crudo ?? "")) || "-"}</strong></td>
           <td>${escapeHtml(row.nombre_normalizado || "-")}</td>
-          <td>${escapeHtml(row.columna_cantidad_detectada || row.columna_cantidad || "-")}</td>
           <td>${escapeHtml(String(row.valor_crudo ?? "")) || "-"}</td>
           <td>${row.id ? `<input class="clinical-small-input" type="text" value="${escapeHtml(row.valor_parseado ?? 0)}" data-real-order-quantity="${escapeHtml(row.id)}" title="Editar cantidad parseada">` : formatNumber(row.valor_parseado ?? 0)}</td>
           <td>
@@ -3213,11 +3209,6 @@ function renderClinicalRealImportDiagnostics() {
               <small>${escapeHtml(row.conciliacion_metodo || "sin coincidencia")}</small>
             </div>` : escapeHtml(row.producto_id || row.producto_inventario_nombre || "-")}
           </td>
-          <td>
-            <span class="clinical-status-pill ${escapeHtml(quickStatus || "pendiente")}">${escapeHtml(quickStatus || "pendiente")}</span>
-            <small class="clinical-confidence">${formatNumber(row.conciliacion_confianza || 0)}%</small>
-          </td>
-          <td>${escapeHtml(row.motivo_descarte || "-")}</td>
           <td>${escapeHtml(row.estado_final || "-")}</td>
           <td>
             ${row.id ? `<div class="clinical-row-actions">
@@ -3227,6 +3218,15 @@ function renderClinicalRealImportDiagnostics() {
               <button class="btn small" type="button" data-real-order-delete="${escapeHtml(row.id)}">Borrar fila</button>
               ${isLinked || isIgnored ? `<button class="btn small" type="button" data-real-order-unlink="${escapeHtml(row.id)}">Desvincular</button>` : `<button class="btn small" type="button" data-real-order-ignore="${escapeHtml(row.id)}">Ignorar</button>`}
             </div>` : escapeHtml(row.accion_posible || "-")}
+          </td>
+          <td>${escapeHtml(row.hoja_origen || "-")}</td>
+          <td>${escapeHtml(row.categoria || "-")}</td>
+          <td>${escapeHtml(row.fila_excel || "-")}</td>
+          <td>${escapeHtml(row.columna_cantidad_detectada || row.columna_cantidad || "-")}</td>
+          <td>${escapeHtml(row.motivo_descarte || "-")}</td>
+          <td>
+            <span class="clinical-status-pill ${escapeHtml(quickStatus || "pendiente")}">${escapeHtml(quickStatus || "pendiente")}</span>
+            <small class="clinical-confidence">${formatNumber(row.conciliacion_confianza || 0)}%</small>
           </td>
         </tr>
       `;
