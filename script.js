@@ -1173,7 +1173,7 @@ function normalizeClinicalDemandDetectedType(type = "") {
 }
 
 function getClinicalDemandProductLink(name = "", type = "") {
-  return getClinicalLinkForImportedRecord("daily_demand", {
+  return getClinicalLinkForImportedRecord("demand", {
     detectedName: name,
     detectedType: normalizeClinicalDemandDetectedType(type)
   }) || (() => {
@@ -1275,7 +1275,7 @@ function resolveClinicalImportedProduct(row = {}) {
 function buildClinicalDemandProductLink(row, product, status = "vinculado", confidence = 100, method = "manual") {
   const detectedType = normalizeClinicalDemandDetectedType(row.detectedType || row.type);
   return {
-    ...buildClinicalImportedProductLink("daily_demand", {
+    ...buildClinicalImportedProductLink("demand", {
       ...row,
       detectedType,
       producto: row.detectedName || row.name || "",
@@ -1934,7 +1934,36 @@ function pushClinicalDiscardedImportRow(diagnostic, sheetName, cells = [], optio
   });
 }
 
-function detectClinicalCentralSheetParser(sheetName = "") {
+function isClinicalPlaceholderProductName(value = "") {
+  const clean = normalizeClinicalHeader(value);
+  if (!clean) return true;
+  if (/^(codigo|cod|producto|descripcion|detalle|nombre|nombre formula|cantidad|cantidad kg|kg|pedido|solicitud|total|seccion|formato|unidad)$/.test(clean)) return true;
+  if (/pedido|cantidad|total|codigo|recepcion|calendario|mensual|seccion|geonox/.test(clean)) return true;
+  return false;
+}
+
+function looksLikeClinicalVegetableQuantitySheet(matrix = []) {
+  const rows = matrix.map((row) => row.map((cell) => String(cell ?? "").trim()));
+  const hasQuantityHeader = rows.some((row) => row.some((cell) => {
+    const clean = normalizeClinicalHeader(cell);
+    return clean.includes("cantidad kg") || clean === "cantidad";
+  }));
+  const adjacentPairs = rows.reduce((count, row) => {
+    const pairIndex = row.findIndex((cell, index) => {
+      const quantityState = getClinicalQuantityParseState(cell);
+      const product = String(row[index - 1] ?? "").trim();
+      return index > 0 &&
+        quantityState.interpretable &&
+        product &&
+        /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(product) &&
+        !isClinicalPlaceholderProductName(product);
+    });
+    return count + (pairIndex >= 0 ? 1 : 0);
+  }, 0);
+  return hasQuantityHeader && adjacentPairs >= 2;
+}
+
+function detectClinicalCentralSheetParser(sheetName = "", matrix = []) {
   const sheetKey = normalize(sheetName);
   if (sheetKey.includes("calendario") && sheetKey.includes("recepcion")) return "calendario_recepciones";
   if (sheetKey.includes("pedido abarrotes")) return "abarrotes";
@@ -1942,6 +1971,7 @@ function detectClinicalCentralSheetParser(sheetName = "") {
   if (sheetKey.includes("enterales")) return "enterales";
   if (sheetKey.includes("infantil")) return "infantil";
   if (sheetKey.includes("verduras") || sheetKey.includes("verdura")) return "verduras";
+  if (looksLikeClinicalVegetableQuantitySheet(matrix)) return "verduras";
   return "";
 }
 
@@ -2201,17 +2231,25 @@ function parseClinicalVegetableQuantityTable(sheetName, matrix = [], diagnostic)
     if (!cells.some(Boolean)) return;
     const rawQuantity = cells[qtyIndex];
     const quantityState = getClinicalQuantityParseState(rawQuantity);
-    const product = cells[qtyIndex - 1] || findClinicalProductTextAfterColumn(cells, -1);
-    if (!product || /pedido|cantidad|total/i.test(product) || !quantityState.interpretable) {
+    const productIndex = [qtyIndex - 1, qtyIndex - 2, qtyIndex - 3]
+      .find((index) => {
+        const productCell = String(cells[index] ?? "").trim();
+        return index >= 0 &&
+          productCell &&
+          /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(productCell) &&
+          !isClinicalPlaceholderProductName(productCell);
+      });
+    const product = productIndex >= 0 ? cells[productIndex] : "";
+    if (!product || !quantityState.interpretable) {
       pushClinicalDiscardedImportRow(diagnostic, sheetName, cells, {
         excelRowNumber: headerIndex + offset + 2,
         headers: header,
-        columns: { producto: qtyIndex - 1, solicitud: qtyIndex },
+        columns: { producto: productIndex ?? -1, solicitud: qtyIndex },
         productRaw: product,
         quantityRaw: rawQuantity,
         quantityParsed: quantityState.parsed,
         quantityColumnName: getClinicalColumnLabel(header, qtyIndex) || "Cantidad KG",
-        reason: !product || /pedido|cantidad|total/i.test(product) ? "Nombre de producto no detectado" : (quantityState.isEmpty ? "Cantidad vacia" : "Cantidad no interpretada"),
+        reason: !product ? "Nombre de producto no detectado junto a la cantidad" : (quantityState.isEmpty ? "Cantidad vacia" : "Cantidad no interpretada"),
         action: !product ? "recuperar fila" : "corregir cantidad",
         status: !product ? "requiere correccion manual" : "descartado con motivo visible",
         parserType: "verduras"
@@ -2227,7 +2265,8 @@ function parseClinicalVegetableQuantityTable(sheetName, matrix = [], diagnostic)
       excelRowNumber: headerIndex + offset + 2,
       quantityColumnName: getClinicalColumnLabel(header, qtyIndex) || "Cantidad KG",
       quantityColumnIndex: qtyIndex + 1,
-      sheetName
+      sheetName,
+      observation: `Producto en columna ${productIndex + 1}; cantidad al costado`
     }));
     diagnostic.filasLeidas += 1;
   });
@@ -2278,7 +2317,7 @@ function normalizeClinicalCentralRow(row = [], columns = {}, parserType = "", sh
 }
 
 function parseClinicalCentralSheet(sheetName, matrix = []) {
-  const parserType = detectClinicalCentralSheetParser(sheetName);
+  const parserType = detectClinicalCentralSheetParser(sheetName, matrix);
   const sheetDiagnostic = {
     nombre: sheetName,
     parser: parserType || "sin parser",
@@ -2353,9 +2392,18 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
     matrix.slice(headerIndex).forEach((sourceRow, offset) => {
       const cells = sourceRow.map((cell) => String(cell ?? "").trim());
       if (!cells.some(Boolean)) return;
-      const productIndex = cells.findIndex((cell) => /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(cell) && !/pedido|seccion|mensual|cantidad|kilos|kg/i.test(cell));
-      const reversedQtyIndex = [...cells].reverse().findIndex((cell) => getClinicalQuantityParseState(cell).interpretable);
-      const qtyIndex = reversedQtyIndex >= 0 ? cells.length - 1 - reversedQtyIndex : -1;
+      const pair = cells
+        .map((cell, index) => ({ cell, index, quantityState: getClinicalQuantityParseState(cell) }))
+        .find(({ index, quantityState }) => {
+          const productCell = String(cells[index - 1] ?? "").trim();
+          return index > 0 &&
+            quantityState.interpretable &&
+            productCell &&
+            /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(productCell) &&
+            !isClinicalPlaceholderProductName(productCell);
+        });
+      const qtyIndex = pair?.index ?? -1;
+      const productIndex = qtyIndex > 0 ? qtyIndex - 1 : -1;
       if (productIndex < 0 || qtyIndex < 0 || productIndex === qtyIndex) {
         pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, cells, {
           excelRowNumber: headerIndex + offset + 1,
@@ -2369,7 +2417,7 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
         });
         return;
       }
-      const quantityState = getClinicalQuantityParseState(cells[qtyIndex]);
+      const quantityState = pair.quantityState;
       sheetDiagnostic.filasLeidas += 1;
       rows.push({
         codigoRaw: "",
@@ -2439,6 +2487,23 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
         quantityColumnName: normalizedRow.quantityColumnName,
         reason: quantityState.interpretable ? "Fila sin codigo ni nombre de producto" : (quantityState.isEmpty ? "Cantidad vacia y sin producto" : "Cantidad no interpretada y sin producto"),
         action: quantityState.interpretable ? "crear producto" : "corregir cantidad",
+        status: "requiere correccion manual",
+        parserType
+      });
+      return;
+    }
+    if (!normalizedRow.quantityInterpretable) {
+      pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, sourceRow.map((cell) => String(cell ?? "").trim()), {
+        excelRowNumber: headerIndex + offset + 2,
+        headers,
+        columns,
+        codigoRaw: normalizedRow.codigoRaw,
+        productRaw: normalizedRow.productoRaw,
+        quantityRaw: normalizedRow.quantityRawValue,
+        quantityParsed: normalizedRow.quantityParsedValue,
+        quantityColumnName: normalizedRow.quantityColumnName,
+        reason: normalizedRow.quantityEmpty ? "Cantidad vacia" : "Cantidad no interpretada",
+        action: "corregir cantidad",
         status: "requiere correccion manual",
         parserType
       });
@@ -3022,7 +3087,7 @@ async function handleClinicalRealOrderRowAction(target) {
   if (!row) return true;
   if (target.dataset.realOrderReconcile) {
     state.clinicalSupply.activeTab = "conciliacion";
-    state.clinicalSupply.reconcileMode = "monthly_order";
+    state.clinicalSupply.reconcileMode = "monthly";
     state.clinicalSupply.reconcileFilter = "pendientes";
     saveClinicalSupplyState();
     renderClinicalSupply();
@@ -3031,7 +3096,7 @@ async function handleClinicalRealOrderRowAction(target) {
   }
   if (target.dataset.realOrderCreate) {
     const product = await createInventoryProductFromPacRow({ producto: row.producto || row.codigo || "Producto pedido mensual", codigo: normalizeClinicalCode(row.codigo), categoria: row.categoria });
-    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly_order", row, product, "vinculado", 100, "creado desde pedido mensual"));
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", 100, "creado desde pedido mensual"));
     await refreshInventory();
     await revalidateClinicalRealOrder({ silent: true });
     showToastSuccess("Producto creado y vinculado al pedido mensual.");
@@ -3061,7 +3126,7 @@ async function handleClinicalRealOrderRowAction(target) {
   if (target.dataset.realOrderIgnore) {
     row.importStatus = "ignorado manualmente";
     row.discardReason = "Ignorado manualmente";
-    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly_order", row, null, "ignorado", 0, "manual"));
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, null, "ignorado", 0, "manual"));
     saveClinicalSupplyState();
     renderClinicalSupply();
     showToastSuccess("Fila ignorada con motivo manual.");
@@ -3300,7 +3365,7 @@ function getClinicalMonthlyReconciliationRows() {
     }));
   return [...realRows, ...orderRows].map((row) => {
     const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
-    const link = getClinicalLinkForImportedRecord("monthly_order", row);
+    const link = getClinicalLinkForImportedRecord("monthly", row);
     const linkedProduct = normalizeClinicalMatchStatus(link?.matchStatus) === "vinculado" && link?.productoId ? findProductById(link.productoId) : null;
     const suggestion = suggestClinicalProductForDemandName(row.producto);
     let status = "pendiente";
@@ -3966,21 +4031,21 @@ async function handleClinicalMonthlyReconciliationAction(target, rowKey) {
     const suggestion = suggestClinicalProductForDemandName(row.producto);
     const confidence = product.id === suggestion.product?.id ? suggestion.confidence : 100;
     const method = product.id === suggestion.product?.id ? suggestion.method : "manual";
-    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly_order", row, product, "vinculado", confidence, method));
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", confidence, method));
     await revalidateClinicalRealOrder({ silent: true });
     renderClinicalSupply();
     showToastSuccess("Producto de pedido mensual vinculado.");
     return true;
   }
   if (target.dataset.monthlyUnlink) {
-    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly_order", row, null, "pendiente", 0, "desvinculado"));
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, null, "pendiente", 0, "desvinculado"));
     await revalidateClinicalRealOrder({ silent: true });
     renderClinicalSupply();
     showToastSuccess("Producto de pedido mensual desvinculado.");
     return true;
   }
   if (target.dataset.monthlyIgnore) {
-    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly_order", row, null, "ignorado", 0, "manual"));
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, null, "ignorado", 0, "manual"));
     await revalidateClinicalRealOrder({ silent: true });
     renderClinicalSupply();
     showToastSuccess("Producto de pedido mensual ignorado.");
@@ -3988,7 +4053,7 @@ async function handleClinicalMonthlyReconciliationAction(target, rowKey) {
   }
   if (target.dataset.monthlyCreate) {
     const product = await createInventoryProductFromPacRow({ producto: row.producto || row.codigo || "Producto pedido mensual", codigo: normalizeClinicalCode(row.codigo), categoria: row.categoria });
-    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly_order", row, product, "vinculado", 100, "creado desde pedido mensual"));
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", 100, "creado desde pedido mensual"));
     await refreshInventory();
     await revalidateClinicalRealOrder({ silent: true });
     renderClinicalSupply();
@@ -4309,7 +4374,7 @@ function getClinicalRealOrderComparison(row, allRows) {
   const resolved = resolveClinicalImportedProduct(row);
   const pacRow = state.clinicalSupply.pacRows.find((item) => row.pacRowId && String(item.id) === String(row.pacRowId)) || resolved.pacRow || null;
   const linkedProduct = pacRow ? getClinicalLinkedProductByPacRow(pacRow) : null;
-  const monthlyLink = getClinicalLinkForImportedRecord("monthly_order", row);
+  const monthlyLink = getClinicalLinkForImportedRecord("monthly", row);
   const monthlyProduct = monthlyLink?.ignored || normalizeClinicalMatchStatus(monthlyLink?.matchStatus) !== "vinculado" ? null : (monthlyLink?.productoId ? findProductById(monthlyLink.productoId) : null);
   const product = linkedProduct || monthlyProduct || resolved.product || (row.productoId ? findProductById(row.productoId) : null) || null;
   const orderRow = (getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows())
@@ -4515,7 +4580,7 @@ async function revalidateClinicalRealOrder({ silent = false } = {}) {
 
 async function ensureClinicalMonthlyOrderLinksFromRows(rows = state.clinicalSupply.realOrderRows) {
   const pendingRows = rows.filter((row) => {
-    const existing = getClinicalLinkForImportedRecord("monthly_order", row);
+    const existing = getClinicalLinkForImportedRecord("monthly", row);
     if (existing?.ignored || existing?.productoId) return false;
     const comparison = getClinicalRealOrderComparison(row, rows);
     return !comparison.product && !comparison.pacRow;
@@ -4524,7 +4589,7 @@ async function ensureClinicalMonthlyOrderLinksFromRows(rows = state.clinicalSupp
     const suggestion = suggestClinicalProductForDemandName(row.producto);
     const status = suggestion.product && suggestion.confidence >= 80 ? "sugerido" : suggestion.product && suggestion.confidence >= 65 ? "conflicto" : "pendiente";
     const product = status === "sugerido" ? suggestion.product : null;
-    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly_order", row, product, status, suggestion.confidence, suggestion.method || "importado"));
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, status, suggestion.confidence, suggestion.method || "importado"));
   }
 }
 
@@ -5996,7 +6061,7 @@ async function handleClinicalDemandWarningAction(target) {
   }
   if (target.dataset.demandWarningReconcile) {
     state.clinicalSupply.activeTab = "conciliacion";
-    state.clinicalSupply.reconcileMode = "daily_demand";
+    state.clinicalSupply.reconcileMode = "demand";
     saveClinicalSupplyState();
     renderClinicalSupply();
     return true;
