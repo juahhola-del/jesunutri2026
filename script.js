@@ -3256,7 +3256,7 @@ function renderClinicalRealImportDiagnostics() {
           <td>${escapeHtml(row.estado_final || "-")}</td>
           <td>
             ${row.id ? `<div class="clinical-row-actions">
-              ${!isIgnored ? `<button class="btn small" type="button" data-real-order-link-manual="${escapeHtml(row.id)}">Vincular rapido</button>` : ""}
+              ${isLinked ? `<button class="btn small" type="button" disabled>Vinculado</button>` : !isIgnored ? `<button class="btn small" type="button" data-real-order-link-manual="${escapeHtml(row.id)}">Vincular rapido</button>` : ""}
               <button class="btn small" type="button" data-real-order-reconcile="${escapeHtml(row.id)}">Abrir conciliacion</button>
               <button class="btn small" type="button" data-real-order-create="${escapeHtml(row.id)}">Crear</button>
               <button class="btn small" type="button" data-real-order-delete="${escapeHtml(row.id)}">Borrar fila</button>
