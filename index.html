@@ -326,18 +326,21 @@
                 Importar pedido real
                 <input id="clinicalRealOrderFile" type="file" accept=".xlsx,.xls,.csv,.txt" hidden>
               </label>
-              <button class="btn" type="button" data-clinical-export="pedido_real_errores">Ver errores de importacion</button>
+              <button class="btn" type="button" data-clinical-export="pedido_real_errores">Exportar revision</button>
               <select id="clinicalRealOrderErrorFilter" class="clinical-select">
-                <option value="all">Todos los errores</option>
+                <option value="blocking">Bloqueantes</option>
+                <option value="all">Todos los avisos</option>
                 <option value="reconciliation">Pendientes de conciliacion</option>
                 <option value="sin_pac">Sin PAC</option>
                 <option value="cantidad_vacia">Cantidad vacia</option>
                 <option value="duplicados">Duplicados</option>
+                <option value="warnings">Avisos PAC/pedido</option>
               </select>
               <button class="btn" type="button" id="clinicalRevalidateRealOrderBtn">Revalidar pedido real</button>
               <button class="btn primary" type="button" id="clinicalSaveRealImportBtn">Guardar pedido real reconocido</button>
               <button class="btn" type="button" id="clinicalRegenerateWithLinksBtn">Regenerar usando conciliacion</button>
             </div>
+            <div class="clinical-summary-grid compact" id="clinicalRealOrderWorkSummary"></div>
             <section class="clinical-import-diagnostic" id="clinicalRealImportDiagnostic" hidden>
               <div class="clinical-diagnostic-header">
                 <div>
@@ -415,8 +418,8 @@
                     <th>Columna cantidad</th>
                     <th>Valor crudo</th>
                     <th>Valor parseado</th>
-                    <th>Categoria error</th>
-                    <th>Estado validacion</th>
+                    <th>Tipo</th>
+                    <th>Revision</th>
                     <th>Acciones</th>
                   </tr>
                 </thead>

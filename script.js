@@ -171,7 +171,7 @@ const state = {
     pacRows: [],
     orderRows: [],
     realOrderRows: [],
-    realOrderErrorFilter: "all",
+    realOrderErrorFilter: "blocking",
     realImportDiagnostics: null,
     pendingRealOrderImport: null,
     productLinks: [],
@@ -308,6 +308,7 @@ const elements = {
   clinicalRealImportDiagnostic: document.getElementById("clinicalRealImportDiagnostic"),
   clinicalRealImportDiagnosticMeta: document.getElementById("clinicalRealImportDiagnosticMeta"),
   clinicalRealImportDiagnosticSummary: document.getElementById("clinicalRealImportDiagnosticSummary"),
+  clinicalRealOrderWorkSummary: document.getElementById("clinicalRealOrderWorkSummary"),
   clinicalRealImportDiagnosticBody: document.getElementById("clinicalRealImportDiagnosticBody"),
   clinicalRealImportDiagnosticRowsBody: document.getElementById("clinicalRealImportDiagnosticRowsBody"),
   clinicalRealOrderErrorFilter: document.getElementById("clinicalRealOrderErrorFilter"),
@@ -1007,6 +1008,7 @@ function getClinicalLinkForImportedRecord(sourceType, row = {}) {
     if (!matchesClinicalSourceType(link.sourceType, sourceType)) return false;
     if (sourceRecordId && String(link.sourceRecordId || "") === String(sourceRecordId)) return true;
     if (normalizedCode && normalizeClinicalCode(link.sourceCode || link.pacCodigo || "") === normalizedCode) return true;
+    if (matchesClinicalSourceType(sourceType, "monthly") && normalizedName && normalizeClinicalMatchText(link.sourceName || link.pacProducto || "") === normalizedName) return true;
     return normalizedName &&
       normalizeClinicalMatchText(link.sourceName || link.pacProducto || "") === normalizedName &&
       (!sourceCategory || normalizeClinicalDemandDetectedType(link.sourceCategory || "") === sourceCategory);
@@ -1260,20 +1262,34 @@ function resolveClinicalImportedProduct(row = {}) {
   }
 
   const exactNamePacRow = rawName ? state.clinicalSupply.pacRows.find((item) => String(item.producto || "").trim().toLowerCase() === rawName.toLowerCase()) : null;
+  const exactNameLink = rawName ? state.clinicalSupply.productLinks.find((link) =>
+    String(link.sourceName || link.pacProducto || "").trim().toLowerCase() === rawName.toLowerCase() &&
+    normalizeClinicalMatchStatus(link.matchStatus) === "vinculado" &&
+    !link.ignored &&
+    link.productoId
+  ) : null;
   const exactNameProduct = findClinicalProductByNameMethod(rawName, false);
-  evidence.push({ method: "nombre exacto", matched: Boolean(exactNamePacRow || exactNameProduct.product), name: rawName });
-  if (exactNamePacRow || exactNameProduct.product) {
+  evidence.push({ method: "nombre exacto", matched: Boolean(exactNamePacRow || exactNameLink || exactNameProduct.product), name: rawName });
+  if (exactNamePacRow || exactNameLink || exactNameProduct.product) {
     const linkedProduct = exactNamePacRow ? getClinicalLinkedProductByPacRow(exactNamePacRow) : null;
-    return { pacRow: exactNamePacRow || null, product: linkedProduct || exactNameProduct.product || null, confidence: 100, method: linkedProduct ? "nombre exacto PAC vinculado" : exactNameProduct.method, evidence };
+    const linkProduct = exactNameLink?.productoId ? findProductById(exactNameLink.productoId) : null;
+    return { pacRow: exactNamePacRow || null, product: linkedProduct || linkProduct || exactNameProduct.product || null, confidence: 100, method: linkedProduct ? "nombre exacto PAC vinculado" : linkProduct ? "nombre exacto conciliado" : exactNameProduct.method, evidence };
   }
 
   const normalizedName = normalizeClinicalMatchText(rawName);
   const normalizedNamePacRow = normalizedName ? state.clinicalSupply.pacRows.find((item) => normalizeClinicalMatchText(item.producto) === normalizedName) : null;
+  const normalizedNameLink = normalizedName ? state.clinicalSupply.productLinks.find((link) =>
+    normalizeClinicalMatchText(link.sourceName || link.pacProducto || "") === normalizedName &&
+    normalizeClinicalMatchStatus(link.matchStatus) === "vinculado" &&
+    !link.ignored &&
+    link.productoId
+  ) : null;
   const normalizedNameProduct = findClinicalProductByNameMethod(rawName, true);
-  evidence.push({ method: "nombre normalizado", matched: Boolean(normalizedNamePacRow || normalizedNameProduct.product), name: normalizedName });
-  if (normalizedNamePacRow || normalizedNameProduct.product) {
+  evidence.push({ method: "nombre normalizado", matched: Boolean(normalizedNamePacRow || normalizedNameLink || normalizedNameProduct.product), name: normalizedName });
+  if (normalizedNamePacRow || normalizedNameLink || normalizedNameProduct.product) {
     const linkedProduct = normalizedNamePacRow ? getClinicalLinkedProductByPacRow(normalizedNamePacRow) : null;
-    return { pacRow: normalizedNamePacRow || null, product: linkedProduct || normalizedNameProduct.product || null, confidence: 100, method: linkedProduct ? "nombre normalizado PAC vinculado" : normalizedNameProduct.method, evidence };
+    const linkProduct = normalizedNameLink?.productoId ? findProductById(normalizedNameLink.productoId) : null;
+    return { pacRow: normalizedNamePacRow || null, product: linkedProduct || linkProduct || normalizedNameProduct.product || null, confidence: 100, method: linkedProduct ? "nombre normalizado PAC vinculado" : linkProduct ? "nombre normalizado conciliado" : normalizedNameProduct.method, evidence };
   }
 
   const similarity = suggestClinicalProductForDemandName(rawName);
@@ -1391,7 +1407,7 @@ function loadClinicalSupplyLocalState() {
       pacRows: Array.isArray(saved.pacRows) ? saved.pacRows : [],
       orderRows: Array.isArray(saved.orderRows) ? saved.orderRows : [],
       realOrderRows: Array.isArray(saved.realOrderRows) ? saved.realOrderRows : [],
-      realOrderErrorFilter: saved.realOrderErrorFilter || "all",
+      realOrderErrorFilter: saved.realOrderErrorFilter === "all" ? "blocking" : (saved.realOrderErrorFilter || "blocking"),
       realImportDiagnostics: saved.realImportDiagnostics || null,
       productLinks: Array.isArray(saved.productLinks) ? saved.productLinks : [],
       reconcileFilter: normalizeClinicalReconcileFilter(saved.reconcileFilter || "pendientes"),
@@ -3362,12 +3378,28 @@ function renderClinicalOrder() {
 function renderClinicalRealOrderErrors() {
   if (!elements.clinicalRealOrderErrorTableBody) return;
   if (elements.clinicalRealOrderErrorFilter) {
-    elements.clinicalRealOrderErrorFilter.value = state.clinicalSupply.realOrderErrorFilter || "all";
+    elements.clinicalRealOrderErrorFilter.value = state.clinicalSupply.realOrderErrorFilter || "blocking";
+  }
+  const workSummary = getClinicalRealOrderWorkSummary();
+  if (elements.clinicalRealOrderWorkSummary) {
+    const pendingImport = Boolean(state.clinicalSupply.pendingRealOrderImport);
+    const currentImport = state.clinicalSupply.pendingRealOrderImport || {};
+    const savedLabel = pendingImport
+      ? `Pendiente de guardar: ${currentImport.filename || "pedido reconocido"}`
+      : state.clinicalSupply.lastRealImportId
+        ? "Pedido real guardado"
+        : "Sin pedido real guardado";
+    renderClinicalSummary(elements.clinicalRealOrderWorkSummary, [
+      { title: "Pedido real", caption: savedLabel, value: formatNumber(workSummary.rows.length) },
+      { title: "Bloqueantes", caption: "Cantidad o vinculo", value: formatNumber(workSummary.blocking) },
+      { title: "Avisos", caption: "PAC / sugerido", value: formatNumber(workSummary.warnings) },
+      { title: "Memoria aplicada", caption: "Vinculados + ignorados", value: formatNumber(workSummary.linked + workSummary.ignored) }
+    ]);
   }
   const rows = getClinicalRealOrderErrorRows();
   elements.clinicalRealOrderErrorTableBody.innerHTML = rows.length
     ? rows.map((row) => `
-      <tr class="${row.validationCategory === "reconciliation" ? "row-warning" : "row-invalid"}">
+      <tr class="${getClinicalRealOrderIssueSeverity(row) === "warning" ? "row-warning" : "row-invalid"}">
         <td>${escapeHtml(row.hojaOrigen || "-")}</td>
         <td>${escapeHtml(row.categoria || "-")}</td>
         <td>${escapeHtml(normalizeClinicalCode(row.codigo) || "-")}</td>
@@ -3378,7 +3410,10 @@ function renderClinicalRealOrderErrors() {
         <td>${escapeHtml(String(row.quantityRawValue ?? row.cantidadTexto ?? "")) || "-"}</td>
         <td><input class="clinical-small-input" type="text" value="${escapeHtml(row.quantityParsedValue ?? row.cantidad ?? 0)}" data-real-order-quantity="${escapeHtml(row.id || "")}" title="Editar cantidad parseada"></td>
         <td>${escapeHtml(getClinicalRealValidationLabel(row.validationCategory))}</td>
-        <td>${escapeHtml(row.validations.join(" | "))}</td>
+        <td>
+          <strong>${escapeHtml(getClinicalRealOrderIssueLabel(row))}</strong>
+          <small>${escapeHtml(row.validations.join(" | "))}</small>
+        </td>
         <td>
           <div class="clinical-row-actions">
             <button class="btn small" type="button" data-real-order-reconcile="${escapeHtml(row.id || "")}">Vincular</button>
@@ -3389,7 +3424,7 @@ function renderClinicalRealOrderErrors() {
         </td>
       </tr>
     `).join("")
-    : '<tr><td colspan="12" class="empty">Sin errores para este filtro.</td></tr>';
+    : '<tr><td colspan="12" class="empty">Sin bloqueos para este filtro.</td></tr>';
 }
 
 function getClinicalRealOrderRowById(rowId) {
@@ -4738,12 +4773,38 @@ function addClinicalRealValidation(collection, category, message) {
 function getClinicalRealValidationLabel(category = "") {
   const labels = {
     reconciliation: "pendiente de vinculo",
-    pac: "error de PAC",
+    pac: "aviso PAC/pedido",
     quantity: "error de cantidad",
     code: "error de codigo",
     import: "error de importacion"
   };
   return labels[category] || category || "sin errores";
+}
+
+function getClinicalRealOrderIssueSeverity(row = {}) {
+  const details = row.validationDetails || [];
+  if (!details.length) return "ok";
+  if (details.some((item) => ["quantity", "reconciliation", "code", "import"].includes(item.category))) return "blocking";
+  return "warning";
+}
+
+function getClinicalRealOrderIssueLabel(row = {}) {
+  const severity = getClinicalRealOrderIssueSeverity(row);
+  if (severity === "ok") return "Resuelto";
+  if (severity === "warning") return "Aviso, no bloquea";
+  return "Bloquea importacion";
+}
+
+function getClinicalRealOrderWorkSummary() {
+  const rows = state.clinicalSupply.realOrderRows.filter(isClinicalMonthlyOrderScopeRow).map((row) => {
+    const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
+    return { ...row, ...comparison, validationCategory: comparison.validationCategory };
+  });
+  const linked = rows.filter((row) => row.product).length;
+  const ignored = rows.filter((row) => isClinicalImportedRecordIgnored("monthly", row)).length;
+  const blocking = rows.filter((row) => getClinicalRealOrderIssueSeverity(row) === "blocking").length;
+  const warnings = rows.filter((row) => getClinicalRealOrderIssueSeverity(row) === "warning").length;
+  return { rows, linked, ignored, blocking, warnings };
 }
 
 function getClinicalRealValidationCategory(details = []) {
@@ -4975,7 +5036,9 @@ function getClinicalRealOrderErrorRows() {
     const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
     return { ...row, ...comparison, validationCategory: comparison.validationCategory };
   });
-  const filter = state.clinicalSupply.realOrderErrorFilter || "all";
+  const filter = state.clinicalSupply.realOrderErrorFilter || "blocking";
+  if (filter === "blocking") return rows.filter((row) => getClinicalRealOrderIssueSeverity(row) === "blocking");
+  if (filter === "warnings") return rows.filter((row) => getClinicalRealOrderIssueSeverity(row) === "warning");
   if (filter === "all") return rows.filter((row) => row.validations.length);
   if (filter === "reconciliation") return rows.filter((row) => row.validationCategory === "reconciliation");
   if (filter === "sin_pac") return rows.filter((row) => row.validationDetails.some((item) => item.message === "Codigo no existe en PAC"));
