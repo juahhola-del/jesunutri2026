@@ -1919,15 +1919,16 @@ function getClinicalImportRawPayload(cells = [], headers = []) {
 
 function getClinicalImportFinalState(row = {}, comparison = null) {
   if (row.importStatus) return row.importStatus;
+  if (isClinicalImportedRecordIgnored("monthly", row)) return "ignorado por conciliacion";
   const quantityState = getClinicalQuantityParseState(getClinicalRealQuantityRaw(row));
   if (quantityState.isEmpty) return "requiere correccion manual";
   if (!quantityState.interpretable) return "requiere correccion manual";
   if (quantityState.explicitZero && Number(quantityState.parsed || 0) === 0) return "No solicitado este mes";
-  if (comparison?.product) return "importado correctamente";
+  if (comparison?.product) return "importado al pedido";
   if (!normalizeClinicalCode(row.codigo)) return "Producto sin codigo - pendiente de conciliacion";
   if (comparison?.pacRow && !comparison.product) return "PAC pendiente de vinculo con inventario";
   if (comparison && !comparison.product) return "pendiente de conciliacion";
-  return "importado correctamente";
+  return "importado al pedido";
 }
 
 function getClinicalImportDiscardReason(row = {}, comparison = null) {
@@ -2781,7 +2782,7 @@ async function parseClinicalRealOrderWorkbook(file) {
       valor_crudo: row.cantidad ?? "",
       valor_parseado: parseClinicalNumber(row.cantidad),
       motivo_descarte: "",
-      estado_final: "importado correctamente",
+      estado_final: "importado al pedido",
       accion_posible: ""
     }));
     return { rows, diagnostics };
@@ -2821,7 +2822,7 @@ async function parseClinicalRealOrderWorkbook(file) {
     datos_crudos: row.rawData || {},
     motivo_descarte: "",
     accion_posible: "",
-    estado_final: "importado correctamente"
+    estado_final: "importado al pedido"
     })),
     ...discardedDetails
   ];
@@ -3179,7 +3180,7 @@ function renderClinicalRealImportDiagnostics() {
           conciliacion_metodo: quickReconciliation.method,
           conciliacion_unidad: quickReconciliation.unit,
           conciliacion_stock: quickReconciliation.stock,
-          motivo_descarte: ["importado correctamente", "No solicitado este mes"].includes(finalState) ? "" : getClinicalImportDiscardReason(row, comparison),
+          motivo_descarte: ["importado correctamente", "importado al pedido", "No solicitado este mes"].includes(finalState) ? "" : getClinicalImportDiscardReason(row, comparison),
           estado_final: finalState,
           accion_posible: comparison.product ? "" : (!normalizeClinicalCode(row.codigo) ? "vincular producto" : comparison.pacRow ? "vincular producto" : "crear producto")
         };
@@ -3230,7 +3231,9 @@ function renderClinicalRealImportDiagnostics() {
     elements.clinicalRealImportDiagnosticRowsBody.innerHTML = rowDetails.length
       ? rowDetails.map((row) => {
         const hasQuickInput = Boolean(row.id);
-        const quickStatus = normalizeClinicalMatchStatus(row.conciliacion_estado || "");
+        const quickStatus = hasQuickInput
+          ? normalizeClinicalMatchStatus(row.conciliacion_estado || "")
+          : (row.conciliacion_estado ? normalizeClinicalMatchStatus(row.conciliacion_estado) : "");
         const isLinked = quickStatus === "vinculado";
         const isIgnored = quickStatus === "ignorado";
         const isSuggested = quickStatus === "sugerido";
@@ -3269,8 +3272,10 @@ function renderClinicalRealImportDiagnostics() {
           <td>${escapeHtml(row.columna_cantidad_detectada || row.columna_cantidad || "-")}</td>
           <td>${escapeHtml(row.motivo_descarte || "-")}</td>
           <td>
-            <span class="clinical-status-pill ${escapeHtml(quickStatus || "pendiente")}">${escapeHtml(quickStatus || "pendiente")}</span>
-            <small class="clinical-confidence">${formatNumber(row.conciliacion_confianza || 0)}%</small>
+            ${hasQuickInput
+              ? `<span class="clinical-status-pill ${escapeHtml(quickStatus || "pendiente")}">${escapeHtml(quickStatus || "pendiente")}</span>
+                <small class="clinical-confidence">${formatNumber(row.conciliacion_confianza || 0)}%</small>`
+              : `<span class="clinical-status-pill">solo lectura</span>`}
           </td>
         </tr>
       `;
@@ -3624,6 +3629,31 @@ function normalizeClinicalMatchStatus(status = "") {
 
 function getClinicalStatusLabel(status = "") {
   return normalizeClinicalMatchStatus(status);
+}
+
+function isClinicalImportedRecordIgnored(sourceType, row = {}) {
+  const link = getClinicalLinkForImportedRecord(sourceType, row);
+  return Boolean(link?.ignored) || normalizeClinicalMatchStatus(link?.matchStatus || "") === "ignorado";
+}
+
+function getClinicalReconciliationQuantitySummary(row = {}) {
+  if (matchesClinicalSourceType(row.sourceType, "demand")) {
+    return {
+      main: formatNumber(row.totalQuantity || 0),
+      detail: `${formatNumber(row.frequency || 0)} registros`
+    };
+  }
+  if (matchesClinicalSourceType(row.sourceType, "monthly")) {
+    const raw = row.quantityRawValue ?? row.cantidadTexto ?? "";
+    const parsed = row.quantityParsedValue ?? row.cantidad ?? row.pedidoFinal ?? row.pedidoSugerido ?? 0;
+    const detail = row.monthlySource === "clinical_monthly_order_items" ? "pedido sugerido" : (raw ? `leido: ${raw}` : "pedido real");
+    return { main: formatNumber(parsed || 0), detail };
+  }
+  const monthValue = getClinicalMonthValue(row);
+  return {
+    main: formatNumber(monthValue || 0),
+    detail: `PAC anual ${formatNumber(row.cantidadAnual || 0)}`
+  };
 }
 
 function getClinicalReconciliationRows() {
@@ -4100,11 +4130,16 @@ function renderClinicalReconciliation() {
         const ignoreAttr = linkPrefix === "demand-link" ? "data-demand-link-ignore" : `data-${linkPrefix}-ignore`;
         const unlinkAttr = linkPrefix === "demand-link" ? "data-demand-link-unlink" : `data-${linkPrefix}-unlink`;
         const createAttr = linkPrefix === "demand-link" ? "data-demand-link-create" : linkPrefix === "monthly" ? "data-monthly-create" : "data-link-create-product";
+        const quantity = getClinicalReconciliationQuantitySummary(row);
         return `
           <tr class="${rowClass}">
             <td>${escapeHtml(row.sourceLabel || "PAC")}</td>
             <td>${escapeHtml(row.codigo || "-")}</td>
             <td><strong>${escapeHtml(row.producto || "-")}</strong></td>
+            <td>
+              <strong>${escapeHtml(quantity.main)}</strong>
+              <small>${escapeHtml(quantity.detail)}</small>
+            </td>
             <td>
               <div class="clinical-link-cell">
                 <input class="clinical-link-input ${hasSuggestion ? "is-suggested" : ""}" list="productSuggestions" value="${escapeHtml(productName)}" ${inputAttr}="${escapeHtml(rowId)}" placeholder="Buscar producto" title="${escapeHtml(productName || "Buscar producto de inventario")}">
@@ -4113,7 +4148,7 @@ function renderClinicalReconciliation() {
             </td>
             <td>
               <div class="clinical-row-actions">
-                ${!isIgnored ? `<button class="btn small" type="button" ${manualAttr}="${escapeHtml(rowId)}">Vincular</button>` : ""}
+                ${isLinked ? `<button class="btn small" type="button" disabled>Vinculado</button>` : !isIgnored ? `<button class="btn small" type="button" ${manualAttr}="${escapeHtml(rowId)}">Vincular</button>` : ""}
                 ${!isLinked && !isIgnored ? `<button class="btn small" type="button" ${createAttr}="${escapeHtml(rowId)}">Crear</button>` : ""}
                 ${!isLinked && !isIgnored ? `<button class="btn small" type="button" ${ignoreAttr}="${escapeHtml(rowId)}">Ignorar</button>` : ""}
                 ${isLinked || isIgnored ? `<button class="btn small" type="button" ${unlinkAttr}="${escapeHtml(rowId)}">Desvincular</button>` : ""}
@@ -4125,7 +4160,7 @@ function renderClinicalReconciliation() {
           </tr>
         `;
       }).join("")
-    : '<tr><td colspan="8" class="empty">No hay registros para este filtro.</td></tr>';
+    : '<tr><td colspan="9" class="empty">No hay registros para este filtro.</td></tr>';
 }
 
 function renderClinicalDemandReconciliation() {
@@ -4446,7 +4481,8 @@ async function handleClinicalDemandReconciliationAction(target, rowKey) {
   const row = getClinicalDemandDetectedRowByKey(rowKey);
   if (!row) return true;
   if (target.dataset.demandLinkManual) {
-    const input = elements.clinicalDemandReconcileTableBody.querySelector(`[data-demand-link-input="${CSS.escape(rowKey)}"]`);
+    const input = elements.clinicalReconcileTableBody?.querySelector(`[data-demand-link-input="${CSS.escape(rowKey)}"]`) ||
+      elements.clinicalDemandReconcileTableBody?.querySelector(`[data-demand-link-input="${CSS.escape(rowKey)}"]`);
     const product = findProductByName(input?.value || "");
     if (!product) {
       showToastError("Producto de inventario no encontrado.");
@@ -4751,6 +4787,7 @@ function getClinicalRealOrderComparison(row, allRows) {
   const pacRow = state.clinicalSupply.pacRows.find((item) => row.pacRowId && String(item.id) === String(row.pacRowId)) || resolved.pacRow || null;
   const linkedProduct = pacRow ? getClinicalLinkedProductByPacRow(pacRow) : null;
   const monthlyLink = getClinicalLinkForImportedRecord("monthly", row);
+  const monthlyIgnored = Boolean(monthlyLink?.ignored) || normalizeClinicalMatchStatus(monthlyLink?.matchStatus || "") === "ignorado";
   const monthlyProduct = monthlyLink?.ignored || normalizeClinicalMatchStatus(monthlyLink?.matchStatus) !== "vinculado" ? null : (monthlyLink?.productoId ? findProductById(monthlyLink.productoId) : null);
   const product = linkedProduct || monthlyProduct || resolved.product || (row.productoId ? findProductById(row.productoId) : null) || null;
   const orderRow = (getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows())
@@ -4765,6 +4802,37 @@ function getClinicalRealOrderComparison(row, allRows) {
   const quantityEmpty = row.quantityEmpty === true || quantityState.isEmpty;
   const quantityInterpretable = row.quantityInterpretable === false ? false : quantityState.interpretable;
   const observationDetails = [];
+
+  if (monthlyIgnored) {
+    observationDetails.push("Ignorado por conciliacion");
+    return {
+      product: null,
+      pacRow,
+      orderRow,
+      validationDetails: [],
+      validations: [],
+      validationCategory: "ok",
+      comparison: {
+        pac_monthly: pacRow ? getClinicalMonthValue(pacRow) : null,
+        suggested_order: orderRow ? Number(orderRow.pedidoSugerido || 0) : null,
+        final_order: orderRow ? Number(orderRow.pedidoFinal || 0) : null,
+        existing_product: false,
+        linked_product: false,
+        ignored: true,
+        duplicate_code: Boolean(duplicateCode),
+        duplicate_code_conflict: false,
+        duplicate_product: Boolean(duplicateProduct),
+        duplicate_product_conflict: false,
+        observations: observationDetails,
+        validation_category: "ok",
+        validation_details: [],
+        search_method: monthlyLink?.matchMethod || "ignorado",
+        search_evidence: resolved.evidence || [],
+        import_meta: getClinicalRealImportMeta(row)
+      }
+    };
+  }
+
   const duplicateCodeConflict = duplicateCode && (!pacRow || !product);
   const duplicateProductConflict = duplicateProduct && !product;
   if (duplicateCodeConflict) addClinicalRealValidation(validationDetails, "code", "Codigo PAC duplicado conflictivo");
@@ -4777,7 +4845,7 @@ function getClinicalRealOrderComparison(row, allRows) {
   if (quantityEmpty) addClinicalRealValidation(validationDetails, "quantity", "Cantidad vacia");
   if (!quantityEmpty && !quantityInterpretable) addClinicalRealValidation(validationDetails, "quantity", "Cantidad no interpretada");
   if (pacRow && !product) addClinicalRealValidation(validationDetails, "reconciliation", "PAC pendiente de vinculo con inventario");
-  if (!pacRow && !product && !monthlyLink?.ignored) addClinicalRealValidation(validationDetails, "reconciliation", rowCode ? "Codigo no existe en PAC" : "Nombre no encontrado en inventario");
+  if (!pacRow && !product) addClinicalRealValidation(validationDetails, "reconciliation", rowCode ? "Codigo no existe en PAC" : "Nombre no encontrado en inventario");
   if (!pacRow && rowCode) addClinicalRealValidation(validationDetails, "pac", "Codigo no existe en PAC");
   if (!orderRow && !pacRow) addClinicalRealValidation(validationDetails, "pac", "No existe en pedido sugerido");
   const pacMonthly = pacRow ? getClinicalMonthValue(pacRow) : 0;
@@ -5322,16 +5390,21 @@ function getClinicalExportRows(type) {
     }))
   ]
     .filter((row) => !["vinculado", "ignorado"].includes(row.status))
-    .map((row) => ({
-      fuente: row.sourceLabel || row.sourceType || "PAC",
-      codigo: row.codigo,
-      nombre_detectado: row.producto,
-      categoria: row.categoria,
-      sugerencia: row.suggestedProduct?.nombre || "",
-      estado: row.status,
-      confianza: row.confidence,
-      metodo: row.method
-    }));
+    .map((row) => {
+      const quantity = getClinicalReconciliationQuantitySummary(row);
+      return {
+        fuente: row.sourceLabel || row.sourceType || "PAC",
+        codigo: row.codigo,
+        nombre_detectado: row.producto,
+        cantidad: quantity.main,
+        detalle_cantidad: quantity.detail,
+        categoria: row.categoria,
+        sugerencia: row.suggestedProduct?.nombre || "",
+        estado: row.status,
+        confianza: row.confidence,
+        metodo: row.method
+      };
+    });
   return [];
 }
 
