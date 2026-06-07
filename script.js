@@ -7059,6 +7059,7 @@ function openEditModal(item) {
   elements.editForm.elements.lote_id.value = item.id;
   elements.editForm.elements.producto_id.value = item.productoId;
   elements.editForm.elements.cantidad_actual.value = item.cantidad;
+  elements.editForm.elements.nombre_actual.value = item.nombre || "";
   elements.editForm.elements.nombre.value = item.nombre || "";
   elements.editForm.elements.cantidad.value = item.cantidad;
   elements.editForm.elements.unidad.value = item.unidad;
@@ -7066,7 +7067,7 @@ function openEditModal(item) {
   elements.editForm.elements.fecha_vencimiento.value = item.fechaVencimiento || "";
   elements.editForm.elements.lote.value = item.lote || "";
   elements.editForm.elements.observaciones.value = item.observaciones || "";
-  elements.editForm.elements.gramos.value = "";
+  if (elements.editForm.elements.gramos) elements.editForm.elements.gramos.value = "";
   elements.editProductName.textContent = item.nombre;
   setMonthPreview(elements.editMonthPreview, item.fechaVencimiento);
   elements.editModal.hidden = false;
@@ -7567,6 +7568,7 @@ async function updateEntry(form) {
   const formData = new FormData(form);
   const loteId = formData.get("lote_id");
   const productoId = formData.get("producto_id");
+  const originalName = String(formData.get("nombre_actual") || "").trim();
   const nombre = formData.get("nombre").trim();
   const nombreNormalizado = normalize(nombre);
   const currentQuantity = Number(formData.get("cantidad_actual"));
@@ -7580,7 +7582,26 @@ async function updateEntry(form) {
   if (!nombre) throw new Error("El nombre del producto es obligatorio.");
   if (nextQuantity < 0) throw new Error("La cantidad no puede ser negativa.");
 
-  const currentProduct = findProductById(productoId);
+  let currentProduct = findProductById(productoId);
+  if (!currentProduct && !state.usingFallback) {
+    const { data, error } = await supabaseClient
+      .from("productos_insumos")
+      .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,critico,consumo_promedio_diario,favorito,activo")
+      .eq("id", productoId)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) {
+      upsertProductInLocalCatalog(data);
+      currentProduct = data;
+    }
+  }
+  if (!currentProduct && originalName) {
+    currentProduct = {
+      id: productoId,
+      nombre: originalName,
+      nombre_normalizado: normalize(originalName)
+    };
+  }
   if (!currentProduct) throw new Error("Producto no encontrado.");
 
   if (normalize(currentProduct.nombre) !== nombreNormalizado || currentProduct.nombre !== nombre) {
@@ -7589,6 +7610,16 @@ async function updateEntry(form) {
       (product.nombre_normalizado === nombreNormalizado || normalize(product.nombre) === nombreNormalizado)
     );
     if (duplicatedProduct) throw new Error(`Ya existe un producto llamado "${duplicatedProduct.nombre}".`);
+    if (!state.usingFallback) {
+      const { data: existingProduct, error: findError } = await supabaseClient
+        .from("productos_insumos")
+        .select("id,nombre")
+        .eq("nombre_normalizado", nombreNormalizado)
+        .neq("id", productoId)
+        .maybeSingle();
+      if (findError) throw findError;
+      if (existingProduct) throw new Error(`Ya existe un producto llamado "${existingProduct.nombre}".`);
+    }
 
     const { error: productError } = await supabaseClient
       .from("productos_insumos")
