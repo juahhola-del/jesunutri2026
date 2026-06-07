@@ -5628,6 +5628,24 @@ function inferClinicalDemandDate(sheets, fallbackDate, fileName = "") {
   return fallbackDate || "";
 }
 
+function getClinicalSelectedMonthDate(fileName = "", sheets = []) {
+  const inferredDate = inferClinicalDemandDate(sheets, elements.clinicalDemandDate.value, fileName);
+  const year = Number(state.clinicalSupply.pacYear);
+  const month = Number(state.clinicalSupply.monthIndex) + 1;
+  const inferredParts = String(inferredDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!inferredParts) return { date: inferredDate, inferredDate, monthAdjusted: false };
+
+  const day = Number(inferredParts[3]);
+  const selectedDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  if (!isValidIsoDate(selectedDate)) return { date: inferredDate, inferredDate, monthAdjusted: false };
+
+  return {
+    date: selectedDate,
+    inferredDate,
+    monthAdjusted: selectedDate !== inferredDate
+  };
+}
+
 function isClinicalLikelyDateOrCode(value = "") {
   const text = String(value || "").trim();
   return /\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b/.test(text) || /^\d{4,}$/.test(text);
@@ -6135,7 +6153,7 @@ async function importClinicalDemandMonthFiles(fileList) {
   if (!files.length) return;
   const diagnostics = {
     createdAt: new Date().toISOString(),
-    policy: "reemplazo al guardar",
+    policy: `mes seleccionado: ${MONTHS[state.clinicalSupply.monthIndex].label} ${state.clinicalSupply.pacYear}; reemplazo al guardar`,
     rows: []
   };
 
@@ -6152,13 +6170,36 @@ async function importClinicalDemandMonthFiles(fileList) {
     };
     try {
       const sheets = await parseClinicalDemandWorkbook(file);
-      const demandDate = inferClinicalDemandDate(sheets, elements.clinicalDemandDate.value, file.name);
+      const dateContext = getClinicalSelectedMonthDate(file.name, sheets);
+      const demandDate = dateContext.date;
       const parsed = extractClinicalDemand(sheets, {
         file,
         demandDate,
         observations: elements.clinicalDemandNotes.value
       });
+      if (dateContext.monthAdjusted) {
+        parsed.errors.push({
+          id: `demand-error-${Date.now()}-${parsed.errors.length}`,
+          demandId: parsed.demand.id,
+          fileName: file.name,
+          demandDate,
+          sheetName: "",
+          rowNumber: null,
+          cellRef: "",
+          warningType: "fecha ajustada al mes seleccionado",
+          severity: "baja",
+          message: `Fecha interpretada como ${dateContext.inferredDate}, ajustada a ${demandDate} por el mes seleccionado.`,
+          suggestedAction: "Confirmar que el mes seleccionado corresponde al lote importado.",
+          status: "pendiente",
+          reviewedAt: "",
+          reviewedBy: ""
+        });
+        parsed.demand.warningCount = parsed.errors.length;
+        if (parsed.demand.status === "cargada") parsed.demand.status = "con errores";
+      }
       rowDiagnostic.date = demandDate;
+      rowDiagnostic.inferredDate = dateContext.inferredDate;
+      rowDiagnostic.monthAdjusted = dateContext.monthAdjusted;
       const duplicate = getClinicalDemandDuplicate(parsed.demand.demandDate);
       if (duplicate) {
         removeClinicalDemandLocal(duplicate.id);
@@ -6598,7 +6639,7 @@ function renderClinicalDemandBulkDiagnostics() {
       <tr class="${row.status === "error" ? "row-invalid" : ""}">
         <td><strong>${escapeHtml(row.file || "-")}</strong></td>
         <td>${row.date ? formatDisplayDate(row.date) : "-"}</td>
-        <td>${row.status === "con advertencias" ? `<button class="btn small" type="button" data-demand-diagnostic-file="${escapeHtml(row.file || "")}">con advertencias</button>` : escapeHtml(row.status || "-")}</td>
+        <td>${row.status === "con advertencias" ? `<button class="btn small" type="button" data-demand-diagnostic-file="${escapeHtml(row.file || "")}">con advertencias</button>` : escapeHtml(row.monthAdjusted ? `${row.status || "-"}; ajustado desde ${row.inferredDate}` : row.status || "-")}</td>
         <td>${formatNumber(row.patients || 0)}</td>
         <td>${formatNumber(row.diets || 0)}</td>
         <td>${formatNumber(row.enterals || 0)}</td>
