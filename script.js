@@ -29,6 +29,34 @@ const MONTHS = [
   { label: "Noviembre", className: "month-11", color: "#6B3E00" },
   { label: "Diciembre", className: "month-12", color: "#BFC7D5" }
 ];
+const CLINICAL_MONTH_NAME_ALIASES = {
+  enero: 0,
+  ene: 0,
+  febrero: 1,
+  feb: 1,
+  marzo: 2,
+  mar: 2,
+  abril: 3,
+  abr: 3,
+  mayo: 4,
+  may: 4,
+  junio: 5,
+  jun: 5,
+  julio: 6,
+  jul: 6,
+  agosto: 7,
+  ago: 7,
+  septiembre: 8,
+  setiembre: 8,
+  sep: 8,
+  sept: 8,
+  octubre: 9,
+  oct: 9,
+  noviembre: 10,
+  nov: 10,
+  diciembre: 11,
+  dic: 11
+};
 const CLINICAL_SUPPLY_STORAGE_KEY = "jesunutri_clinical_supply_v1";
 const CLINICAL_MONTH_FIELDS = [
   "enero",
@@ -1651,16 +1679,16 @@ async function loadClinicalCurrentOrderFromSupabase(pacYearId) {
   state.clinicalSupply.currentOrderId = order?.id || null;
   state.clinicalSupply.orderRows = state.clinicalSupply.orderRows.filter((row) => row.orderKey !== orderKey);
 
-  if (!order) return;
+  if (order) {
+    const { data: items, error: itemError } = await supabaseClient
+      .from("clinical_monthly_order_items")
+      .select("*")
+      .eq("monthly_order_id", order.id)
+      .order("created_at", { ascending: true });
 
-  const { data: items, error: itemError } = await supabaseClient
-    .from("clinical_monthly_order_items")
-    .select("*")
-    .eq("monthly_order_id", order.id)
-    .order("created_at", { ascending: true });
-
-  if (itemError) throw itemError;
-  state.clinicalSupply.orderRows.push(...(items || []).map((item) => mapClinicalOrderItemFromDb(item, order)));
+    if (itemError) throw itemError;
+    state.clinicalSupply.orderRows.push(...(items || []).map((item) => mapClinicalOrderItemFromDb(item, order)));
+  }
 
   const { data: importRows, error: importError } = await supabaseClient
     .from("clinical_real_order_imports")
@@ -1844,6 +1872,22 @@ function getClinicalFieldName(header) {
   const monthIndex = CLINICAL_MONTH_FIELDS.findIndex((month) => clean === month || clean.startsWith(month.slice(0, 3)));
   if (monthIndex >= 0) return CLINICAL_MONTH_FIELDS[monthIndex];
   return map[clean] || clean.replace(/\s+(.)/g, (_, letter) => letter.toUpperCase());
+}
+
+function inferClinicalMonthYearFromFileName(fileName = "") {
+  const normalized = String(fileName || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_-]+/g, " ");
+  const monthMatch = Object.entries(CLINICAL_MONTH_NAME_ALIASES)
+    .sort((a, b) => b[0].length - a[0].length)
+    .find(([name]) => new RegExp(`\\b${name}\\b`).test(normalized));
+  const yearMatch = normalized.match(/\b(20\d{2}|19\d{2})\b/);
+  return {
+    monthIndex: monthMatch ? monthMatch[1] : null,
+    year: yearMatch ? Number(yearMatch[1]) : null
+  };
 }
 
 function scoreClinicalHeaderRow(row = []) {
@@ -6711,6 +6755,17 @@ function normalizeClinicalRealOrderRow(rawRow, index) {
 }
 
 async function importClinicalRealOrderFile(file) {
+  const inferredPeriod = inferClinicalMonthYearFromFileName(file?.name || "");
+  let periodNotice = "";
+  if (inferredPeriod.year && inferredPeriod.year !== Number(state.clinicalSupply.pacYear)) {
+    state.clinicalSupply.pacYear = inferredPeriod.year;
+    periodNotice = `Detectado ${inferredPeriod.year}`;
+  }
+  if (Number.isInteger(inferredPeriod.monthIndex) && inferredPeriod.monthIndex !== Number(state.clinicalSupply.monthIndex)) {
+    state.clinicalSupply.monthIndex = inferredPeriod.monthIndex;
+    const label = `${MONTHS[inferredPeriod.monthIndex]?.label || "mes detectado"} ${state.clinicalSupply.pacYear}`;
+    periodNotice = `Detectado ${label} desde el nombre del archivo`;
+  }
   const parsed = await parseClinicalRealOrderWorkbook(file);
   state.clinicalSupply.realImportDiagnostics = parsed.diagnostics;
   state.clinicalSupply.realOrderRows = parsed.rows
@@ -6734,7 +6789,7 @@ async function importClinicalRealOrderFile(file) {
   };
   saveClinicalSupplyState();
   renderClinicalSupply();
-  showToastSuccess("Pedido proveedor reconocido. Revisa/edita y luego guarda.");
+  showToastSuccess(`${periodNotice ? `${periodNotice}. ` : ""}Pedido proveedor reconocido. Revisa/edita y luego guarda.`);
 }
 
 async function savePendingClinicalRealOrderImport() {
