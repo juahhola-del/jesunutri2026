@@ -819,6 +819,13 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   margin-top: 0;
 }
 
+.clinical-note {
+  margin: 10px 0 14px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
 .clinical-import-diagnostic {
   display: grid;
   gap: 10px;

@@ -241,7 +241,7 @@
             <div>
               <p class="eyebrow">Nuevo modulo</p>
               <h2>Abastecimiento clinico</h2>
-              <p>PAC anual, pedido mensual, quiebres, presupuesto y reportes usando inventario actual.</p>
+              <p>PAC anual, pedidos a proveedor, quiebres, presupuesto y reportes usando inventario actual real.</p>
             </div>
             <div class="clinical-controls">
               <label>
@@ -257,8 +257,8 @@
 
           <div class="clinical-tabs" role="tablist" aria-label="Abastecimiento clinico">
             <button class="clinical-tab active" type="button" data-clinical-tab="pac">PAC Anual</button>
-            <button class="clinical-tab" type="button" data-clinical-tab="pedido">Pedido Mensual</button>
-            <button class="clinical-tab" type="button" data-clinical-tab="quiebres">Proyeccion de Quiebres</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="pedido">Pedido Proveedor</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="quiebres">Escenario de Quiebres</button>
             <button class="clinical-tab" type="button" data-clinical-tab="presupuesto">Presupuesto</button>
             <button class="clinical-tab" type="button" data-clinical-tab="conciliacion">Conciliacion</button>
             <button class="clinical-tab" type="button" data-clinical-tab="demanda">Demanda Diaria</button>
@@ -323,7 +323,7 @@
               <button class="btn" type="button" id="clinicalExportOrderBtn">Exportar pedido</button>
               <button class="btn" type="button" data-clinical-tab="conciliacion">Ir a conciliacion</button>
               <label class="btn file-import-btn">
-                Importar pedido real
+                Importar pedido proveedor
                 <input id="clinicalRealOrderFile" type="file" accept=".xlsx,.xls,.csv,.txt" hidden>
               </label>
               <button class="btn" type="button" data-clinical-export="pedido_real_errores">Exportar revision</button>
@@ -336,10 +336,11 @@
                 <option value="duplicados">Duplicados</option>
                 <option value="warnings">Avisos PAC/pedido</option>
               </select>
-              <button class="btn" type="button" id="clinicalRevalidateRealOrderBtn">Revalidar pedido real</button>
-              <button class="btn primary" type="button" id="clinicalSaveRealImportBtn">Guardar pedido real reconocido</button>
+              <button class="btn" type="button" id="clinicalRevalidateRealOrderBtn">Revalidar pedido proveedor</button>
+              <button class="btn primary" type="button" id="clinicalSaveRealImportBtn">Guardar pedido proveedor reconocido</button>
               <button class="btn" type="button" id="clinicalRegenerateWithLinksBtn">Regenerar usando conciliacion</button>
             </div>
+            <p class="clinical-note">Los pedidos mensuales/proveedor registran decisiones de compra. No modifican stock: el stock real se actualiza con Ingreso masivo, lotes y movimientos de inventario.</p>
             <div class="clinical-summary-grid compact" id="clinicalRealOrderWorkSummary"></div>
             <section class="clinical-import-diagnostic" id="clinicalRealImportDiagnostic" hidden>
               <div class="clinical-diagnostic-header">
@@ -460,10 +461,10 @@
                   <tr>
                     <th>Producto</th>
                     <th>Stock actual</th>
-                    <th>Pedido final</th>
+                    <th>Pedido proveedor</th>
                     <th>Consumo diario</th>
-                    <th>Dias cobertura</th>
-                    <th>Fecha quiebre</th>
+                    <th>Cobertura si llega</th>
+                    <th>Quiebre si llega</th>
                     <th>Critico</th>
                     <th>Reemplazable</th>
                     <th>Semaforo</th>
@@ -500,7 +501,7 @@
               <select id="clinicalReconcileMode" class="clinical-select">
                 <option value="all">Todos</option>
                 <option value="pac">PAC</option>
-                <option value="monthly">Pedido mensual</option>
+                <option value="monthly">Pedido proveedor</option>
                 <option value="demand">Demanda diaria</option>
               </select>
               <select id="clinicalReconcileFilter" class="clinical-select">
@@ -513,7 +514,7 @@
                 <option value="inconsistencies">Inconsistencias PAC</option>
               </select>
               <button class="btn" type="button" id="clinicalRevalidatePacBtn">Revalidar PAC</button>
-              <button class="btn" type="button" id="clinicalRevalidateMonthlyBtn">Revalidar pedido mensual</button>
+              <button class="btn" type="button" id="clinicalRevalidateMonthlyBtn">Revalidar pedido proveedor</button>
               <button class="btn" type="button" id="clinicalRevalidateDemandBtn">Revalidar demanda diaria</button>
               <button class="btn" type="button" id="clinicalRevalidateAllBtn">Revalidar todo</button>
               <button class="btn primary" type="button" id="clinicalAcceptHighConfidenceBtn">Vincular sugerencias</button>
@@ -734,7 +735,7 @@
           <section class="clinical-view" id="clinicalViewReportes">
             <div class="clinical-report-grid">
               <button class="btn" type="button" data-clinical-export="pac">Exportar PAC anual</button>
-              <button class="btn" type="button" data-clinical-export="pedido">Exportar pedido mensual</button>
+              <button class="btn" type="button" data-clinical-export="pedido">Exportar pedido proveedor</button>
               <button class="btn" type="button" data-clinical-export="quiebres">Exportar quiebres</button>
               <button class="btn" type="button" data-clinical-export="criticos">Exportar productos criticos</button>
               <button class="btn" type="button" data-clinical-export="bajo_stock">Exportar bajo stock</button>

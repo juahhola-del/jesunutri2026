@@ -2546,7 +2546,7 @@ function parseClinicalCentralSheet(sheetName, matrix = []) {
       pushClinicalDiscardedImportRow(sheetDiagnostic, sheetName, cells, {
         excelRowNumber: rowIndex + 1,
         headers: [],
-        reason: "Hoja no reconocida para importacion de pedido mensual",
+        reason: "Hoja no reconocida para importacion de pedido proveedor",
         action: "ignorar definitivamente",
         status: "descartado con motivo visible"
       });
@@ -3001,7 +3001,7 @@ function buildClinicalOrderRows() {
       observationParts.push("Sugerido sobre PAC mensual");
     }
     if (real) {
-      observationParts.push(`Pedido real: ${formatNumber(real.cantidad)}`);
+      observationParts.push(`Pedido proveedor: ${formatNumber(real.cantidad)}`);
       const realQuantityState = getClinicalQuantityParseState(getClinicalRealQuantityRaw(real));
       const realQuantity = Number(real.cantidad ?? 0);
       if (realQuantityState.interpretable && realQuantity === 0) observationParts.push("No solicitado este mes");
@@ -3045,19 +3045,19 @@ function getClinicalBreakRows() {
     const fechaQuiebre = diasCobertura == null ? "" : addClinicalDays(diasCobertura);
     const llegaFinMes = diasCobertura == null || new Date(`${fechaQuiebre}T00:00:00`) >= monthEnd;
     let semaforo = "verde";
-    let observacion = "Llega a fin de mes.";
+    let observacion = "Si llega el pedido proveedor, llega a fin de mes.";
     const reemplazable = !Boolean(product?.critico);
 
     if (diasCobertura != null && !llegaFinMes) {
       semaforo = "rojo";
-      observacion = "No llega a fin de mes.";
+      observacion = "Aunque llegue el pedido proveedor, no llega a fin de mes.";
     } else if (diasCobertura != null && diasCobertura <= getClinicalMonthDays() + 2) {
       semaforo = "amarillo";
-      observacion = "Llega justo.";
+      observacion = "Si llega el pedido proveedor, llega justo.";
     }
     if (product?.critico && !reemplazable && semaforo === "rojo") {
       semaforo = "negro";
-      observacion = "Critico no reemplazable con quiebre proyectado.";
+      observacion = "Critico no reemplazable con quiebre proyectado aun si llega el pedido.";
     }
 
     return {
@@ -3161,7 +3161,7 @@ function renderClinicalRealImportDiagnostics() {
   if (elements.clinicalSaveRealImportBtn) {
     const pending = Boolean(state.clinicalSupply.pendingRealOrderImport);
     elements.clinicalSaveRealImportBtn.disabled = !pending;
-    elements.clinicalSaveRealImportBtn.textContent = pending ? "Guardar pedido real reconocido" : "Pedido real guardado";
+    elements.clinicalSaveRealImportBtn.textContent = pending ? "Guardar pedido proveedor reconocido" : "Pedido proveedor guardado";
   }
   elements.clinicalRealImportDiagnostic.hidden = !diagnostics;
   if (!diagnostics) return;
@@ -3372,7 +3372,7 @@ function renderClinicalOrder() {
         <td>${escapeHtml(row.observacion || "-")}</td>
       </tr>
     `).join("")
-    : '<tr><td colspan="14" class="empty">Carga un PAC para generar el pedido mensual.</td></tr>';
+    : '<tr><td colspan="14" class="empty">Carga un PAC para generar el pedido proveedor sugerido.</td></tr>';
 }
 
 function renderClinicalRealOrderErrors() {
@@ -3387,10 +3387,10 @@ function renderClinicalRealOrderErrors() {
     const savedLabel = pendingImport
       ? `Pendiente de guardar: ${currentImport.filename || "pedido reconocido"}`
       : state.clinicalSupply.lastRealImportId
-        ? "Pedido real guardado"
-        : "Sin pedido real guardado";
+        ? "Pedido proveedor guardado"
+        : "Sin pedido proveedor guardado";
     renderClinicalSummary(elements.clinicalRealOrderWorkSummary, [
-      { title: "Pedido real", caption: savedLabel, value: formatNumber(workSummary.rows.length) },
+      { title: "Pedido proveedor", caption: savedLabel, value: formatNumber(workSummary.rows.length) },
       { title: "Bloqueantes", caption: "Cantidad o vinculo", value: formatNumber(workSummary.blocking) },
       { title: "Avisos", caption: "PAC / sugerido", value: formatNumber(workSummary.warnings) },
       { title: "Memoria aplicada", caption: "Vinculados + ignorados", value: formatNumber(workSummary.linked + workSummary.ignored) }
@@ -3473,15 +3473,15 @@ async function handleClinicalRealOrderRowAction(target) {
     state.clinicalSupply.reconcileFilter = "pendientes";
     saveClinicalSupplyState();
     renderClinicalSupply();
-    showToastSuccess("Fila enviada a conciliacion de pedido mensual.");
+    showToastSuccess("Fila enviada a conciliacion de pedido proveedor.");
     return true;
   }
   if (target.dataset.realOrderCreate) {
-    const product = await createInventoryProductFromPacRow({ producto: row.producto || row.codigo || "Producto pedido mensual", codigo: normalizeClinicalCode(row.codigo), categoria: row.categoria });
-    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", 100, "creado desde pedido mensual"));
+    const product = await createInventoryProductFromPacRow({ producto: row.producto || row.codigo || "Producto pedido proveedor", codigo: normalizeClinicalCode(row.codigo), categoria: row.categoria });
+    await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", 100, "creado desde pedido proveedor"));
     await refreshInventory();
     await revalidateClinicalRealOrder({ silent: true });
-    showToastSuccess("Producto creado y vinculado al pedido mensual.");
+    showToastSuccess("Producto creado y vinculado al pedido proveedor.");
     return true;
   }
   if (target.dataset.realOrderDelete) {
@@ -3502,7 +3502,7 @@ async function handleClinicalRealOrderRowAction(target) {
     });
     saveClinicalSupplyState();
     renderClinicalSupply();
-    showToastSuccess("Fila borrada del pedido mensual reconocido.");
+    showToastSuccess("Fila borrada del pedido proveedor reconocido.");
     return true;
   }
   if (target.dataset.realOrderIgnore) {
@@ -3547,7 +3547,7 @@ async function updateClinicalRealOrderQuantity(rowId, value) {
   }
 
   renderClinicalSupply();
-  showToastSuccess("Cantidad del pedido real actualizada.");
+  showToastSuccess("Cantidad del pedido proveedor actualizada.");
 }
 
 function updateClinicalDemandInlineField(demandId, field, value) {
@@ -3585,7 +3585,7 @@ function renderClinicalBreaks() {
     { title: "Productos evaluados", caption: "Mes activo", value: formatNumber(rows.length) },
     { title: "Riesgo alto", caption: "Rojo o negro", value: formatNumber(highRisk) },
     { title: "Criticos", caption: "No pueden faltar", value: formatNumber(rows.filter((row) => row.critico).length) },
-    { title: "Llega a fin de mes", caption: "Semaforo verde", value: formatNumber(rows.filter((row) => row.semaforo === "verde").length) }
+    { title: "Llega si arriba pedido", caption: "Escenario proveedor", value: formatNumber(rows.filter((row) => row.semaforo === "verde").length) }
   ]);
 
   elements.clinicalBreakTableBody.innerHTML = rows.length
@@ -3603,7 +3603,7 @@ function renderClinicalBreaks() {
         <td>${escapeHtml(row.observacionQuiebre)}</td>
       </tr>
     `).join("")
-    : '<tr><td colspan="10" class="empty">Genera un pedido mensual para proyectar quiebres.</td></tr>';
+    : '<tr><td colspan="10" class="empty">Genera un pedido proveedor para simular quiebres si llega completo.</td></tr>';
 }
 
 function renderClinicalBudget() {
@@ -3612,7 +3612,7 @@ function renderClinicalBudget() {
   const approved = Number(state.clinicalSupply.budgetApproved || 0);
   renderClinicalSummary(elements.clinicalBudgetSummary, [
     { title: "Aprobado anual", caption: "PAC", value: formatCurrency(approved) },
-    { title: "Usado", caption: "Pedido mensual", value: formatCurrency(used) },
+    { title: "Usado", caption: "Pedido proveedor", value: formatCurrency(used) },
     { title: "Disponible", caption: "Aprobado - pedido", value: formatCurrency(approved - used) },
     { title: "Sobre PAC", caption: "Productos", value: formatNumber(rows.filter((row) => row.diferenciaPac > 0.01).length) }
   ]);
@@ -3629,7 +3629,7 @@ function renderClinicalBudget() {
         <td>${escapeHtml(row.estadoPresupuesto)}</td>
       </tr>
     `).join("")
-    : '<tr><td colspan="7" class="empty">Sin pedido mensual valorizado.</td></tr>';
+    : '<tr><td colspan="7" class="empty">Sin pedido proveedor valorizado.</td></tr>';
 }
 
 function getClinicalPacInconsistencies() {
@@ -3681,7 +3681,7 @@ function getClinicalReconciliationQuantitySummary(row = {}) {
   if (matchesClinicalSourceType(row.sourceType, "monthly")) {
     const raw = row.quantityRawValue ?? row.cantidadTexto ?? "";
     const parsed = row.quantityParsedValue ?? row.cantidad ?? row.pedidoFinal ?? row.pedidoSugerido ?? 0;
-    const detail = row.monthlySource === "clinical_monthly_order_items" ? "pedido sugerido" : (raw ? `leido: ${raw}` : "pedido real");
+    const detail = row.monthlySource === "clinical_monthly_order_items" ? "pedido sugerido" : (raw ? `leido: ${raw}` : "pedido proveedor");
     return { main: formatNumber(parsed || 0), detail };
   }
   const monthValue = getClinicalMonthValue(row);
@@ -3813,7 +3813,7 @@ function getClinicalMonthlyReconciliationRows() {
     return {
       ...row,
       sourceType: "monthly",
-      sourceLabel: "Pedido mensual",
+      sourceLabel: "Pedido proveedor",
       monthlySource: row.monthlySource || "clinical_real_order_items",
       codigo: normalizeClinicalCode(row.codigo),
       producto: row.producto || "",
@@ -4467,21 +4467,21 @@ async function handleClinicalMonthlyReconciliationAction(target, rowKey) {
     await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", confidence, method));
     await revalidateClinicalRealOrder({ silent: true });
     renderClinicalSupply();
-    showToastSuccess("Producto de pedido mensual vinculado.");
+    showToastSuccess("Producto de pedido proveedor vinculado.");
     return true;
   }
   if (target.dataset.monthlyUnlink) {
     await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, null, "pendiente", 0, "desvinculado"));
     await revalidateClinicalRealOrder({ silent: true });
     renderClinicalSupply();
-    showToastSuccess("Producto de pedido mensual desvinculado.");
+    showToastSuccess("Producto de pedido proveedor desvinculado.");
     return true;
   }
   if (target.dataset.monthlyIgnore) {
     await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, null, "ignorado", 0, "manual"));
     await revalidateClinicalRealOrder({ silent: true });
     renderClinicalSupply();
-    showToastSuccess("Producto de pedido mensual ignorado.");
+    showToastSuccess("Producto de pedido proveedor ignorado.");
     return true;
   }
   if (target.dataset.monthlyCreate) {
@@ -4489,15 +4489,15 @@ async function handleClinicalMonthlyReconciliationAction(target, rowKey) {
     target.disabled = true;
     target.textContent = "Creando...";
     try {
-      const product = await createInventoryProductFromPacRow({ producto: row.producto || row.codigo || "Producto pedido mensual", codigo: normalizeClinicalCode(row.codigo), categoria: row.categoria });
-      await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", 100, "creado desde pedido mensual"));
+      const product = await createInventoryProductFromPacRow({ producto: row.producto || row.codigo || "Producto pedido proveedor", codigo: normalizeClinicalCode(row.codigo), categoria: row.categoria });
+      await persistClinicalProductLink(buildClinicalImportedProductLink("monthly", row, product, "vinculado", 100, "creado desde pedido proveedor"));
       try {
-        await withTimeout(revalidateClinicalRealOrder({ silent: true }), 12000, "Producto creado, pero la revalidacion del pedido mensual tardo demasiado");
+        await withTimeout(revalidateClinicalRealOrder({ silent: true }), 12000, "Producto creado, pero la revalidacion del pedido proveedor tardo demasiado");
       } catch (revalidateError) {
-        console.warn("Pedido mensual creado/vinculado; revalidacion pendiente", revalidateError);
+        console.warn("Pedido proveedor creado/vinculado; revalidacion pendiente", revalidateError);
       }
       renderClinicalSupply();
-      showToastSuccess("Producto de pedido mensual creado y vinculado.");
+      showToastSuccess("Producto de pedido proveedor creado y vinculado.");
     } finally {
       target.disabled = false;
       target.textContent = originalText;
@@ -5049,7 +5049,7 @@ function getClinicalRealOrderErrorRows() {
 
 async function revalidateClinicalRealOrder({ silent = false } = {}) {
   if (!state.clinicalSupply.realOrderRows.length) {
-    if (!silent) showToastError("No hay pedido real importado para revalidar.");
+    if (!silent) showToastError("No hay pedido proveedor importado para revalidar.");
     return;
   }
   commitClinicalCurrentOrder(buildClinicalOrderRows());
@@ -5085,7 +5085,7 @@ async function revalidateClinicalRealOrder({ silent = false } = {}) {
   }
 
   renderClinicalSupply();
-  if (!silent) showToastSuccess("Pedido real revalidado.");
+  if (!silent) showToastSuccess("Pedido proveedor revalidado.");
 }
 
 async function ensureClinicalMonthlyOrderLinksFromRows(rows = state.clinicalSupply.realOrderRows) {
@@ -5285,7 +5285,7 @@ async function generateClinicalOrder() {
     showToastError("Pedido guardado localmente; Supabase no disponible.");
   }
   renderClinicalSupply();
-  showToastSuccess("Pedido mensual generado.");
+  showToastSuccess("Pedido proveedor sugerido generado.");
 }
 
 async function updateClinicalFinalOrder(pacRowId, value) {
@@ -6734,12 +6734,12 @@ async function importClinicalRealOrderFile(file) {
   };
   saveClinicalSupplyState();
   renderClinicalSupply();
-  showToastSuccess("Pedido real reconocido. Revisa/edita y luego guarda.");
+  showToastSuccess("Pedido proveedor reconocido. Revisa/edita y luego guarda.");
 }
 
 async function savePendingClinicalRealOrderImport() {
   if (!state.clinicalSupply.realOrderRows.length) {
-    showToastError("No hay pedido real reconocido para guardar.");
+    showToastError("No hay pedido proveedor reconocido para guardar.");
     return;
   }
   await ensureClinicalMonthlyOrderLinksFromRows(state.clinicalSupply.realOrderRows);
@@ -6749,10 +6749,10 @@ async function savePendingClinicalRealOrderImport() {
     state.clinicalSupply.pendingRealOrderImport = null;
     saveClinicalSupplyState();
     renderClinicalSupply();
-    showToastSuccess("Pedido real guardado en Supabase.");
+    showToastSuccess("Pedido proveedor guardado en Supabase.");
   } catch (error) {
     setClinicalSupabaseReady(false);
-    console.warn("Pedido real pendiente no guardado en Supabase", error);
+    console.warn("Pedido proveedor pendiente no guardado en Supabase", error);
     showToastError("No se pudo guardar en Supabase. El pedido reconocido queda pendiente.");
   }
 }
@@ -9410,7 +9410,7 @@ elements.clinicalRealOrderFile.addEventListener("change", async (event) => {
   try {
     await importClinicalRealOrderFile(event.target.files?.[0]);
   } catch (error) {
-    showError("No se pudo importar pedido real", error);
+    showError("No se pudo importar pedido proveedor", error);
   } finally {
     event.target.value = "";
   }
@@ -9423,7 +9423,7 @@ elements.clinicalRealOrderErrorFilter?.addEventListener("change", (event) => {
 elements.clinicalRealOrderErrorTableBody?.addEventListener("change", (event) => {
   const rowId = event.target.dataset.realOrderQuantity;
   if (!rowId) return;
-  updateClinicalRealOrderQuantity(rowId, event.target.value).catch((error) => showError("No se pudo actualizar cantidad del pedido real", error));
+  updateClinicalRealOrderQuantity(rowId, event.target.value).catch((error) => showError("No se pudo actualizar cantidad del pedido proveedor", error));
 });
 elements.clinicalRealOrderErrorTableBody?.addEventListener("click", (event) => {
   handleClinicalRealOrderRowAction(event.target).catch((error) => showError("No se pudo aplicar accion sobre la fila", error));
@@ -9431,7 +9431,7 @@ elements.clinicalRealOrderErrorTableBody?.addEventListener("click", (event) => {
 elements.clinicalRealImportDiagnosticRowsBody?.addEventListener("change", (event) => {
   const rowId = event.target.dataset.realOrderQuantity;
   if (!rowId) return;
-  updateClinicalRealOrderQuantity(rowId, event.target.value).catch((error) => showError("No se pudo actualizar cantidad del pedido real", error));
+  updateClinicalRealOrderQuantity(rowId, event.target.value).catch((error) => showError("No se pudo actualizar cantidad del pedido proveedor", error));
 });
 elements.clinicalRealImportDiagnosticRowsBody?.addEventListener("click", (event) => {
   handleClinicalRealOrderRowAction(event.target).catch((error) => showError("No se pudo aplicar accion sobre la fila", error));
@@ -9440,17 +9440,17 @@ elements.clinicalRevalidateRealOrderBtn?.addEventListener("click", async () => {
   try {
     await revalidateClinicalRealOrder();
   } catch (error) {
-    showError("No se pudo revalidar pedido real", error);
+    showError("No se pudo revalidar pedido proveedor", error);
   }
 });
 elements.clinicalSaveRealImportBtn?.addEventListener("click", () => {
-  savePendingClinicalRealOrderImport().catch((error) => showError("No se pudo guardar pedido real reconocido", error));
+  savePendingClinicalRealOrderImport().catch((error) => showError("No se pudo guardar pedido proveedor reconocido", error));
 });
 elements.clinicalRevalidatePacBtn?.addEventListener("click", () => {
   revalidateClinicalPac().catch((error) => showError("No se pudo revalidar PAC", error));
 });
 elements.clinicalRevalidateMonthlyBtn?.addEventListener("click", () => {
-  revalidateClinicalRealOrder().catch((error) => showError("No se pudo revalidar pedido mensual", error));
+  revalidateClinicalRealOrder().catch((error) => showError("No se pudo revalidar pedido proveedor", error));
 });
 elements.clinicalRevalidateDemandBtn?.addEventListener("click", () => {
   revalidateClinicalDemandLinks().catch((error) => showError("No se pudo revalidar demanda diaria", error));
@@ -9592,7 +9592,7 @@ elements.clinicalGenerateOrderBtn.addEventListener("click", async () => {
   try {
     await generateClinicalOrder();
   } catch (error) {
-    showError("No se pudo generar pedido mensual", error);
+    showError("No se pudo generar pedido proveedor", error);
   }
 });
 elements.clinicalSaveOrderBtn.addEventListener("click", async () => {
