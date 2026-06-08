@@ -2983,16 +2983,16 @@ function getClinicalPacValidations() {
   });
 
   return rows.map((row) => {
-    const errors = [];
+    const notices = [];
     const monthlySum = CLINICAL_MONTH_FIELDS.reduce((sum, field) => sum + Number(row[field] || 0), 0);
     const expectedTotal = Number(row.cantidadAnual || 0) * Number(row.precioUnitario || 0);
-    if (row.codigo && codeCount.get(row.codigo) > 1) errors.push("Codigo duplicado");
-    if (row.producto && productCount.get(normalize(row.producto)) > 1) errors.push("Producto duplicado");
-    if (!getClinicalProductByPacRow(row)) errors.push("Producto PAC no existe en inventario");
-    if (Math.abs(monthlySum - Number(row.cantidadAnual || 0)) > 0.01) errors.push("Cantidad anual distinta a suma mensual");
-    if (Math.abs(expectedTotal - Number(row.totalValorizado || 0)) > 1) errors.push("Total valorizado incorrecto");
-    if (!Number(row.precioUnitario || 0)) errors.push("Precio vacio");
-    return { rowId: row.id, errors };
+    if (row.codigo && codeCount.get(row.codigo) > 1) notices.push("Codigo repetido en PAC");
+    if (row.producto && productCount.get(normalize(row.producto)) > 1) notices.push("Producto repetido en PAC");
+    if (!getClinicalProductByPacRow(row)) notices.push("Referencia PAC sin vinculo con inventario");
+    if (Math.abs(monthlySum - Number(row.cantidadAnual || 0)) > 0.01) notices.push("Anual distinto a suma mensual del PAC");
+    if (Math.abs(expectedTotal - Number(row.totalValorizado || 0)) > 1) notices.push("Valorizacion PAC no calza");
+    if (!Number(row.precioUnitario || 0)) notices.push("Precio referencial vacio");
+    return { rowId: row.id, errors: notices, notices };
   });
 }
 
@@ -3350,7 +3350,7 @@ function renderClinicalPac() {
   const validationMap = new Map(validations.map((item) => [item.rowId, item.errors]));
   const totalPac = rows.reduce((sum, row) => sum + Number(row.totalValorizado || 0), 0);
   const monthTotal = rows.reduce((sum, row) => sum + getClinicalMonthValue(row) * Number(row.precioUnitario || 0), 0);
-  const errors = validations.flatMap((item) => item.errors);
+  const notices = validations.flatMap((item) => item.errors);
 
   renderClinicalSummary(elements.clinicalPacSummary, [
     { title: "Productos PAC", caption: "Filas cargadas", value: formatNumber(rows.length) },
@@ -3359,16 +3359,16 @@ function renderClinicalPac() {
     { title: "Diferencia presupuesto", caption: "Solicitado - aprobado", value: formatCurrency(Number(state.clinicalSupply.budgetRequested || 0) - Number(state.clinicalSupply.budgetApproved || 0)) }
   ]);
 
-  elements.clinicalPacValidation.hidden = !errors.length;
-  elements.clinicalPacValidation.innerHTML = errors.length
-    ? [...new Set(errors)].map((error) => `<div>${escapeHtml(error)}</div>`).join("")
+  elements.clinicalPacValidation.hidden = !notices.length;
+  elements.clinicalPacValidation.innerHTML = notices.length
+    ? [...new Set(notices)].map((notice) => `<div>${escapeHtml(notice)}</div>`).join("")
     : "";
 
   elements.clinicalPacTableBody.innerHTML = rows.length
     ? rows.map((row) => {
-        const rowErrors = validationMap.get(row.id) || [];
+        const rowNotices = validationMap.get(row.id) || [];
         return `
-          <tr class="${rowErrors.length ? "row-invalid" : ""}">
+          <tr>
             <td>${escapeHtml(row.codigo || "-")}</td>
             <td><strong>${escapeHtml(row.producto || "-")}</strong></td>
             <td>${escapeHtml(row.categoria || "-")}</td>
@@ -3376,7 +3376,7 @@ function renderClinicalPac() {
             <td>${formatNumber(getClinicalMonthValue(row))}</td>
             <td>${formatCurrency(row.precioUnitario)}</td>
             <td>${formatCurrency(row.totalValorizado)}</td>
-            <td>${rowErrors.length ? escapeHtml(rowErrors.join(". ")) : "OK"}</td>
+            <td>${rowNotices.length ? escapeHtml(rowNotices.join(". ")) : "Sin aviso"}</td>
           </tr>
         `;
       }).join("")
@@ -9406,6 +9406,30 @@ elements.operatorProductForm.elements.nombre.addEventListener("input", () => {
   });
 });
 
+function setupCollapsiblePanels() {
+  document.querySelectorAll("[data-collapsible-panel]").forEach((panel) => {
+    const heading = panel.querySelector(".section-heading");
+    if (!heading || heading.querySelector("[data-panel-toggle]")) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn small panel-toggle-btn";
+    button.dataset.panelToggle = "";
+    const sync = () => {
+      const collapsed = panel.classList.contains("is-collapsed");
+      button.textContent = collapsed ? "+" : "-";
+      button.setAttribute("aria-label", collapsed ? "Abrir seccion" : "Cerrar seccion");
+    };
+    button.addEventListener("click", () => {
+      panel.classList.toggle("is-collapsed");
+      sync();
+    });
+    heading.appendChild(button);
+    sync();
+  });
+}
+
+setupCollapsiblePanels();
+
 document.getElementById("exportBtn").addEventListener("click", openExportModal);
 document.getElementById("closeExportModal").addEventListener("click", closeExportModal);
 document.getElementById("cancelExport").addEventListener("click", closeExportModal);
@@ -9428,6 +9452,7 @@ document.getElementById("criticalViewBtn").addEventListener("click", () => {
 });
 
 elements.clinicalSupplyBtn.addEventListener("click", () => {
+  elements.clinicalSupplyPanel.classList.remove("is-collapsed");
   elements.clinicalSupplyPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 elements.clinicalPacYear.addEventListener("change", async (event) => {

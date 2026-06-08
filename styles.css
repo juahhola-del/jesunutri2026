@@ -682,6 +682,26 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 
 .panel { margin-top: 16px; padding: 20px; }
 .section-heading { margin-bottom: 16px; }
+
+.collapsible-panel .section-heading {
+  margin-bottom: 0;
+}
+
+.collapsible-panel:not(.is-collapsed) .section-heading {
+  margin-bottom: 16px;
+}
+
+.collapsible-panel.is-collapsed > :not(.section-heading) {
+  display: none;
+}
+
+.panel-toggle-btn {
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 999px;
+  padding: 0;
+  font-size: 1.1rem;
+}
 .compact-heading { margin-bottom: 10px; }
 
 .critical-panel {
@@ -826,6 +846,49 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   line-height: 1.45;
 }
 
+.clinical-disclosure {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(21, 31, 47, 0.46);
+  overflow: hidden;
+}
+
+.clinical-disclosure summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  cursor: pointer;
+  color: #dbe8ff;
+  font-weight: 900;
+  list-style: none;
+}
+
+.clinical-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.clinical-disclosure summary::after {
+  content: "+";
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.clinical-disclosure[open] summary::after {
+  content: "-";
+}
+
+.clinical-disclosure .table-wrap {
+  border-top: 1px solid var(--line);
+}
+
 .clinical-import-diagnostic {
   display: grid;
   gap: 10px;
@@ -919,6 +982,9 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 
 .clinical-validation-list {
   margin-bottom: 0;
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fde68a;
 }
 
 .clinical-table {

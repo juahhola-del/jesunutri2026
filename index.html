@@ -241,7 +241,7 @@
             <div>
               <p class="eyebrow">Nuevo modulo</p>
               <h2>Abastecimiento clinico</h2>
-              <p>PAC anual, pedidos a proveedor, quiebres, presupuesto y reportes usando inventario actual real.</p>
+              <p>PAC anual, pedidos proveedor y demanda diaria como referencias para decidir. El stock real vive en ingreso masivo.</p>
             </div>
             <div class="clinical-controls">
               <label>
@@ -297,23 +297,26 @@
             </div>
             <div class="clinical-summary-grid" id="clinicalPacSummary"></div>
             <div class="bulk-error-list clinical-validation-list" id="clinicalPacValidation" hidden></div>
-            <div class="table-wrap">
-              <table class="clinical-table">
-                <thead>
-                  <tr>
-                    <th>Codigo</th>
-                    <th>Producto</th>
-                    <th>Categoria</th>
-                    <th>Anual</th>
-                    <th>Mes seleccionado</th>
-                    <th>Precio unitario</th>
-                    <th>Total valorizado</th>
-                    <th>Validacion</th>
-                  </tr>
-                </thead>
-                <tbody id="clinicalPacTableBody"></tbody>
-              </table>
-            </div>
+            <details class="clinical-disclosure" id="clinicalPacDetail">
+              <summary>Ver detalle PAC anual</summary>
+              <div class="table-wrap">
+                <table class="clinical-table">
+                  <thead>
+                    <tr>
+                      <th>Codigo</th>
+                      <th>Producto</th>
+                      <th>Categoria</th>
+                      <th>Anual</th>
+                      <th>Mes seleccionado</th>
+                      <th>Precio unitario</th>
+                      <th>Total valorizado</th>
+                      <th>Referencia</th>
+                    </tr>
+                  </thead>
+                  <tbody id="clinicalPacTableBody"></tbody>
+                </table>
+              </div>
+            </details>
           </section>
 
           <section class="clinical-view" id="clinicalViewPedido">
@@ -767,7 +770,7 @@
           </section>
         </section>
 
-        <section class="panel inventory-panel">
+        <section class="panel inventory-panel collapsible-panel is-collapsed" data-collapsible-panel>
           <div class="section-heading table-heading">
             <div>
               <h2>Inventario</h2>
@@ -799,7 +802,7 @@
           </div>
         </section>
 
-        <section class="panel history-panel">
+        <section class="panel history-panel collapsible-panel is-collapsed" data-collapsible-panel>
           <div class="section-heading table-heading">
             <div>
               <h2>Historial</h2>
@@ -839,7 +842,7 @@
           </div>
         </section>
 
-        <section class="panel analytics-panel">
+        <section class="panel analytics-panel collapsible-panel is-collapsed" data-collapsible-panel>
           <div class="section-heading compact-heading">
             <div>
               <h2>Indicadores</h2>
@@ -849,7 +852,7 @@
           <div class="analytics-grid" id="analyticsGrid"></div>
         </section>
 
-        <section class="panel tools-panel">
+        <section class="panel tools-panel collapsible-panel is-collapsed" data-collapsible-panel>
           <div class="section-heading compact-heading">
             <div>
               <h2>Herramientas</h2>
