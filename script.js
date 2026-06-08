@@ -121,7 +121,19 @@ const CRITICAL_CONFIGURATION_HINTS = [
   { match: "jalea con azucar", stockMinimo: 30, consumoPromedioDiario: 3.57 },
   { match: "jalea normal", stockMinimo: 30, consumoPromedioDiario: 3.57 },
   { match: "jalea dietetica", stockMinimo: 50, consumoPromedioDiario: 6.13 },
-  { match: "cuchara sopera", stockMinimo: 1500, consumoPromedioDiario: 174.13 }
+  { match: "cuchara sopera", stockMinimo: 1500, consumoPromedioDiario: 174.13 },
+  { match: "leche descremada", stockMinimo: 55, consumoPromedioDiario: 7.07 },
+  { match: "mct", stockMinimo: 1, consumoPromedioDiario: 0.07 },
+  { match: "mermelada sin azucar", stockMinimo: 124, consumoPromedioDiario: 16.21 },
+  { match: "nan 1", stockMinimo: 8, consumoPromedioDiario: 1.05 },
+  { match: "neocate", stockMinimo: 6, consumoPromedioDiario: 0.64 },
+  { match: "neosure", stockMinimo: 36, consumoPromedioDiario: 4.25 },
+  { match: "pediasure vainilla", stockMinimo: 15, consumoPromedioDiario: 1.74 },
+  { match: "similac sin lactosa", stockMinimo: 13, consumoPromedioDiario: 1.48 },
+  { match: "similac total confort", stockMinimo: 6, consumoPromedioDiario: 0.64 },
+  { match: "tallarines", stockMinimo: 75, consumoPromedioDiario: 9.2 },
+  { match: "te", stockMinimo: 1000, consumoPromedioDiario: 122.66 },
+  { match: "vasos", stockMinimo: 6000, consumoPromedioDiario: 683.37 }
 ];
 
 const formatIsoDate = (date) => date.toISOString().slice(0, 10);
@@ -6978,7 +6990,12 @@ function getCriticalSummaries() {
 
 function getCriticalConfigurationHint(name) {
   const normalizedName = normalize(name);
-  return CRITICAL_CONFIGURATION_HINTS.find((hint) => normalizedName.includes(hint.match)) || null;
+  return CRITICAL_CONFIGURATION_HINTS.find((hint) => {
+    if (hint.match.length <= 3) {
+      return new RegExp(`(^|\\s)${hint.match}(\\s|$)`).test(normalizedName);
+    }
+    return normalizedName.includes(hint.match);
+  }) || null;
 }
 
 function isActiveCriticalSummary(item) {
