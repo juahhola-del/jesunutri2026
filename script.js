@@ -7125,13 +7125,17 @@ function renderInventory() {
       return `
         <tr>
           <td><strong>${escapeHtml(item.nombre)}</strong></td>
-          <td class="stack-cell">
-            <strong>${formatNumber(item.cantidad)}</strong>
-            <span>${escapeHtml(item.unidad)}</span>
+          <td>
+            <div class="stack-cell">
+              <strong>${formatNumber(item.cantidad)}</strong>
+              <span>${escapeHtml(item.unidad)}</span>
+            </div>
           </td>
-          <td class="stack-cell">
-            <strong>${formatDisplayDate(item.fechaVencimiento)}</strong>
-            ${renderMonthBadge(item.fechaVencimiento)}
+          <td>
+            <div class="stack-cell">
+              <strong>${formatDisplayDate(item.fechaVencimiento)}</strong>
+              ${renderMonthBadge(item.fechaVencimiento)}
+            </div>
           </td>
           <td>${formatDays(status.days)}</td>
           <td class="lot-cell" title="${escapeHtml(item.lote || "-")}">${escapeHtml(item.lote || "-")}</td>
@@ -8980,13 +8984,17 @@ function openDetailModal(type) {
         return `
           <tr>
             <td><strong>${escapeHtml(item.nombre)}</strong></td>
-            <td class="stack-cell">
-              <strong>${formatNumber(item.cantidad)}</strong>
-              <span>${escapeHtml(item.unidad)}</span>
+            <td>
+              <div class="stack-cell">
+                <strong>${formatNumber(item.cantidad)}</strong>
+                <span>${escapeHtml(item.unidad)}</span>
+              </div>
             </td>
-            <td class="stack-cell">
-              <strong>${formatDisplayDate(item.fechaVencimiento)}</strong>
-              ${renderMonthBadge(item.fechaVencimiento)}
+            <td>
+              <div class="stack-cell">
+                <strong>${formatDisplayDate(item.fechaVencimiento)}</strong>
+                ${renderMonthBadge(item.fechaVencimiento)}
+              </div>
             </td>
             <td>${formatDays(status.days)}</td>
             <td class="lot-cell" title="${escapeHtml(item.lote || "-")}">${escapeHtml(item.lote || "-")}</td>
