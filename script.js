@@ -58,6 +58,7 @@ const CLINICAL_MONTH_NAME_ALIASES = {
   dic: 11
 };
 const CLINICAL_SUPPLY_STORAGE_KEY = "jesunutri_clinical_supply_v1";
+const PRINTED_LABELS_STORAGE_KEY = "jesunutri_printed_labels_v1";
 const CLINICAL_MONTH_FIELDS = [
   "enero",
   "febrero",
@@ -200,6 +201,8 @@ const state = {
   inventory: [],
   products: [],
   productCodes: {},
+  printedLabels: {},
+  labelDraft: {},
   movements: [],
   pendingEntries: [],
   currentReview: null,
@@ -334,6 +337,9 @@ const elements = {
   exportType: document.getElementById("exportType"),
   labelsModal: document.getElementById("labelsModal"),
   labelsList: document.getElementById("labelsList"),
+  labelsHistoryList: document.getElementById("labelsHistoryList"),
+  labelsSearch: document.getElementById("labelsSearch"),
+  markLabelsPrintedBtn: document.getElementById("markLabelsPrintedBtn"),
   printLabelsBtn: document.getElementById("printLabelsBtn"),
   productSettingsModal: document.getElementById("productSettingsModal"),
   productSettingsForm: document.getElementById("productSettingsForm"),
@@ -8344,36 +8350,159 @@ function exportSelectedCsv() {
   closeExportModal();
 }
 
+function getPrintedLabelsStorageKey() {
+  return `${PRINTED_LABELS_STORAGE_KEY}_${state.currentUser?.id || "local"}`;
+}
+
+function loadPrintedLabels() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(getPrintedLabelsStorageKey()) || "{}");
+    state.printedLabels = saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+  } catch (error) {
+    console.warn("No se pudo cargar historial de etiquetas", error);
+    state.printedLabels = {};
+  }
+}
+
+function savePrintedLabels() {
+  window.localStorage.setItem(getPrintedLabelsStorageKey(), JSON.stringify(state.printedLabels));
+}
+
+function getLabelSearchText(item = {}) {
+  return normalize([
+    item.nombre,
+    item.lote,
+    item.unidad,
+    item.codigoProducto || getProductCode(item.productoId)
+  ].filter(Boolean).join(" "));
+}
+
+function getLabelQuantityInput(itemId, scope) {
+  return elements.labelsModal.querySelector(`[data-label-qty="${scope}-${CSS.escape(String(itemId))}"]`);
+}
+
+function getLabelCheckbox(itemId, scope) {
+  return elements.labelsModal.querySelector(`[data-label-check="${scope}-${CSS.escape(String(itemId))}"]`);
+}
+
+function getLabelDraftKey(itemId, scope) {
+  return `${scope}:${String(itemId)}`;
+}
+
+function getLabelDraft(itemId, scope) {
+  return state.labelDraft[getLabelDraftKey(itemId, scope)] || {};
+}
+
+function setLabelDraft(itemId, scope, patch) {
+  const key = getLabelDraftKey(itemId, scope);
+  state.labelDraft[key] = {
+    id: String(itemId),
+    scope,
+    checked: false,
+    quantity: 0,
+    ...(state.labelDraft[key] || {}),
+    ...patch
+  };
+}
+
+function renderLabelRow(item, { scope = "pending", printed = null } = {}) {
+  const draft = getLabelDraft(item.id, scope);
+  const defaultQty = draft.quantity || (scope === "history" ? Number(printed?.quantity || 1) : "");
+  const checked = Boolean(draft.checked && Number(defaultQty || 0) > 0);
+  const printedMeta = printed ? `<small>Impreso: ${formatDateTime(printed.printedAt)} - ${formatNumber(printed.quantity || 0)} etiquetas</small>` : "";
+  return `
+    <article class="label-row" data-label-row="${scope}" data-label-id="${escapeHtml(item.id)}">
+      <input class="label-check" type="checkbox" value="${escapeHtml(item.id)}" data-label-check="${scope}-${escapeHtml(item.id)}" data-label-scope="${scope}" ${checked ? "checked" : ""}>
+      <span class="label-product">
+        ${renderProductLabel(item.nombre, item.productoId, item.codigoProducto)}
+        <small>${escapeHtml(item.lote || "sin lote")} - stock ${formatNumber(item.cantidad)} ${escapeHtml(item.unidad)} - ${formatDisplayDate(item.fechaVencimiento)}</small>
+        ${printedMeta}
+      </span>
+      <label class="label-qty-field">
+        <span>Etiquetas</span>
+        <input type="number" min="1" step="1" inputmode="numeric" placeholder="0" value="${defaultQty ? escapeHtml(defaultQty) : ""}" data-label-qty="${scope}-${escapeHtml(item.id)}" data-label-scope="${scope}" data-label-id="${escapeHtml(item.id)}">
+      </label>
+      ${renderMonthBadge(item.fechaVencimiento)}
+    </article>
+  `;
+}
+
 function openLabelsModal() {
-  const items = state.inventory;
-  elements.labelsList.innerHTML = items.length
-    ? items.map((item) => `
-        <label class="label-row">
-          <input type="checkbox" value="${escapeHtml(item.id)}" checked>
-          <span>
-            <strong>${escapeHtml(item.nombre)}</strong>
-            <small>${escapeHtml(item.lote || "sin lote")} - ${item.cantidad} ${escapeHtml(item.unidad)} - ${formatDisplayDate(item.fechaVencimiento)}</small>
-          </span>
-          ${renderMonthBadge(item.fechaVencimiento)}
-        </label>
-      `).join("")
-    : '<div class="empty">No hay lotes disponibles para etiquetar.</div>';
+  loadPrintedLabels();
+  state.labelDraft = {};
+  elements.labelsSearch.value = "";
   elements.labelsModal.hidden = false;
+  renderLabelsModal();
 }
 
 function closeLabelsModal() {
   elements.labelsModal.hidden = true;
 }
 
-function getSelectedLabelItems() {
-  const selectedIds = [...elements.labelsList.querySelectorAll('input[type="checkbox"]:checked')].map((input) => String(input.value));
-  return state.inventory.filter((item) => selectedIds.includes(String(item.id)));
+function renderLabelsModal() {
+  const query = normalize(elements.labelsSearch?.value || "");
+  const visibleItems = state.inventory.filter((item) => !query || getLabelSearchText(item).includes(query));
+  const pendingItems = visibleItems.filter((item) => !state.printedLabels[String(item.id)]);
+  const historyItems = visibleItems.filter((item) => state.printedLabels[String(item.id)]);
+
+  elements.labelsList.innerHTML = pendingItems.length
+    ? pendingItems.map((item) => renderLabelRow(item, { scope: "pending" })).join("")
+    : '<div class="empty">No hay lotes pendientes de impresion con ese filtro.</div>';
+
+  elements.labelsHistoryList.innerHTML = historyItems.length
+    ? historyItems.map((item) => renderLabelRow(item, { scope: "history", printed: state.printedLabels[String(item.id)] })).join("")
+    : '<div class="empty">Sin historial impreso para este filtro.</div>';
+}
+
+function syncLabelSelection(input) {
+  const itemId = input.dataset.labelId;
+  const scope = input.dataset.labelScope || "pending";
+  const qty = Math.floor(Number(input.value || 0));
+  setLabelDraft(itemId, scope, { quantity: qty, checked: qty > 0 });
+  const checkbox = getLabelCheckbox(itemId, scope);
+  if (!checkbox) return;
+  checkbox.checked = qty > 0;
+}
+
+function getSelectedLabelItems({ scopes = ["pending", "history"] } = {}) {
+  const rows = [];
+  Object.values(state.labelDraft).forEach((draft) => {
+    const scope = draft.scope || "pending";
+    if (!scopes.includes(scope)) return;
+    const quantity = Math.floor(Number(draft.quantity || 0));
+    const item = state.inventory.find((entry) => String(entry.id) === String(draft.id));
+    if (!draft.checked || !item || quantity <= 0) return;
+    rows.push({ ...item, labelQuantity: quantity, labelScope: scope });
+  });
+  return rows;
+}
+
+function markSelectedLabelsPrinted() {
+  const items = getSelectedLabelItems({ scopes: ["pending", "history"] });
+  if (!items.length) {
+    showToastError("Marca un lote y escribe cuantas etiquetas se imprimieron.");
+    return;
+  }
+
+  const now = new Date().toISOString();
+  items.forEach((item) => {
+    state.printedLabels[String(item.id)] = {
+      printedAt: now,
+      quantity: item.labelQuantity,
+      nombre: item.nombre,
+      lote: item.lote || "",
+      productoId: item.productoId || null
+    };
+  });
+  savePrintedLabels();
+  renderLabelsModal();
+  showToastSuccess("Etiquetas marcadas como impresas.");
 }
 
 function printSelectedLabels() {
   const items = getSelectedLabelItems();
   if (!items.length) {
-    showToastError("Selecciona al menos un lote.");
+    showToastError("Marca un lote y escribe cuantas etiquetas necesitas.");
     return;
   }
 
@@ -8382,7 +8511,7 @@ function printSelectedLabels() {
     const month = getMonthInfo(item.fechaVencimiento);
     const background = month ? month.color : "#8792a2";
     const textColor = getReadableTextColor(background);
-    const copies = Math.max(1, Math.ceil(Number(item.cantidad || 1)));
+    const copies = Math.max(1, Math.ceil(Number(item.labelQuantity || 1)));
     return Array.from({ length: copies }, () => `
       <article class="print-label" style="background:${background};color:${textColor};border-color:${textColor};">
         <header class="print-label-top">
@@ -9622,6 +9751,30 @@ document.getElementById("confirmExportBtn").addEventListener("click", exportSele
 document.getElementById("labelsBtn").addEventListener("click", openLabelsModal);
 document.getElementById("closeLabelsModal").addEventListener("click", closeLabelsModal);
 document.getElementById("cancelLabels").addEventListener("click", closeLabelsModal);
+elements.labelsSearch.addEventListener("input", renderLabelsModal);
+elements.markLabelsPrintedBtn.addEventListener("click", markSelectedLabelsPrinted);
+elements.labelsModal.addEventListener("input", (event) => {
+  const quantityInput = event.target.closest("[data-label-qty]");
+  if (quantityInput) syncLabelSelection(quantityInput);
+});
+elements.labelsModal.addEventListener("change", (event) => {
+  const checkbox = event.target.closest(".label-check");
+  if (!checkbox) return;
+  const scope = checkbox.dataset.labelScope || "pending";
+  const qtyInput = getLabelQuantityInput(checkbox.value, scope);
+  const quantity = Math.floor(Number(qtyInput?.value || 0));
+  if (!checkbox.checked) {
+    setLabelDraft(checkbox.value, scope, { checked: false, quantity });
+    return;
+  }
+  if (quantity <= 0) {
+    checkbox.checked = false;
+    setLabelDraft(checkbox.value, scope, { checked: false, quantity: 0 });
+    if (qtyInput) qtyInput.focus();
+    return;
+  }
+  setLabelDraft(checkbox.value, scope, { checked: true, quantity });
+});
 elements.labelsModal.addEventListener("click", (event) => {
   if (event.target === elements.labelsModal) closeLabelsModal();
 });

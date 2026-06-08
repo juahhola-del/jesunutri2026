@@ -1742,7 +1742,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 }
 .bulk-modal, .detail-modal { width: min(1120px, 100%); }
 .compact-modal { width: min(460px, 100%); }
-.labels-modal { width: min(780px, 100%); }
+.labels-modal { width: min(920px, 100%); }
 .modal-header { margin-bottom: 18px; }
 .modal-tools { display: flex; align-items: flex-start; gap: 10px; }
 .compact-date { display: grid; gap: 4px; color: var(--muted); font-size: 0.76rem; }
@@ -1795,7 +1795,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 .label-list {
   display: grid;
   gap: 8px;
-  max-height: 420px;
+  max-height: 300px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1803,9 +1803,24 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   background: rgba(11, 18, 32, 0.5);
 }
 
+.label-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.label-section-title {
+  margin: 14px 0 8px;
+  font-size: 0.84rem;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
 .label-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) 96px auto;
   align-items: center;
   gap: 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -1815,13 +1830,13 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   cursor: pointer;
 }
 
-.label-row input {
+.label-check {
   width: 18px;
   height: 18px;
   accent-color: var(--blue);
 }
 
-.label-row strong,
+.label-product strong,
 .label-row small {
   display: block;
 }
@@ -1829,6 +1844,26 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 .label-row small {
   margin-top: 3px;
   color: var(--muted);
+}
+
+.label-qty-field {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.label-qty-field input {
+  width: 100%;
+  min-height: 34px;
+  border-radius: 6px;
+  padding: 0 8px;
+  text-align: center;
+  font-weight: 850;
+}
+
+.label-history-list {
+  max-height: 220px;
 }
 
 .analytics-grid {
@@ -2275,8 +2310,9 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   .compact-critical-item { grid-template-columns: 1fr; }
   .actions:not(.header-actions), .btn:not(.logout-btn), .search-box, .form-actions { width: 100%; }
   .history-filters { display: grid; width: 100%; }
-  .label-row { grid-template-columns: auto 1fr; }
-  .label-row .month-badge { grid-column: 2; }
+  .label-tools { grid-template-columns: 1fr; }
+  .label-row { grid-template-columns: auto 1fr 86px; }
+  .label-row .month-badge { grid-column: 2 / 4; }
   .pending-item { grid-template-columns: 1fr; }
   .operator-header {
     display: grid;
