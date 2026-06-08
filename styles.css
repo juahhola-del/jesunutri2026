@@ -1349,9 +1349,9 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 .alerts-list { display: grid; gap: 10px; }
 .alert-card {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) repeat(5, auto);
+  grid-template-columns: minmax(180px, 1fr) minmax(86px, auto) minmax(128px, auto) auto auto auto;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 14px;
@@ -1378,6 +1378,67 @@ th, td { border-bottom: 1px solid var(--line); padding: 13px 12px; text-align: l
 th { color: var(--muted); font-size: 0.78rem; font-weight: 800; text-transform: uppercase; }
 tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; min-width: 150px; }
+
+.inventory-table {
+  min-width: 760px;
+  table-layout: fixed;
+}
+
+.inventory-table th,
+.inventory-table td {
+  padding: 10px 8px;
+}
+
+.inventory-table th:nth-child(1) { width: 31%; }
+.inventory-table th:nth-child(2) { width: 92px; }
+.inventory-table th:nth-child(3) { width: 148px; }
+.inventory-table th:nth-child(4) { width: 68px; }
+.inventory-table th:nth-child(5) { width: 88px; }
+.inventory-table th:nth-child(6) { width: 136px; }
+.inventory-table th:nth-child(7) { width: 108px; }
+
+.detail-compact-table th:nth-child(1) { width: 28%; }
+.detail-compact-table th:nth-child(2) { width: 92px; }
+.detail-compact-table th:nth-child(3) { width: 148px; }
+.detail-compact-table th:nth-child(4) { width: 68px; }
+.detail-compact-table th:nth-child(5) { width: 88px; }
+.detail-compact-table th:nth-child(6) { width: 24%; }
+.detail-compact-table th:nth-child(7) { width: 108px; }
+
+.stack-cell {
+  display: grid;
+  gap: 3px;
+  align-content: center;
+}
+
+.stack-cell strong {
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.stack-cell span,
+.stack-cell .month-badge {
+  width: fit-content;
+  font-size: 0.74rem;
+}
+
+.lot-cell,
+.lot-chip {
+  max-width: 10ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.lot-cell {
+  width: 10ch;
+}
+
+.lot-chip {
+  display: inline-block;
+  vertical-align: bottom;
+}
 
 .tools-actions {
   justify-content: flex-start;

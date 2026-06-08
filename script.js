@@ -7090,12 +7090,18 @@ function renderAlerts() {
       <article class="alert-card">
         <div>
           <div class="alert-title">${escapeHtml(item.nombre)}</div>
-          <div class="alert-meta">${item.cantidad} ${escapeHtml(item.unidad)} disponible - lote ${escapeHtml(item.lote || "sin lote")}</div>
+          <div class="alert-meta">Lote <span class="lot-chip" title="${escapeHtml(item.lote || "sin lote")}">${escapeHtml(item.lote || "sin lote")}</span></div>
           <div class="alert-meta">Recepcion: ${formatDisplayDate(item.fechaRecepcion)}</div>
           <div class="alert-meta">${escapeHtml(item.observaciones || "Sin observaciones")}</div>
         </div>
-        <span>${formatDisplayDate(item.fechaVencimiento)}</span>
-        ${renderMonthBadge(item.fechaVencimiento)}
+        <div class="stack-cell">
+          <strong>${formatNumber(item.cantidad)}</strong>
+          <span>${escapeHtml(item.unidad)} disponible</span>
+        </div>
+        <div class="stack-cell">
+          <strong>${formatDisplayDate(item.fechaVencimiento)}</strong>
+          ${renderMonthBadge(item.fechaVencimiento)}
+        </div>
         <span>${formatDays(item.status.days)}</span>
         <span class="status ${item.status.key}">${item.status.label}</span>
         <button class="btn" type="button" data-review-id="${item.id}">
@@ -7109,7 +7115,7 @@ function renderAlerts() {
 function renderInventory() {
   const rows = getFilteredInventory();
   if (!rows.length) {
-    elements.inventoryTable.innerHTML = '<tr><td colspan="9" class="empty">No se encontraron insumos.</td></tr>';
+    elements.inventoryTable.innerHTML = '<tr><td colspan="7" class="empty">No se encontraron insumos.</td></tr>';
     return;
   }
 
@@ -7119,17 +7125,21 @@ function renderInventory() {
       return `
         <tr>
           <td><strong>${escapeHtml(item.nombre)}</strong></td>
-          <td>${item.cantidad}</td>
-          <td>${escapeHtml(item.unidad)}</td>
-          <td>${formatDisplayDate(item.fechaVencimiento)}</td>
-          <td>${renderMonthBadge(item.fechaVencimiento)}</td>
+          <td class="stack-cell">
+            <strong>${formatNumber(item.cantidad)}</strong>
+            <span>${escapeHtml(item.unidad)}</span>
+          </td>
+          <td class="stack-cell">
+            <strong>${formatDisplayDate(item.fechaVencimiento)}</strong>
+            ${renderMonthBadge(item.fechaVencimiento)}
+          </td>
           <td>${formatDays(status.days)}</td>
-          <td>${escapeHtml(item.lote || "-")}</td>
-          <td><span class="status ${status.key}">${status.label}</span></td>
+          <td class="lot-cell" title="${escapeHtml(item.lote || "-")}">${escapeHtml(item.lote || "-")}</td>
           <td class="row-actions">
             <button class="btn small" type="button" data-edit-id="${item.id}">Editar</button>
             <button class="btn small danger-btn" type="button" data-delete-id="${item.id}">Eliminar</button>
           </td>
+          <td><span class="status ${status.key}">${status.label}</span></td>
         </tr>
       `;
     })
@@ -8970,18 +8980,22 @@ function openDetailModal(type) {
         return `
           <tr>
             <td><strong>${escapeHtml(item.nombre)}</strong></td>
-            <td>${item.cantidad}</td>
-            <td>${escapeHtml(item.unidad)}</td>
-            <td>${formatDisplayDate(item.fechaVencimiento)}</td>
-            <td>${renderMonthBadge(item.fechaVencimiento)}</td>
+            <td class="stack-cell">
+              <strong>${formatNumber(item.cantidad)}</strong>
+              <span>${escapeHtml(item.unidad)}</span>
+            </td>
+            <td class="stack-cell">
+              <strong>${formatDisplayDate(item.fechaVencimiento)}</strong>
+              ${renderMonthBadge(item.fechaVencimiento)}
+            </td>
             <td>${formatDays(status.days)}</td>
-            <td>${escapeHtml(item.lote || "-")}</td>
+            <td class="lot-cell" title="${escapeHtml(item.lote || "-")}">${escapeHtml(item.lote || "-")}</td>
             <td>${escapeHtml(item.observaciones || "-")}</td>
             <td><span class="status ${status.key}">${status.label}</span></td>
           </tr>
         `;
       }).join("")
-    : '<tr><td colspan="9" class="empty">No hay datos para este filtro.</td></tr>';
+    : '<tr><td colspan="7" class="empty">No hay datos para este filtro.</td></tr>';
   elements.detailModal.hidden = false;
 }
 
