@@ -249,6 +249,7 @@ const elements = {
   operatorProductsList: document.getElementById("operatorProductsList"),
   operatorPendingList: document.getElementById("operatorPendingList"),
   sendPendingBtn: document.getElementById("sendPendingBtn"),
+  pendingAdminPanel: document.getElementById("pendingAdminPanel"),
   adminPendingList: document.getElementById("adminPendingList"),
   pendingCount: document.getElementById("pendingCount"),
   adminPendingNotice: document.getElementById("adminPendingNotice"),
@@ -6922,6 +6923,7 @@ function getCriticalSummaries() {
 
 function isActiveCriticalSummary(item) {
   if (Number(item.stockMinimo || 0) <= 0) return false;
+  if (Number(item.consumoPromedioDiario || 0) <= 0) return false;
   if (item.stockActual <= 0 || item.stockActual < item.stockMinimo) return true;
   return ["sin-stock", "urgente", "comprar-pronto"].includes(item.coverageKey);
 }
@@ -6967,6 +6969,7 @@ function renderCompactCriticalView() {
         <span>Min ${formatNumber(item.stockMinimo)}</span>
         <span>${escapeHtml(item.coverageLabel)}</span>
         <b>${escapeHtml(item.badge)}</b>
+        <button class="btn small" type="button" data-settings-product="${item.productoId}">Editar</button>
       </article>
     `)
     .join("");
@@ -8818,6 +8821,7 @@ function renderOperatorPendingEntries() {
 
 function renderAdminPendingEntries() {
   const pending = state.pendingEntries.filter((entry) => entry.estado === "pendiente");
+  elements.pendingAdminPanel.hidden = !pending.length;
   elements.pendingCount.textContent = `${pending.length} pendientes`;
   if (pending.length) {
     elements.adminPendingNotice.textContent = `Tienes ${pending.length} ingresos pendientes por revisar.`;
@@ -8826,12 +8830,12 @@ function renderAdminPendingEntries() {
     elements.adminPendingNotice.hidden = true;
     elements.adminPendingNotice.textContent = "";
   }
-  if (!state.pendingEntries.length) {
+  if (!pending.length) {
     elements.adminPendingList.innerHTML = '<div class="empty compact-empty">No hay ingresos pendientes.</div>';
     return;
   }
 
-  elements.adminPendingList.innerHTML = state.pendingEntries
+  elements.adminPendingList.innerHTML = pending
     .map((entry) => `
       <article class="pending-item">
         <div>

@@ -1216,7 +1216,7 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
 
 .compact-critical-item {
   display: grid;
-  grid-template-columns: minmax(160px, 1.4fr) repeat(3, minmax(90px, 0.7fr)) auto;
+  grid-template-columns: minmax(160px, 1.4fr) repeat(3, minmax(90px, 0.7fr)) auto auto;
   align-items: center;
   gap: 10px;
   border: 1px solid var(--line);
