@@ -121,7 +121,12 @@ const CRITICAL_CONFIGURATION_HINTS = [
   { match: "jalea con azucar", stockMinimo: 30, consumoPromedioDiario: 3.57 },
   { match: "jalea normal", stockMinimo: 30, consumoPromedioDiario: 3.57 },
   { match: "jalea dietetica", stockMinimo: 50, consumoPromedioDiario: 6.13 },
+  { match: "althera", stockMinimo: 6, consumoPromedioDiario: 0.71 },
+  { match: "carne molida de pavo", stockMinimo: 175, consumoPromedioDiario: 21.42 },
+  { match: "chuño", stockMinimo: 18, consumoPromedioDiario: 2.2 },
   { match: "cuchara sopera", stockMinimo: 1500, consumoPromedioDiario: 174.13 },
+  { match: "espirales", stockMinimo: 113, consumoPromedioDiario: 14.48 },
+  { match: "fideos", stockMinimo: 75, consumoPromedioDiario: 9.2 },
   { match: "leche descremada", stockMinimo: 55, consumoPromedioDiario: 7.07 },
   { match: "mct", stockMinimo: 1, consumoPromedioDiario: 0.07 },
   { match: "mermelada sin azucar", stockMinimo: 124, consumoPromedioDiario: 16.21 },
@@ -6991,10 +6996,11 @@ function getCriticalSummaries() {
 function getCriticalConfigurationHint(name) {
   const normalizedName = normalize(name);
   return CRITICAL_CONFIGURATION_HINTS.find((hint) => {
-    if (hint.match.length <= 3) {
-      return new RegExp(`(^|\\s)${hint.match}(\\s|$)`).test(normalizedName);
+    const normalizedMatch = normalize(hint.match);
+    if (normalizedMatch.length <= 3) {
+      return new RegExp(`(^|\\s)${normalizedMatch}(\\s|$)`).test(normalizedName);
     }
-    return normalizedName.includes(hint.match);
+    return normalizedName.includes(normalizedMatch);
   }) || null;
 }
 
