@@ -155,7 +155,6 @@
         <div class="actions header-actions">
           <button class="btn primary action-tile" type="button" id="bulkEntryBtn">Ingreso masivo</button>
           <button class="btn use-stock-btn action-tile" type="button" id="useStockBtn">Stock consumido</button>
-          <button class="btn supply-btn action-tile" type="button" id="clinicalSupplyBtn">Abastecimiento clinico</button>
           <button class="btn action-tile" type="button" id="labelsBtn">Etiquetas</button>
           <button class="btn action-tile" type="button" id="adjustStockBtn">Ajuste inventario</button>
           <button class="btn small logout-btn" type="button" id="logoutBtn">Salir</button>
@@ -210,7 +209,7 @@
               <h2>Productos criticos</h2>
               <p>Insumos que no pueden faltar en operacion.</p>
             </div>
-            <button class="btn small" type="button" id="criticalViewBtn">Vista criticos</button>
+            <button class="btn small" type="button" id="criticalViewBtn">Detalles criticos</button>
           </div>
           <div class="critical-list" id="criticalProductsList"></div>
         </section>
@@ -218,8 +217,8 @@
         <section class="panel compact-critical-panel" id="compactCriticalPanel" hidden>
           <div class="section-heading compact-heading">
             <div>
-              <h2>Vista criticos</h2>
-              <p>Revision ultra rapida de productos que no pueden faltar.</p>
+              <h2>Detalles criticos</h2>
+              <p>Productos criticos estables o pendientes de configuracion.</p>
             </div>
           </div>
           <div class="compact-critical-list" id="compactCriticalList"></div>
@@ -236,7 +235,7 @@
           <div class="alerts-list" id="alertsList"></div>
         </section>
 
-        <section class="panel clinical-supply-panel" id="clinicalSupplyPanel">
+        <section class="panel clinical-supply-panel collapsible-panel is-collapsed" id="clinicalSupplyPanel" data-collapsible-panel>
           <div class="section-heading table-heading">
             <div>
               <p class="eyebrow">Nuevo modulo</p>

@@ -6920,10 +6920,16 @@ function getCriticalSummaries() {
     });
 }
 
+function isActiveCriticalSummary(item) {
+  if (Number(item.stockMinimo || 0) <= 0) return false;
+  if (item.stockActual <= 0 || item.stockActual < item.stockMinimo) return true;
+  return ["sin-stock", "urgente", "comprar-pronto"].includes(item.coverageKey);
+}
+
 function renderCriticalProducts() {
-  const items = getCriticalSummaries();
+  const items = getCriticalSummaries().filter(isActiveCriticalSummary);
   if (!items.length) {
-    elements.criticalProductsList.innerHTML = '<div class="empty compact-empty">No hay productos criticos configurados.</div>';
+    elements.criticalProductsList.innerHTML = '<div class="empty compact-empty">No hay productos criticos configurados en estado critico.</div>';
     return;
   }
 
@@ -6947,9 +6953,9 @@ function renderCriticalProducts() {
 }
 
 function renderCompactCriticalView() {
-  const items = getCriticalSummaries();
+  const items = getCriticalSummaries().filter((item) => !isActiveCriticalSummary(item));
   if (!items.length) {
-    elements.compactCriticalList.innerHTML = '<div class="empty compact-empty">No hay productos criticos configurados.</div>';
+    elements.compactCriticalList.innerHTML = '<div class="empty compact-empty">No hay productos criticos estables o pendientes de configuracion.</div>';
     return;
   }
 
@@ -9451,7 +9457,7 @@ document.getElementById("criticalViewBtn").addEventListener("click", () => {
   elements.compactCriticalPanel.hidden = !elements.compactCriticalPanel.hidden;
 });
 
-elements.clinicalSupplyBtn.addEventListener("click", () => {
+elements.clinicalSupplyBtn?.addEventListener("click", () => {
   elements.clinicalSupplyPanel.classList.remove("is-collapsed");
   elements.clinicalSupplyPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 });
