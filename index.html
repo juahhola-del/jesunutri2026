@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Jesunutri">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=12">
+    <link rel="stylesheet" href="styles.css?v=13">
   </head>
   <body>
     <section class="app-splash" id="appSplash">
@@ -156,6 +156,7 @@
           <button class="btn primary action-tile" type="button" id="bulkEntryBtn">Ingreso masivo</button>
           <button class="btn use-stock-btn action-tile" type="button" id="useStockBtn">Stock consumido</button>
           <button class="btn action-tile" type="button" id="labelsBtn">Etiquetas</button>
+          <button class="btn action-tile daily-task-tile" type="button" id="dailyTasksBtn">Tareas del dia</button>
           <button class="btn action-tile" type="button" id="adjustStockBtn">Ajuste inventario</button>
           <button class="btn small logout-btn" type="button" id="logoutBtn">Salir</button>
         </div>
@@ -189,6 +190,51 @@
             <strong id="lowStockItems">0</strong>
             <small>Bajo minimo configurado</small>
           </button>
+        </section>
+
+        <section class="panel daily-tasks-panel" id="dailyTasksPanel">
+          <div class="section-heading table-heading">
+            <div>
+              <p class="eyebrow">Operacion diaria</p>
+              <h2>Tareas / Instrucciones Diarias</h2>
+              <p>Checklist operativo para bodega, nutricionista y alumnas.</p>
+            </div>
+            <div class="daily-task-actions">
+              <label class="compact-date">
+                <span>Fecha</span>
+                <input id="dailyTasksDate" type="date">
+              </label>
+              <button class="btn small" type="button" id="printDailyTasksBtn">Imprimir checklist</button>
+              <button class="btn primary small" type="button" id="newDailyTaskBtn">Nueva tarea</button>
+            </div>
+          </div>
+          <div class="daily-task-summary">
+            <strong id="dailyTaskProgress">0 de 0 tareas completadas</strong>
+            <span id="dailyTaskLateCount">0 atrasadas</span>
+          </div>
+          <div class="daily-task-filters">
+            <label>
+              <span>Responsable</span>
+              <select id="dailyTaskResponsibleFilter">
+                <option value="">Todos</option>
+                <option value="nutricionista">Nutricionista</option>
+                <option value="alumna">Alumna</option>
+                <option value="equipo">Equipo</option>
+                <option value="otro">Otro</option>
+              </select>
+            </label>
+            <label>
+              <span>Estado</span>
+              <select id="dailyTaskStatusFilter">
+                <option value="">Todos</option>
+                <option value="pendiente">Pendiente</option>
+                <option value="en_proceso">En proceso</option>
+                <option value="completada">Completada</option>
+                <option value="no_realizada">No realizada</option>
+              </select>
+            </label>
+          </div>
+          <div class="daily-task-list" id="dailyTaskList"></div>
         </section>
 
         <section class="panel pending-admin-panel" id="pendingAdminPanel">
@@ -238,9 +284,9 @@
         <section class="panel clinical-supply-panel collapsible-panel is-collapsed" id="clinicalSupplyPanel" data-collapsible-panel>
           <div class="section-heading table-heading">
             <div>
-              <p class="eyebrow">Nuevo modulo</p>
+              <p class="eyebrow">Planificacion clinica</p>
               <h2>Abastecimiento clinico</h2>
-              <p>PAC anual, pedidos proveedor y demanda diaria como referencias para decidir. El stock real vive en ingreso masivo.</p>
+              <p>Valida sugerencias de prediccion, ajusta el pedido final y controla PAC, presupuesto y demanda diaria. El stock real vive en ingreso masivo.</p>
             </div>
             <div class="clinical-controls">
               <label>
@@ -256,7 +302,7 @@
 
           <div class="clinical-tabs" role="tablist" aria-label="Abastecimiento clinico">
             <button class="clinical-tab active" type="button" data-clinical-tab="pac">PAC Anual</button>
-            <button class="clinical-tab" type="button" data-clinical-tab="pedido">Pedido Proveedor</button>
+            <button class="clinical-tab" type="button" data-clinical-tab="pedido">Validacion Pedido</button>
             <button class="clinical-tab" type="button" data-clinical-tab="quiebres">Escenario de Quiebres</button>
             <button class="clinical-tab" type="button" data-clinical-tab="presupuesto">Presupuesto</button>
             <button class="clinical-tab" type="button" data-clinical-tab="conciliacion">Conciliacion</button>
@@ -320,9 +366,9 @@
 
           <section class="clinical-view" id="clinicalViewPedido">
             <div class="clinical-toolbar">
-              <button class="btn primary" type="button" id="clinicalGenerateOrderBtn">Generar pedido sugerido</button>
-              <button class="btn" type="button" id="clinicalSaveOrderBtn">Guardar pedido</button>
-              <button class="btn" type="button" id="clinicalExportOrderBtn">Exportar pedido</button>
+              <button class="btn primary" type="button" id="clinicalGenerateOrderBtn">Cargar sugerencias</button>
+              <button class="btn" type="button" id="clinicalSaveOrderBtn">Guardar pedido validado</button>
+              <button class="btn" type="button" id="clinicalExportOrderBtn">Exportar pedido validado</button>
               <button class="btn" type="button" data-clinical-tab="conciliacion">Ir a conciliacion</button>
               <label class="btn file-import-btn">
                 Importar pedido proveedor
@@ -340,9 +386,9 @@
               </select>
               <button class="btn" type="button" id="clinicalRevalidateRealOrderBtn">Revalidar pedido proveedor</button>
               <button class="btn primary" type="button" id="clinicalSaveRealImportBtn">Guardar pedido proveedor reconocido</button>
-              <button class="btn" type="button" id="clinicalRegenerateWithLinksBtn">Regenerar usando conciliacion</button>
+              <button class="btn" type="button" id="clinicalRegenerateWithLinksBtn">Actualizar usando conciliacion</button>
             </div>
-            <p class="clinical-note">Los pedidos mensuales/proveedor registran decisiones de compra. No modifican stock: el stock real se actualiza con Ingreso masivo, lotes y movimientos de inventario.</p>
+            <p class="clinical-note">La prediccion propone cantidades; la nutricionista valida el pedido final. Los pedidos mensuales/proveedor registran decisiones de compra y no modifican stock.</p>
             <div class="clinical-summary-grid compact" id="clinicalRealOrderWorkSummary"></div>
             <section class="clinical-import-diagnostic" id="clinicalRealImportDiagnostic" hidden>
               <div class="clinical-diagnostic-header">
@@ -442,8 +488,10 @@
                     <th>Consumo diario</th>
                     <th>Consumo mensual</th>
                     <th>PAC mensual</th>
-                    <th>Sugerido</th>
+                    <th>Sugerido IA</th>
                     <th>Final</th>
+                    <th>Fuente</th>
+                    <th>Confianza</th>
                     <th>Precio</th>
                     <th>Total</th>
                     <th>Riesgo</th>
@@ -1312,6 +1360,87 @@
       </section>
     </div>
 
+    <div class="modal-backdrop" id="dailyTaskModal" hidden>
+      <section class="modal compact-modal daily-task-modal" role="dialog" aria-modal="true" aria-labelledby="dailyTaskModalTitle">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Checklist diario</p>
+            <h2 id="dailyTaskModalTitle">Nueva tarea</h2>
+            <p class="modal-copy">Define una instruccion clara para ejecutar en bodega.</p>
+          </div>
+          <button class="icon-btn" type="button" id="closeDailyTaskModal" aria-label="Cerrar">x</button>
+        </div>
+        <form class="entry-form" id="dailyTaskForm">
+          <input type="hidden" name="task_id">
+          <label>
+            <span>Nombre de la tarea</span>
+            <input name="title" type="text" required placeholder="Revisar vencimientos de formulas">
+          </label>
+          <label>
+            <span>Descripcion / instruccion</span>
+            <textarea name="description" rows="3" placeholder="Explica que debe hacer la alumna o responsable."></textarea>
+          </label>
+          <div class="form-grid">
+            <label>
+              <span>Horario sugerido</span>
+              <input name="scheduled_time" type="time">
+            </label>
+            <label>
+              <span>Fecha especifica</span>
+              <input name="due_date" type="date">
+            </label>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>Prioridad</span>
+              <select name="priority">
+                <option value="media">Media</option>
+                <option value="alta">Alta</option>
+                <option value="baja">Baja</option>
+              </select>
+            </label>
+            <label>
+              <span>Responsable</span>
+              <select name="assigned_to">
+                <option value="nutricionista">Nutricionista</option>
+                <option value="alumna">Alumna</option>
+                <option value="equipo">Equipo</option>
+                <option value="otro">Otro</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>Tipo</span>
+              <select name="recurrence_type">
+                <option value="diaria">Diaria</option>
+                <option value="puntual">Puntual por fecha</option>
+                <option value="semanal">Semanal</option>
+                <option value="mensual">Mensual</option>
+              </select>
+            </label>
+            <label>
+              <span>Estado</span>
+              <select name="status">
+                <option value="pendiente">Pendiente</option>
+                <option value="en_proceso">En proceso</option>
+                <option value="completada">Completada</option>
+                <option value="no_realizada">No realizada</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            <span>Observaciones</span>
+            <textarea name="notes" rows="2" placeholder="Notas del dia o detalle de validacion."></textarea>
+          </label>
+          <div class="form-actions">
+            <button class="btn" type="button" id="cancelDailyTask">Cancelar</button>
+            <button class="btn primary" type="submit" id="saveDailyTaskBtn">Guardar tarea</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
     <div class="modal-backdrop" id="pendingReviewModal" hidden>
       <section class="modal pending-review-modal" role="dialog" aria-modal="true" aria-labelledby="pendingReviewTitle">
         <div class="modal-header">
@@ -1456,7 +1585,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="script.js?v=12"></script>
+    <script src="script.js?v=13"></script>
   </body>
 </html>
 

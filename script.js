@@ -58,7 +58,16 @@ const CLINICAL_MONTH_NAME_ALIASES = {
   dic: 11
 };
 const CLINICAL_SUPPLY_STORAGE_KEY = "jesunutri_clinical_supply_v1";
+const CLINICAL_PREDICTION_FORECASTS = [
+  {
+    year: 2026,
+    month: 7,
+    label: "Prediccion julio 2026",
+    path: "outputs/abastecimiento_modelo/minimos_y_prediccion_julio_2026.csv"
+  }
+];
 const PRINTED_LABELS_STORAGE_KEY = "jesunutri_printed_labels_v1";
+const DAILY_TASKS_STORAGE_KEY = "jesunutri_daily_tasks_v1";
 const CLINICAL_MONTH_FIELDS = [
   "enero",
   "febrero",
@@ -204,6 +213,7 @@ const state = {
   printedLabels: {},
   labelDraft: {},
   labelsView: "pending",
+  dailyTasks: [],
   movements: [],
   pendingEntries: [],
   currentReview: null,
@@ -241,6 +251,9 @@ const state = {
     dailyBulkImportDiagnostics: null,
     pendingDailyDemandIds: [],
     dailyDemandProductLinks: [],
+    predictionRows: [],
+    predictionStatus: "pendiente",
+    predictionLabel: "",
     dailyWarningFilters: {
       file: "all",
       severity: "all",
@@ -286,6 +299,20 @@ const elements = {
   soonItems: document.getElementById("soonItems"),
   expiredItems: document.getElementById("expiredItems"),
   lowStockItems: document.getElementById("lowStockItems"),
+  dailyTasksBtn: document.getElementById("dailyTasksBtn"),
+  dailyTasksPanel: document.getElementById("dailyTasksPanel"),
+  dailyTasksDate: document.getElementById("dailyTasksDate"),
+  dailyTaskProgress: document.getElementById("dailyTaskProgress"),
+  dailyTaskLateCount: document.getElementById("dailyTaskLateCount"),
+  dailyTaskResponsibleFilter: document.getElementById("dailyTaskResponsibleFilter"),
+  dailyTaskStatusFilter: document.getElementById("dailyTaskStatusFilter"),
+  dailyTaskList: document.getElementById("dailyTaskList"),
+  newDailyTaskBtn: document.getElementById("newDailyTaskBtn"),
+  printDailyTasksBtn: document.getElementById("printDailyTasksBtn"),
+  dailyTaskModal: document.getElementById("dailyTaskModal"),
+  dailyTaskForm: document.getElementById("dailyTaskForm"),
+  dailyTaskModalTitle: document.getElementById("dailyTaskModalTitle"),
+  saveDailyTaskBtn: document.getElementById("saveDailyTaskBtn"),
   criticalProductsList: document.getElementById("criticalProductsList"),
   compactCriticalPanel: document.getElementById("compactCriticalPanel"),
   compactCriticalList: document.getElementById("compactCriticalList"),
@@ -479,6 +506,362 @@ function getStatus(item) {
   if (days === 0) return { key: "hoy", label: "Vence hoy", days };
   if (days <= 20) return { key: "proximo", label: "Proximo a vencer", days };
   return { key: "vigente", label: "Vigente", days };
+}
+
+function getDailyTasksStorageKey() {
+  return `${DAILY_TASKS_STORAGE_KEY}_${state.currentUser?.id || "local"}`;
+}
+
+function loadDailyTasksLocal() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(getDailyTasksStorageKey()) || "[]");
+    state.dailyTasks = Array.isArray(saved) ? saved : [];
+  } catch (error) {
+    console.warn("No se pudo cargar tareas locales", error);
+    state.dailyTasks = [];
+  }
+}
+
+function saveDailyTasksLocal() {
+  window.localStorage.setItem(getDailyTasksStorageKey(), JSON.stringify(state.dailyTasks));
+}
+
+function mapDailyTaskFromDb(row) {
+  return {
+    id: row.id,
+    title: row.title || "",
+    description: row.description || "",
+    scheduledTime: row.scheduled_time || "",
+    dueDate: row.due_date || "",
+    recurrenceType: row.recurrence_type || "diaria",
+    priority: row.priority || "media",
+    assignedTo: row.assigned_to || "equipo",
+    status: row.status || "pendiente",
+    notes: row.notes || "",
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || "",
+    completedAt: row.completed_at || ""
+  };
+}
+
+function dailyTaskToDbPayload(task) {
+  return {
+    title: task.title,
+    description: task.description || null,
+    scheduled_time: task.scheduledTime || null,
+    due_date: task.dueDate || null,
+    recurrence_type: task.recurrenceType || "diaria",
+    priority: task.priority || "media",
+    assigned_to: task.assignedTo || "equipo",
+    status: task.status || "pendiente",
+    notes: task.notes || null,
+    completed_at: task.status === "completada" ? (task.completedAt || new Date().toISOString()) : null
+  };
+}
+
+async function loadDailyTasks() {
+  if (!state.currentUser?.id) {
+    loadDailyTasksLocal();
+    return;
+  }
+  try {
+    const { data, error } = await supabaseClient
+      .from("daily_tasks")
+      .select("*")
+      .order("scheduled_time", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    state.dailyTasks = (data || []).map(mapDailyTaskFromDb);
+    saveDailyTasksLocal();
+  } catch (error) {
+    console.warn("Tareas diarias en respaldo local", error);
+    loadDailyTasksLocal();
+    showToastError("Tareas en respaldo local. Ejecuta SQL 27 para guardar en Supabase.");
+  }
+}
+
+function isTaskForDate(task, dateText) {
+  const dueDate = task.dueDate || dateText;
+  if (task.recurrenceType === "diaria") return true;
+  if (task.recurrenceType === "puntual") return dueDate === dateText;
+  if (!dueDate) return true;
+  const selected = new Date(`${dateText}T00:00:00`);
+  const due = new Date(`${dueDate}T00:00:00`);
+  if (Number.isNaN(selected.getTime()) || Number.isNaN(due.getTime())) return false;
+  if (task.recurrenceType === "semanal") return selected.getDay() === due.getDay();
+  if (task.recurrenceType === "mensual") return selected.getDate() === due.getDate();
+  return dueDate === dateText;
+}
+
+function isDailyTaskLate(task, dateText = elements.dailyTasksDate?.value || formatIsoDate(new Date())) {
+  if (["completada", "no_realizada"].includes(task.status)) return false;
+  if (!task.scheduledTime) return false;
+  const now = new Date();
+  const taskDate = new Date(`${dateText}T${task.scheduledTime}`);
+  return taskDate < now;
+}
+
+function getVisibleDailyTasks() {
+  const dateText = elements.dailyTasksDate?.value || formatIsoDate(new Date());
+  const responsible = elements.dailyTaskResponsibleFilter?.value || "";
+  const status = elements.dailyTaskStatusFilter?.value || "";
+  return state.dailyTasks
+    .filter((task) => isTaskForDate(task, dateText))
+    .filter((task) => !responsible || task.assignedTo === responsible)
+    .filter((task) => !status || task.status === status)
+    .sort((a, b) => String(a.scheduledTime || "99:99").localeCompare(String(b.scheduledTime || "99:99")) || a.title.localeCompare(b.title));
+}
+
+function getTaskStatusLabel(status) {
+  return {
+    pendiente: "Pendiente",
+    en_proceso: "En proceso",
+    completada: "Completada",
+    no_realizada: "No realizada"
+  }[status] || status || "Pendiente";
+}
+
+function getTaskPriorityLabel(priority) {
+  return { alta: "Alta", media: "Media", baja: "Baja" }[priority] || priority || "Media";
+}
+
+function getTaskResponsibleLabel(value) {
+  return { nutricionista: "Nutricionista", alumna: "Alumna", equipo: "Equipo", otro: "Otro" }[value] || value || "Equipo";
+}
+
+function renderDailyTasks() {
+  if (!elements.dailyTaskList) return;
+  const dateText = elements.dailyTasksDate.value || formatIsoDate(new Date());
+  const allForDate = state.dailyTasks.filter((task) => isTaskForDate(task, dateText));
+  const completed = allForDate.filter((task) => task.status === "completada").length;
+  const late = allForDate.filter((task) => isDailyTaskLate(task, dateText)).length;
+  const visible = getVisibleDailyTasks();
+  elements.dailyTaskProgress.textContent = `${completed} de ${allForDate.length} tareas completadas`;
+  elements.dailyTaskLateCount.textContent = `${late} atrasadas`;
+
+  if (!visible.length) {
+    elements.dailyTaskList.innerHTML = '<div class="empty compact-empty">No hay tareas para esta fecha o filtro.</div>';
+    return;
+  }
+
+  elements.dailyTaskList.innerHTML = visible.map((task) => {
+    const lateClass = isDailyTaskLate(task, dateText) ? " is-late" : "";
+    return `
+      <article class="daily-task-card ${task.status}${lateClass}">
+        <div class="daily-task-time">${task.scheduledTime || "--:--"}</div>
+        <div class="daily-task-main">
+          <strong>${escapeHtml(task.title)}</strong>
+          ${task.description ? `<p>${escapeHtml(task.description)}</p>` : ""}
+          <div class="daily-task-meta">
+            <span>${escapeHtml(getTaskResponsibleLabel(task.assignedTo))}</span>
+            <span>${escapeHtml(getTaskPriorityLabel(task.priority))}</span>
+            <span>${escapeHtml(task.recurrenceType)}</span>
+          </div>
+          ${task.notes ? `<small>${escapeHtml(task.notes)}</small>` : ""}
+        </div>
+        <div class="daily-task-status">
+          <span class="task-status ${task.status}">${escapeHtml(getTaskStatusLabel(task.status))}</span>
+          <div class="daily-task-buttons">
+            <button class="btn small" type="button" data-task-status="${task.id}" data-status="en_proceso">En proceso</button>
+            <button class="btn small primary" type="button" data-task-status="${task.id}" data-status="completada">Completar</button>
+            <button class="btn small danger-btn" type="button" data-task-status="${task.id}" data-status="no_realizada">No realizada</button>
+          </div>
+          <button class="btn small" type="button" data-edit-task="${task.id}">Editar</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function openDailyTaskModal(task = null) {
+  elements.dailyTaskForm.reset();
+  elements.dailyTaskModalTitle.textContent = task ? "Editar tarea" : "Nueva tarea";
+  const form = elements.dailyTaskForm;
+  form.elements.task_id.value = task?.id || "";
+  form.elements.title.value = task?.title || "";
+  form.elements.description.value = task?.description || "";
+  form.elements.scheduled_time.value = task?.scheduledTime || "";
+  form.elements.due_date.value = task?.dueDate || elements.dailyTasksDate.value || formatIsoDate(new Date());
+  form.elements.priority.value = task?.priority || "media";
+  form.elements.assigned_to.value = task?.assignedTo || "alumna";
+  form.elements.recurrence_type.value = task?.recurrenceType || "diaria";
+  form.elements.status.value = task?.status || "pendiente";
+  form.elements.notes.value = task?.notes || "";
+  elements.dailyTaskModal.hidden = false;
+  form.elements.title.focus();
+}
+
+function closeDailyTaskModal() {
+  elements.dailyTaskModal.hidden = true;
+}
+
+function getDailyTaskFromForm() {
+  const form = elements.dailyTaskForm;
+  const id = form.elements.task_id.value || `local-${Date.now()}`;
+  const status = form.elements.status.value || "pendiente";
+  return {
+    id,
+    title: form.elements.title.value.trim(),
+    description: form.elements.description.value.trim(),
+    scheduledTime: form.elements.scheduled_time.value,
+    dueDate: form.elements.due_date.value,
+    priority: form.elements.priority.value,
+    assignedTo: form.elements.assigned_to.value,
+    recurrenceType: form.elements.recurrence_type.value,
+    status,
+    notes: form.elements.notes.value.trim(),
+    completedAt: status === "completada" ? new Date().toISOString() : "",
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function saveDailyTask(event) {
+  event.preventDefault();
+  const task = getDailyTaskFromForm();
+  if (!task.title) {
+    showToastError("Escribe el nombre de la tarea.");
+    return;
+  }
+
+  elements.saveDailyTaskBtn.disabled = true;
+  elements.saveDailyTaskBtn.textContent = "Guardando...";
+  try {
+    if (state.currentUser?.id) {
+      const payload = dailyTaskToDbPayload(task);
+      if (String(task.id).startsWith("local-")) {
+        const { data, error } = await supabaseClient
+          .from("daily_tasks")
+          .insert(payload)
+          .select()
+          .single();
+        if (error) throw error;
+        task.id = data.id;
+      } else {
+        const { error } = await supabaseClient
+          .from("daily_tasks")
+          .update({ ...payload, updated_at: new Date().toISOString() })
+          .eq("id", task.id);
+        if (error) throw error;
+      }
+    }
+    state.dailyTasks = [
+      ...state.dailyTasks.filter((item) => String(item.id) !== String(task.id)),
+      task
+    ];
+    saveDailyTasksLocal();
+    closeDailyTaskModal();
+    renderDailyTasks();
+    showToastSuccess("Tarea guardada.");
+  } catch (error) {
+    console.warn("Tarea guardada solo localmente", error);
+    state.dailyTasks = [
+      ...state.dailyTasks.filter((item) => String(item.id) !== String(task.id)),
+      task
+    ];
+    saveDailyTasksLocal();
+    closeDailyTaskModal();
+    renderDailyTasks();
+    showToastError("Tarea guardada local. Ejecuta SQL 27 para Supabase.");
+  } finally {
+    elements.saveDailyTaskBtn.disabled = false;
+    elements.saveDailyTaskBtn.textContent = "Guardar tarea";
+  }
+}
+
+async function updateDailyTaskStatus(taskId, status) {
+  const task = state.dailyTasks.find((item) => String(item.id) === String(taskId));
+  if (!task) return;
+  const updated = {
+    ...task,
+    status,
+    completedAt: status === "completada" ? new Date().toISOString() : "",
+    updatedAt: new Date().toISOString()
+  };
+  state.dailyTasks = state.dailyTasks.map((item) => String(item.id) === String(taskId) ? updated : item);
+  saveDailyTasksLocal();
+  renderDailyTasks();
+
+  if (!String(taskId).startsWith("local-") && state.currentUser?.id) {
+    const { error } = await supabaseClient
+      .from("daily_tasks")
+      .update(dailyTaskToDbPayload(updated))
+      .eq("id", taskId);
+    if (error) showToastError("Estado guardado local, no se pudo sincronizar Supabase.");
+  }
+}
+
+function printDailyTasksChecklist() {
+  const dateText = elements.dailyTasksDate.value || formatIsoDate(new Date());
+  const responsible = elements.dailyTaskResponsibleFilter.value;
+  const tasks = getVisibleDailyTasks();
+  if (!tasks.length) {
+    showToastError("No hay tareas para imprimir.");
+    return;
+  }
+
+  const rows = tasks.map((task) => `
+    <tr>
+      <td>${escapeHtml(task.scheduledTime || "")}</td>
+      <td>
+        <strong>${escapeHtml(task.title)}</strong>
+        ${task.description ? `<br><span>${escapeHtml(task.description)}</span>` : ""}
+      </td>
+      <td>${escapeHtml(getTaskResponsibleLabel(task.assignedTo))}</td>
+      <td>${escapeHtml(getTaskPriorityLabel(task.priority))}</td>
+      <td class="box"></td>
+      <td></td>
+    </tr>
+  `).join("");
+
+  const printWindow = window.open("", "_blank", "width=900,height=700");
+  if (!printWindow) {
+    showToastError("No se pudo abrir la vista de impresion.");
+    return;
+  }
+  printWindow.document.write(`
+    <!doctype html>
+    <html lang="es">
+      <head>
+        <meta charset="utf-8">
+        <title>Checklist diario Jesunutri</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 24px; color: #111827; }
+          h1 { margin: 0 0 6px; font-size: 24px; }
+          p { margin: 0 0 18px; color: #4b5563; }
+          table { width: 100%; border-collapse: collapse; }
+          th, td { border: 1px solid #d1d5db; padding: 9px; vertical-align: top; font-size: 13px; }
+          th { background: #f3f4f6; text-align: left; }
+          .box { width: 26px; height: 26px; }
+          .signature { margin-top: 28px; display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+          .line { border-top: 1px solid #111827; padding-top: 8px; }
+        </style>
+      </head>
+      <body>
+        <h1>Checklist diario de bodega</h1>
+        <p>Fecha: ${formatDisplayDate(dateText)} ${responsible ? `- Responsable: ${escapeHtml(getTaskResponsibleLabel(responsible))}` : ""}</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Hora</th>
+              <th>Tarea / instruccion</th>
+              <th>Responsable</th>
+              <th>Prioridad</th>
+              <th>OK</th>
+              <th>Observaciones</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="signature">
+          <div class="line">Firma responsable</div>
+          <div class="line">Validacion nutricionista</div>
+        </div>
+      </body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
 }
 
 function formatDisplayDate(isoDate) {
@@ -684,6 +1067,7 @@ async function startAuthenticatedApp(session) {
   if (isAdmin()) {
     showAdminApp();
     try {
+      await withTimeout(loadDailyTasks(), 12000, "No se pudieron cargar tareas del dia.");
       await withTimeout(refreshInventory(), 18000, "No se pudo cargar inventario a tiempo.");
       await withTimeout(loadAdminPendingEntries(), 12000, "No se pudieron cargar ingresos pendientes.");
       renderAdminPendingEntries();
@@ -1523,6 +1907,9 @@ function loadClinicalSupplyLocalState() {
       dailyImportErrors: Array.isArray(saved.dailyImportErrors) ? saved.dailyImportErrors : [],
       dailyBulkImportDiagnostics: saved.dailyBulkImportDiagnostics || null,
       dailyDemandProductLinks: Array.isArray(saved.dailyDemandProductLinks) ? saved.dailyDemandProductLinks : [],
+      predictionRows: Array.isArray(saved.predictionRows) ? saved.predictionRows : [],
+      predictionStatus: saved.predictionStatus || "pendiente",
+      predictionLabel: saved.predictionLabel || "",
       dailyWarningFilters: { file: "all", severity: "all", type: "all", status: "pendiente", ...(saved.dailyWarningFilters || {}) },
       demandReconcileFilter: saved.demandReconcileFilter || "all",
       reconcileMode: saved.reconcileMode || "all",
@@ -1542,6 +1929,111 @@ function saveClinicalSupplyLocalState() {
 
 function saveClinicalSupplyState() {
   saveClinicalSupplyLocalState();
+}
+
+function parseDelimitedLine(line = "", delimiter = ",") {
+  const cells = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      current += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === delimiter && !quoted) {
+      cells.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current);
+  return cells;
+}
+
+function parseClinicalPredictionCsv(text = "") {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
+  if (lines.length < 2) return [];
+  const delimiter = lines[0].includes(";") ? ";" : ",";
+  const headers = parseDelimitedLine(lines.shift(), delimiter).map((header) => normalize(header).replaceAll(" ", "_"));
+  return lines.map((line) => {
+    const cells = parseDelimitedLine(line, delimiter);
+    const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+    return {
+      productoId: row.producto_id || "",
+      producto: row.producto || "",
+      stockActual: parseClinicalNumber(row.stock_actual),
+      minimoSugerido: parseClinicalNumber(row.minimo_sugerido),
+      consumoDiarioSugerido: parseClinicalNumber(row.consumo_diario_sugerido),
+      pedidoSugerido: parseClinicalNumber(row.pedido_julio_sugerido),
+      baseMensual: parseClinicalNumber(row.base_mensual),
+      promedioPedidos: parseClinicalNumber(row.promedio_pedidos),
+      p75Pedidos: parseClinicalNumber(row.p75_pedidos),
+      pacMensual: parseClinicalNumber(row.pac_julio),
+      demandaDiaria: parseClinicalNumber(row.demanda_diaria_mayo),
+      fuente: row.fuente || "prediccion",
+      confianza: row.confianza || "media",
+      matchPac: row.match_pac || "",
+      matchPedido: row.match_pedido || "",
+      regla: row.regla || ""
+    };
+  }).filter((row) => row.productoId || row.producto);
+}
+
+function getClinicalPredictionForecastConfig() {
+  const year = Number(state.clinicalSupply.pacYear);
+  const month = Number(state.clinicalSupply.monthIndex) + 1;
+  return CLINICAL_PREDICTION_FORECASTS.find((forecast) => forecast.year === year && forecast.month === month) || null;
+}
+
+async function loadClinicalPredictionForecast() {
+  const forecast = getClinicalPredictionForecastConfig();
+  state.clinicalSupply.predictionLabel = forecast?.label || "";
+  if (!forecast) {
+    state.clinicalSupply.predictionRows = [];
+    state.clinicalSupply.predictionStatus = "sin_prediccion_mes";
+    return;
+  }
+  try {
+    const response = await fetch(forecast.path, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const rows = parseClinicalPredictionCsv(await response.text());
+    state.clinicalSupply.predictionRows = rows;
+    state.clinicalSupply.predictionStatus = rows.length ? "cargada" : "sin_filas";
+  } catch (error) {
+    state.clinicalSupply.predictionRows = [];
+    state.clinicalSupply.predictionStatus = "no_disponible";
+    console.warn("Prediccion clinica no disponible; se usara regla de respaldo", error);
+  }
+}
+
+function getClinicalPredictionForProduct(product, pacRow = {}) {
+  if (!product && !pacRow) return null;
+  const productId = String(product?.id || pacRow.productoId || "");
+  const code = normalizeClinicalCode(pacRow.codigo || "");
+  const name = normalizeClinicalMatchText(product?.nombre || pacRow.producto || "");
+  return state.clinicalSupply.predictionRows.find((row) =>
+    (productId && String(row.productoId) === productId) ||
+    (name && normalizeClinicalMatchText(row.producto) === name) ||
+    (code && normalizeClinicalCode(row.matchPac) === code)
+  ) || null;
+}
+
+function getClinicalOrderPredictionMeta(row = {}) {
+  if (row.predictionSource) {
+    return {
+      source: row.predictionSource,
+      confidence: row.predictionConfidence || "respaldo"
+    };
+  }
+  const product = row.productoId ? findProductById(row.productoId) : null;
+  const prediction = getClinicalPredictionForProduct(product, row);
+  return prediction
+    ? { source: prediction.fuente || "prediccion", confidence: prediction.confianza || "media" }
+    : { source: "regla_stock_consumo", confidence: "respaldo" };
 }
 
 function setClinicalSupabaseReady(ready) {
@@ -1796,6 +2288,7 @@ async function loadClinicalCurrentOrderFromSupabase(pacYearId) {
 
 async function loadClinicalSupplyState({ useLocal = true } = {}) {
   if (useLocal) loadClinicalSupplyLocalState();
+  await loadClinicalPredictionForecast();
   if (!state.currentUser?.id) return;
 
   try {
@@ -3099,12 +3592,16 @@ function buildClinicalOrderRows() {
   return state.clinicalSupply.pacRows.filter(isClinicalMonthlyOrderScopeRow).map((pacRow) => {
     const product = getClinicalProductByPacRow(pacRow);
     const requiresReconciliation = !Boolean(product);
+    const prediction = getClinicalPredictionForProduct(product, pacRow);
     const stockActual = product ? getProductStockTotal(product.id) : null;
-    const stockMinimo = product ? Number(product.stock_minimo || 0) : null;
-    const consumoPromedioDiario = product ? Number(product.consumo_promedio_diario || 0) : null;
+    const stockMinimo = product ? Number(prediction?.minimoSugerido || product.stock_minimo || 0) : null;
+    const consumoPromedioDiario = product ? Number(prediction?.consumoDiarioSugerido || product.consumo_promedio_diario || 0) : null;
     const consumoEsperadoMensual = product ? Number((consumoPromedioDiario * days).toFixed(3)) : null;
     const pacMensual = getClinicalMonthValue(pacRow);
-    const pedidoSugerido = product ? Math.max(0, Number((consumoEsperadoMensual + stockMinimo - stockActual).toFixed(3))) : 0;
+    const respaldoSugerido = product ? Math.max(0, Number((consumoEsperadoMensual + stockMinimo - stockActual).toFixed(3))) : 0;
+    const pedidoSugerido = product ? Math.max(0, Number((prediction ? prediction.pedidoSugerido : respaldoSugerido).toFixed(3))) : 0;
+    const predictionSource = prediction ? prediction.fuente || "prediccion" : "regla_stock_consumo";
+    const predictionConfidence = prediction ? prediction.confianza || "media" : "respaldo";
     const existing = existingRows.get(pacRow.id);
     const pedidoFinal = Number(existing?.pedidoFinal ?? pedidoSugerido);
     const real = getClinicalRealOrderByProduct(pacRow);
@@ -3115,6 +3612,12 @@ function buildClinicalOrderRows() {
     if (!product) {
       riesgo = "alto";
       observationParts.push("PAC pendiente de vinculo con inventario");
+    }
+    if (prediction) {
+      observationParts.push(`Sugerido por ${predictionSource} con confianza ${predictionConfidence}`);
+      if (prediction.baseMensual > 0) observationParts.push(`Base mensual historica: ${formatNumber(prediction.baseMensual)}`);
+    } else if (product) {
+      observationParts.push("Sin prediccion para este producto/mes; usa regla stock + consumo");
     }
     if (product?.critico && pedidoFinal <= 0 && stockActual < stockMinimo) {
       riesgo = "alto";
@@ -3149,6 +3652,10 @@ function buildClinicalOrderRows() {
       pacMensual,
       pedidoSugerido,
       pedidoFinal,
+      predictionSource,
+      predictionConfidence,
+      predictionBaseMensual: prediction?.baseMensual ?? null,
+      fallbackSuggestedOrder: respaldoSugerido,
       precioUnitario: Number(pacRow.precioUnitario || 0),
       total,
       riesgo,
@@ -3467,17 +3974,21 @@ function renderClinicalOrder() {
   const total = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
   const suggested = rows.reduce((sum, row) => sum + Number(row.pedidoSugerido || 0), 0);
   const final = rows.reduce((sum, row) => sum + Number(row.pedidoFinal || 0), 0);
+  const predictedRows = rows.filter((row) => getClinicalOrderPredictionMeta(row).source !== "regla_stock_consumo").length;
   renderClinicalRealOrderErrors();
 
   renderClinicalSummary(elements.clinicalOrderSummary, [
     { title: "Pedido valorizado", caption: "Final", value: formatCurrency(total) },
     { title: "Sugerido", caption: "Unidades totales", value: formatNumber(suggested) },
     { title: "Pedido final", caption: "Editable", value: formatNumber(final) },
+    { title: "Prediccion", caption: state.clinicalSupply.predictionLabel || "Respaldo stock/consumo", value: formatNumber(predictedRows) },
     { title: "Presupuesto disponible", caption: "Aprobado menos usado", value: formatCurrency(Number(state.clinicalSupply.budgetApproved || 0) - total) }
   ]);
 
   elements.clinicalOrderTableBody.innerHTML = rows.length
-    ? rows.map((row) => `
+    ? rows.map((row) => {
+      const predictionMeta = getClinicalOrderPredictionMeta(row);
+      return `
       <tr>
         <td>${escapeHtml(row.codigo || "-")}</td>
         <td><strong>${escapeHtml(row.producto)}</strong></td>
@@ -3489,13 +4000,16 @@ function renderClinicalOrder() {
         <td>${formatNumber(row.pacMensual)}</td>
         <td>${formatNumber(row.pedidoSugerido)}</td>
         <td><input class="clinical-final-input" type="number" min="0" step="0.001" value="${Number(row.pedidoFinal || 0)}" data-clinical-final="${escapeHtml(row.pacRowId)}"></td>
+        <td>${escapeHtml(predictionMeta.source)}</td>
+        <td>${escapeHtml(predictionMeta.confidence)}</td>
         <td>${formatCurrency(row.precioUnitario)}</td>
         <td>${formatCurrency(row.total)}</td>
         <td><span class="clinical-risk ${escapeHtml(row.riesgo)}">${escapeHtml(row.riesgo)}</span></td>
         <td>${escapeHtml(row.observacion || "-")}</td>
       </tr>
-    `).join("")
-    : '<tr><td colspan="14" class="empty">Carga un PAC para generar el pedido proveedor sugerido.</td></tr>';
+    `;
+    }).join("")
+    : '<tr><td colspan="16" class="empty">Carga un PAC para generar sugerencias y aprobar el pedido proveedor.</td></tr>';
 }
 
 function renderClinicalRealOrderErrors() {
@@ -5408,7 +5922,7 @@ async function generateClinicalOrder() {
     showToastError("Pedido guardado localmente; Supabase no disponible.");
   }
   renderClinicalSupply();
-  showToastSuccess("Pedido proveedor sugerido generado.");
+  showToastSuccess("Sugerencias cargadas para validacion del pedido.");
 }
 
 async function updateClinicalFinalOrder(pacRowId, value) {
@@ -5443,20 +5957,27 @@ function getClinicalExportRows(type) {
     total_valorizado: row.totalValorizado
   }));
   if (type === "pedido") return (getClinicalCurrentOrderRows().length ? getClinicalCurrentOrderRows() : buildClinicalOrderRows()).map((row) => ({
-    codigo: row.codigo,
-    producto: row.producto,
-    categoria: row.categoria,
-    stock_actual: row.stockActual,
-    stock_minimo: row.stockMinimo,
-    consumo_promedio_diario: row.consumoPromedioDiario,
-    consumo_esperado_mensual: row.consumoEsperadoMensual,
-    pac_mensual: row.pacMensual,
-    pedido_sugerido: row.pedidoSugerido,
-    pedido_final: row.pedidoFinal,
-    precio_unitario: row.precioUnitario,
-    total: row.total,
-    riesgo: row.riesgo,
-    observacion: row.observacion
+    ...(() => {
+      const predictionMeta = getClinicalOrderPredictionMeta(row);
+      return {
+        codigo: row.codigo,
+        producto: row.producto,
+        categoria: row.categoria,
+        stock_actual: row.stockActual,
+        stock_minimo: row.stockMinimo,
+        consumo_promedio_diario: row.consumoPromedioDiario,
+        consumo_esperado_mensual: row.consumoEsperadoMensual,
+        pac_mensual: row.pacMensual,
+        pedido_sugerido: row.pedidoSugerido,
+        pedido_final: row.pedidoFinal,
+        fuente_sugerencia: predictionMeta.source,
+        confianza_sugerencia: predictionMeta.confidence,
+        precio_unitario: row.precioUnitario,
+        total: row.total,
+        riesgo: row.riesgo,
+        observacion: row.observacion
+      };
+    })()
   }));
   if (type === "pedido_real_errores") return getClinicalRealOrderErrorRows().map((row) => {
     const comparison = getClinicalRealOrderComparison(row, state.clinicalSupply.realOrderRows);
@@ -7309,6 +7830,7 @@ function render() {
   updateMetrics();
   renderCriticalProducts();
   renderCompactCriticalView();
+  renderDailyTasks();
   renderAlerts();
   renderInventory();
   renderHistory();
@@ -9786,6 +10308,34 @@ elements.exportModal.addEventListener("click", (event) => {
 });
 document.getElementById("confirmExportBtn").addEventListener("click", exportSelectedCsv);
 
+elements.dailyTasksDate.value = formatIsoDate(new Date());
+elements.dailyTasksBtn.addEventListener("click", () => {
+  elements.dailyTasksPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+elements.newDailyTaskBtn.addEventListener("click", () => openDailyTaskModal());
+document.getElementById("closeDailyTaskModal").addEventListener("click", closeDailyTaskModal);
+document.getElementById("cancelDailyTask").addEventListener("click", closeDailyTaskModal);
+elements.dailyTaskModal.addEventListener("click", (event) => {
+  if (event.target === elements.dailyTaskModal) closeDailyTaskModal();
+});
+elements.dailyTaskForm.addEventListener("submit", saveDailyTask);
+elements.dailyTasksDate.addEventListener("change", renderDailyTasks);
+elements.dailyTaskResponsibleFilter.addEventListener("change", renderDailyTasks);
+elements.dailyTaskStatusFilter.addEventListener("change", renderDailyTasks);
+elements.printDailyTasksBtn.addEventListener("click", printDailyTasksChecklist);
+elements.dailyTaskList.addEventListener("click", (event) => {
+  const statusButton = event.target.closest("[data-task-status]");
+  if (statusButton) {
+    updateDailyTaskStatus(statusButton.dataset.taskStatus, statusButton.dataset.status);
+    return;
+  }
+  const editButton = event.target.closest("[data-edit-task]");
+  if (editButton) {
+    const task = state.dailyTasks.find((item) => String(item.id) === String(editButton.dataset.editTask));
+    if (task) openDailyTaskModal(task);
+  }
+});
+
 document.getElementById("labelsBtn").addEventListener("click", openLabelsModal);
 document.getElementById("cancelLabels").addEventListener("click", closeLabelsModal);
 elements.labelsSearch.addEventListener("input", renderLabelsModal);
@@ -9959,7 +10509,7 @@ elements.clinicalRegenerateWithLinksBtn.addEventListener("click", async () => {
     commitClinicalCurrentOrder(buildClinicalOrderRows());
     await saveClinicalOrderToSupabase(getClinicalCurrentOrderRows(), "generated");
     renderClinicalSupply();
-    showToastSuccess("Pedido regenerado usando conciliacion.");
+    showToastSuccess("Sugerencias actualizadas usando conciliacion.");
   } catch (error) {
     setClinicalSupabaseReady(false);
     console.warn("Pedido regenerado solo localmente", error);
