@@ -1293,19 +1293,18 @@
             <h2 id="labelsModalTitle">Etiquetas imprimibles</h2>
             <p class="modal-copy">Indica cuantas etiquetas necesitas por lote y genera una vista lista para imprimir.</p>
           </div>
-          <button class="icon-btn" type="button" id="closeLabelsModal" aria-label="Cerrar">x</button>
         </div>
         <div class="label-tools">
           <label class="search-box">
             <span>Buscar etiquetas</span>
             <input id="labelsSearch" type="search" placeholder="Producto, lote o codigo">
           </label>
+          <button class="btn small" type="button" id="showLabelsHistoryBtn">Historial</button>
+          <button class="btn small" type="button" id="backLabelsBtn" hidden>Atras</button>
           <button class="btn small" type="button" id="markLabelsPrintedBtn">Marcar impreso</button>
         </div>
-        <h3 class="label-section-title">Pendientes de impresion</h3>
+        <h3 class="label-section-title" id="labelsSectionTitle">Pendientes de impresion</h3>
         <div class="label-list" id="labelsList"></div>
-        <h3 class="label-section-title">Historial impreso</h3>
-        <div class="label-list label-history-list" id="labelsHistoryList"></div>
         <div class="form-actions">
           <button class="btn" type="button" id="cancelLabels">Cancelar</button>
           <button class="btn primary" type="button" id="printLabelsBtn">Generar etiquetas</button>
