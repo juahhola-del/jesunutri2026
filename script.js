@@ -7192,12 +7192,15 @@ function renderAlerts() {
           ${renderMonthBadge(item.fechaVencimiento)}
         </div>
         <span>${formatDays(item.status.days)}</span>
-        <span class="status ${item.status.key}">${item.status.label}</span>
-        ${item.sourceCount > 1
-          ? `<span class="merge-note" title="${escapeHtml(item.sourceCount)} lotes con el mismo nombre y lote">Unido (${formatNumber(item.sourceCount)})</span>`
-          : `<button class="btn" type="button" data-review-id="${item.id}">
-              ${item.revisada ? "Revisada" : "Marcar revisada"}
-            </button>`}
+        <div class="status-stack">
+          <span class="status ${item.status.key}">${item.status.label}</span>
+          ${item.sourceCount > 1
+            ? `<span class="merge-note" title="${escapeHtml(item.sourceCount)} ingresos con el mismo nombre y lote">Unido (${formatNumber(item.sourceCount)})</span>`
+            : ""}
+        </div>
+        <button class="btn" type="button" data-review-id="${item.id}">
+          ${item.revisada ? "Revisada" : "Marcar revisada"}
+        </button>
       </article>
     `)
     .join("");
@@ -7231,14 +7234,17 @@ function renderInventory() {
           <td>${formatDays(status.days)}</td>
           <td class="lot-cell" title="${escapeHtml(item.lote || "-")}">${escapeHtml(item.lote || "-")}</td>
           <td class="row-actions">
-            ${item.sourceCount > 1
-              ? `<span class="merge-note" title="${escapeHtml(item.sourceCount)} lotes con el mismo nombre y lote">Unido (${formatNumber(item.sourceCount)})</span>`
-              : `
-                <button class="btn small" type="button" data-edit-id="${item.id}">Editar</button>
-                <button class="btn small danger-btn" type="button" data-delete-id="${item.id}">Eliminar</button>
-              `}
+            <button class="btn small" type="button" data-edit-id="${item.id}">Editar</button>
+            <button class="btn small danger-btn" type="button" data-delete-id="${item.id}">Eliminar</button>
           </td>
-          <td><span class="status ${status.key}">${status.label}</span></td>
+          <td>
+            <div class="status-stack">
+              <span class="status ${status.key}">${status.label}</span>
+              ${item.sourceCount > 1
+                ? `<span class="merge-note" title="${escapeHtml(item.sourceCount)} ingresos con el mismo nombre y lote">Unido (${formatNumber(item.sourceCount)})</span>`
+                : ""}
+            </div>
+          </td>
         </tr>
       `;
     })

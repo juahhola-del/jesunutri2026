@@ -1453,6 +1453,12 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   white-space: nowrap;
 }
 
+.status-stack {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+}
+
 .tools-actions {
   justify-content: flex-start;
 }
