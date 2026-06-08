@@ -199,6 +199,7 @@ const state = {
   query: "",
   inventory: [],
   products: [],
+  productCodes: {},
   movements: [],
   pendingEntries: [],
   currentReview: null,
@@ -777,6 +778,40 @@ function handleSystemModalKeydown(event) {
   if (event.key === "Escape") closeSystemModal(false);
 }
 
+function getProductCode(productId) {
+  if (!productId) return "";
+  return state.productCodes[String(productId)] || "";
+}
+
+function setProductCode(productId, code) {
+  const cleanCode = String(code || "").trim();
+  if (!productId || !cleanCode) return;
+  const key = String(productId);
+  if (!state.productCodes[key]) state.productCodes[key] = cleanCode;
+}
+
+function updateProductCodesFromClinicalRows(rows = state.clinicalSupply.pacRows) {
+  state.productCodes = {};
+  rows.forEach((row) => setProductCode(row.productoId, row.codigo));
+  state.clinicalSupply.productLinks
+    .filter((link) => normalizeClinicalSourceType(link.sourceType || "pac") === "pac" && !link.ignored)
+    .forEach((link) => setProductCode(link.productoId, link.sourceCode || link.pacCodigo));
+  state.products = state.products.map((product) => ({
+    ...product,
+    codigoProducto: getProductCode(product.id)
+  }));
+  state.inventory = state.inventory.map((item) => ({
+    ...item,
+    codigoProducto: getProductCode(item.productoId)
+  }));
+}
+
+function renderProductLabel(name, productId, fallbackCode = "") {
+  const code = getProductCode(productId) || String(fallbackCode || "").trim();
+  const suffix = code ? ` <span class="product-code">${escapeHtml(code)}</span>` : "";
+  return `<strong>${escapeHtml(name || "Producto")}${suffix}</strong>`;
+}
+
 function mapSupabaseLot(row) {
   const product = state.products.find((item) => String(item.id) === String(row.producto_id));
   return {
@@ -789,6 +824,7 @@ function mapSupabaseLot(row) {
     fechaRecepcion: row.fecha_recepcion,
     lote: row.lote,
     observaciones: row.observaciones,
+    codigoProducto: getProductCode(row.producto_id),
     stockMinimo: Number(row.stock_minimo ?? product?.stock_minimo ?? 0),
     critico: Boolean(row.critico ?? product?.critico),
     consumoPromedioDiario: Number(row.consumo_promedio_diario ?? product?.consumo_promedio_diario ?? 0),
@@ -820,6 +856,7 @@ async function loadProductsFromSupabase() {
   if (error) throw error;
   state.products = (data || []).map((product) => ({
     ...product,
+    codigoProducto: getProductCode(product.id),
     consumo_promedio_diario: Number(product.consumo_promedio_diario || 0),
     favorito: Boolean(product.favorito),
     nombre_normalizado: product.nombre_normalizado || normalize(product.nombre)
@@ -946,7 +983,11 @@ function renderProductSuggestions() {
       seen.add(key);
       return true;
     })
-    .map((product) => `<option value="${escapeHtml(product.nombre)}" label="${escapeHtml(product.nombre_normalizado || normalize(product.nombre))}"></option>`)
+    .map((product) => {
+      const code = getProductCode(product.id);
+      const label = [product.nombre_normalizado || normalize(product.nombre), code].filter(Boolean).join(" - ");
+      return `<option value="${escapeHtml(product.nombre)}" label="${escapeHtml(label)}"></option>`;
+    })
     .join("");
 }
 
@@ -1187,6 +1228,7 @@ async function loadClinicalProductLinksFromSupabase() {
   const { data, error } = await query;
   if (error) throw error;
   state.clinicalSupply.productLinks = (data || []).map(mapClinicalProductLinkFromDb);
+  updateProductCodesFromClinicalRows();
 }
 
 async function saveClinicalProductLinkToSupabase(link) {
@@ -1476,6 +1518,7 @@ function loadClinicalSupplyLocalState() {
       reconcileMode: saved.reconcileMode || "all",
       history: { ...getClinicalDefaultHistory(), ...(saved.history || {}) }
     };
+    updateProductCodesFromClinicalRows();
     return true;
   } catch (error) {
     console.warn("No se pudo cargar abastecimiento clinico local", error);
@@ -1767,6 +1810,7 @@ async function loadClinicalSupplyState({ useLocal = true } = {}) {
         .order("created_at", { ascending: true });
       if (itemError) throw itemError;
       state.clinicalSupply.pacRows = (items || []).map(mapClinicalPacItemFromDb);
+      updateProductCodesFromClinicalRows();
     }
 
     await loadClinicalCurrentOrderFromSupabase(pacYear?.id || null);
@@ -7022,7 +7066,7 @@ function renderCriticalProducts() {
     .map((item) => `
       <article class="critical-item ${item.statusKey}">
         <div>
-          <strong>${escapeHtml(item.nombre)}</strong>
+          ${renderProductLabel(item.nombre, item.productoId)}
           <span>${formatNumber(item.stockActual)} ${escapeHtml(item.unidad)} disponibles</span>
           <span>Cobertura: ${escapeHtml(item.coverageLabel)}</span>
           ${item.warning ? `<em>${escapeHtml(item.warning)}</em>` : ""}
@@ -7051,7 +7095,7 @@ function renderCompactCriticalView() {
       const suggestedConsumption = hint && Number(item.consumoPromedioDiario || 0) <= 0 ? `Sugerido ${formatNumber(hint.consumoPromedioDiario)}/dia` : item.coverageLabel;
       return `
         <article class="compact-critical-item ${item.statusKey}">
-          <strong>${escapeHtml(item.nombre)}</strong>
+          ${renderProductLabel(item.nombre, item.productoId)}
           <span>${formatNumber(item.stockActual)} ${escapeHtml(item.unidad)}</span>
           <span>Min ${formatNumber(item.stockMinimo)}${escapeHtml(suggestedMinimum)}</span>
           <span>${escapeHtml(suggestedConsumption)}</span>
@@ -7178,7 +7222,7 @@ function renderAlerts() {
     .map((item) => `
       <article class="alert-card">
         <div>
-          <div class="alert-title">${escapeHtml(item.nombre)}</div>
+          <div class="alert-title">${renderProductLabel(item.nombre, item.productoId)}</div>
           <div class="alert-meta">Lote <span class="lot-chip" title="${escapeHtml(item.lote || "sin lote")}">${escapeHtml(item.lote || "sin lote")}</span></div>
           <div class="alert-meta">Recepcion: ${formatDisplayDate(item.fechaRecepcion)}</div>
           <div class="alert-meta">${escapeHtml(item.observaciones || "Sin observaciones")}</div>
@@ -7218,7 +7262,7 @@ function renderInventory() {
       const status = getStatus(item);
       return `
         <tr>
-          <td><strong>${escapeHtml(item.nombre)}</strong></td>
+          <td>${renderProductLabel(item.nombre, item.productoId, item.codigoProducto)}</td>
           <td>
             <div class="stack-cell">
               <strong>${formatNumber(item.cantidad)}</strong>
