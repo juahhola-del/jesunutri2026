@@ -1389,7 +1389,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   padding: 10px 8px;
 }
 
-.inventory-table th:nth-child(1) { width: 31%; }
+.inventory-table th:nth-child(1) { width: 25%; }
 .inventory-table th:nth-child(2) { width: 92px; }
 .inventory-table th:nth-child(3) { width: 148px; }
 .inventory-table th:nth-child(4) { width: 68px; }
@@ -1397,7 +1397,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 .inventory-table th:nth-child(6) { width: 136px; }
 .inventory-table th:nth-child(7) { width: 108px; }
 
-.detail-compact-table th:nth-child(1) { width: 28%; }
+.detail-compact-table th:nth-child(1) { width: 25%; }
 .detail-compact-table th:nth-child(2) { width: 92px; }
 .detail-compact-table th:nth-child(3) { width: 148px; }
 .detail-compact-table th:nth-child(4) { width: 68px; }
@@ -1438,6 +1438,19 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 .lot-chip {
   display: inline-block;
   vertical-align: bottom;
+}
+
+.merge-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 0 9px;
+  background: rgba(79, 140, 255, 0.14);
+  color: #cfe0ff;
+  font-size: 0.74rem;
+  font-weight: 850;
+  white-space: nowrap;
 }
 
 .tools-actions {

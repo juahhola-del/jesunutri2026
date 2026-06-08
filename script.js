@@ -6818,13 +6818,61 @@ function maybeAutofillUnit(nameInput, unitInput) {
   if (product?.unidad_default) unitInput.value = product.unidad_default;
 }
 
-function getFilteredInventory() {
-  const query = normalize(state.query);
-  if (!query) return state.inventory;
-  return state.inventory.filter((item) => normalize(item.nombre).includes(query));
+function getInventoryGroupKey(item) {
+  const lote = String(item.lote || "").trim();
+  if (!lote) return null;
+  return `${String(item.nombre || "").trim()}\u0001${lote}`;
 }
 
-function getAlertItems(items = state.inventory) {
+function mergeInventoryItemsByNameAndLot(items) {
+  const merged = [];
+  const byKey = new Map();
+
+  items.forEach((item) => {
+    const key = getInventoryGroupKey(item);
+    if (!key) {
+      merged.push({ ...item, sourceIds: [item.id], sourceCount: 1 });
+      return;
+    }
+
+    const existing = byKey.get(key);
+    if (!existing) {
+      const copy = { ...item, sourceIds: [item.id], sourceCount: 1 };
+      byKey.set(key, copy);
+      merged.push(copy);
+      return;
+    }
+
+    existing.cantidad = Number(existing.cantidad || 0) + Number(item.cantidad || 0);
+    existing.sourceIds.push(item.id);
+    existing.sourceCount = existing.sourceIds.length;
+    if (item.fechaVencimiento && (!existing.fechaVencimiento || item.fechaVencimiento < existing.fechaVencimiento)) {
+      existing.fechaVencimiento = item.fechaVencimiento;
+    }
+    if (item.fechaRecepcion && (!existing.fechaRecepcion || item.fechaRecepcion < existing.fechaRecepcion)) {
+      existing.fechaRecepcion = item.fechaRecepcion;
+    }
+    existing.revisada = existing.revisada && Boolean(item.revisada);
+    const notes = [existing.observaciones, item.observaciones]
+      .filter((value) => value && String(value).trim())
+      .map((value) => String(value).trim());
+    existing.observaciones = [...new Set(notes)].join(" | ");
+  });
+
+  return merged;
+}
+
+function getInventoryDisplayItems(items = state.inventory) {
+  return mergeInventoryItemsByNameAndLot(items);
+}
+
+function getFilteredInventory() {
+  const query = normalize(state.query);
+  const items = query ? state.inventory.filter((item) => normalize(item.nombre).includes(query)) : state.inventory;
+  return getInventoryDisplayItems(items);
+}
+
+function getAlertItems(items = getInventoryDisplayItems()) {
   return items
     .map((item) => ({ ...item, status: getStatus(item) }))
     .filter((item) => ["vencido", "hoy", "proximo"].includes(item.status.key))
@@ -7065,9 +7113,10 @@ function renderAnalytics() {
 }
 
 function updateMetrics() {
-  const withStatus = state.inventory.map((item) => ({ ...item, status: getStatus(item) }));
+  const inventoryDisplayItems = getInventoryDisplayItems();
+  const withStatus = inventoryDisplayItems.map((item) => ({ ...item, status: getStatus(item) }));
   const alerts = getAlertItems();
-  elements.totalItems.textContent = state.inventory.length;
+  elements.totalItems.textContent = inventoryDisplayItems.length;
   elements.soonItems.textContent = withStatus.filter((item) => ["hoy", "proximo"].includes(item.status.key)).length;
   elements.expiredItems.textContent = withStatus.filter((item) => item.status.key === "vencido").length;
   const lowStockIds = new Set(state.lowStockProducts.map((item) => String(item.producto_id)));
@@ -7104,9 +7153,11 @@ function renderAlerts() {
         </div>
         <span>${formatDays(item.status.days)}</span>
         <span class="status ${item.status.key}">${item.status.label}</span>
-        <button class="btn" type="button" data-review-id="${item.id}">
-          ${item.revisada ? "Revisada" : "Marcar revisada"}
-        </button>
+        ${item.sourceCount > 1
+          ? `<span class="merge-note" title="${escapeHtml(item.sourceCount)} lotes con el mismo nombre y lote">Unido (${formatNumber(item.sourceCount)})</span>`
+          : `<button class="btn" type="button" data-review-id="${item.id}">
+              ${item.revisada ? "Revisada" : "Marcar revisada"}
+            </button>`}
       </article>
     `)
     .join("");
@@ -7140,8 +7191,12 @@ function renderInventory() {
           <td>${formatDays(status.days)}</td>
           <td class="lot-cell" title="${escapeHtml(item.lote || "-")}">${escapeHtml(item.lote || "-")}</td>
           <td class="row-actions">
-            <button class="btn small" type="button" data-edit-id="${item.id}">Editar</button>
-            <button class="btn small danger-btn" type="button" data-delete-id="${item.id}">Eliminar</button>
+            ${item.sourceCount > 1
+              ? `<span class="merge-note" title="${escapeHtml(item.sourceCount)} lotes con el mismo nombre y lote">Unido (${formatNumber(item.sourceCount)})</span>`
+              : `
+                <button class="btn small" type="button" data-edit-id="${item.id}">Editar</button>
+                <button class="btn small danger-btn" type="button" data-delete-id="${item.id}">Eliminar</button>
+              `}
           </td>
           <td><span class="status ${status.key}">${status.label}</span></td>
         </tr>
@@ -8962,9 +9017,10 @@ async function markAlertReviewed(id) {
 }
 
 function getDetailItems(type) {
-  if (type === "total") return state.inventory;
-  if (type === "soon") return state.inventory.filter((item) => ["hoy", "proximo"].includes(getStatus(item).key));
-  if (type === "expired") return state.inventory.filter((item) => getStatus(item).key === "vencido");
+  const inventoryDisplayItems = getInventoryDisplayItems();
+  if (type === "total") return inventoryDisplayItems;
+  if (type === "soon") return inventoryDisplayItems.filter((item) => ["hoy", "proximo"].includes(getStatus(item).key));
+  if (type === "expired") return inventoryDisplayItems.filter((item) => getStatus(item).key === "vencido");
   if (type === "lowstock") return getLowStockDetailItems();
   return [];
 }
