@@ -116,6 +116,13 @@ const CLINICAL_DEMAND_DIET_KEYWORDS = [
 ];
 const CLINICAL_DEMAND_ENTERAL_KEYWORDS = ["enteral", "formula", "modulo", "gtt", "volumen", "horario", "paciente", "via oral"];
 const CLINICAL_DEMAND_SUPPLY_KEYWORDS = ["pan", "once", "desayuno", "colacion", "menu", "preparacion", "insumo"];
+const CRITICAL_CONFIGURATION_HINTS = [
+  { match: "huevos", stockMinimo: 750, consumoPromedioDiario: 92 },
+  { match: "jalea con azucar", stockMinimo: 30, consumoPromedioDiario: 3.57 },
+  { match: "jalea normal", stockMinimo: 30, consumoPromedioDiario: 3.57 },
+  { match: "jalea dietetica", stockMinimo: 50, consumoPromedioDiario: 6.13 },
+  { match: "cuchara sopera", stockMinimo: 1500, consumoPromedioDiario: 174.13 }
+];
 
 const formatIsoDate = (date) => date.toISOString().slice(0, 10);
 
@@ -6969,6 +6976,11 @@ function getCriticalSummaries() {
     });
 }
 
+function getCriticalConfigurationHint(name) {
+  const normalizedName = normalize(name);
+  return CRITICAL_CONFIGURATION_HINTS.find((hint) => normalizedName.includes(hint.match)) || null;
+}
+
 function isActiveCriticalSummary(item) {
   if (Number(item.stockMinimo || 0) <= 0) return false;
   if (Number(item.consumoPromedioDiario || 0) <= 0) return false;
@@ -7010,16 +7022,21 @@ function renderCompactCriticalView() {
   }
 
   elements.compactCriticalList.innerHTML = items
-    .map((item) => `
-      <article class="compact-critical-item ${item.statusKey}">
-        <strong>${escapeHtml(item.nombre)}</strong>
-        <span>${formatNumber(item.stockActual)} ${escapeHtml(item.unidad)}</span>
-        <span>Min ${formatNumber(item.stockMinimo)}</span>
-        <span>${escapeHtml(item.coverageLabel)}</span>
-        <b>${escapeHtml(item.badge)}</b>
-        <button class="btn small" type="button" data-settings-product="${item.productoId}">Editar</button>
-      </article>
-    `)
+    .map((item) => {
+      const hint = getCriticalConfigurationHint(item.nombre);
+      const suggestedMinimum = hint && Number(item.stockMinimo || 0) <= 0 ? ` -> ${formatNumber(hint.stockMinimo)}` : "";
+      const suggestedConsumption = hint && Number(item.consumoPromedioDiario || 0) <= 0 ? `Sugerido ${formatNumber(hint.consumoPromedioDiario)}/dia` : item.coverageLabel;
+      return `
+        <article class="compact-critical-item ${item.statusKey}">
+          <strong>${escapeHtml(item.nombre)}</strong>
+          <span>${formatNumber(item.stockActual)} ${escapeHtml(item.unidad)}</span>
+          <span>Min ${formatNumber(item.stockMinimo)}${escapeHtml(suggestedMinimum)}</span>
+          <span>${escapeHtml(suggestedConsumption)}</span>
+          <b>${escapeHtml(item.badge)}</b>
+          <button class="btn small" type="button" data-settings-product="${item.productoId}">Editar</button>
+        </article>
+      `;
+    })
     .join("");
 }
 
@@ -8353,11 +8370,14 @@ function openProductSettings(productId) {
     return;
   }
 
+  const hint = getCriticalConfigurationHint(product.nombre);
+  const stockMinimo = Number(product.stock_minimo || 0);
+  const consumoPromedioDiario = Number(product.consumo_promedio_diario || 0);
   elements.productSettingsForm.reset();
   elements.productSettingsForm.elements.producto_id.value = product.id;
-  elements.productSettingsForm.elements.stock_minimo.value = Number(product.stock_minimo || 0);
+  elements.productSettingsForm.elements.stock_minimo.value = stockMinimo > 0 ? stockMinimo : Number(hint?.stockMinimo || 0);
   elements.productSettingsForm.elements.unidad_default.value = product.unidad_default || "kg";
-  elements.productSettingsForm.elements.consumo_promedio_diario.value = Number(product.consumo_promedio_diario || 0);
+  elements.productSettingsForm.elements.consumo_promedio_diario.value = consumoPromedioDiario > 0 ? consumoPromedioDiario : Number(hint?.consumoPromedioDiario || 0);
   elements.productSettingsForm.elements.critico.checked = Boolean(product.critico);
   elements.productSettingsName.textContent = product.nombre;
   elements.pauseProductBtn.textContent = product.activo === false ? "Reactivar producto" : "Pausar producto";
