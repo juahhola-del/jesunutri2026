@@ -1805,7 +1805,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 
 .label-tools {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: end;
   gap: 10px;
   margin-bottom: 12px;
@@ -1820,7 +1820,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 
 .label-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 96px auto;
+  grid-template-columns: auto minmax(0, 1fr) 92px 92px auto;
   align-items: center;
   gap: 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -2311,8 +2311,8 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   .actions:not(.header-actions), .btn:not(.logout-btn), .search-box, .form-actions { width: 100%; }
   .history-filters { display: grid; width: 100%; }
   .label-tools { grid-template-columns: 1fr; }
-  .label-row { grid-template-columns: auto 1fr 86px; }
-  .label-row .month-badge { grid-column: 2 / 4; }
+  .label-row { grid-template-columns: auto 1fr 82px 82px; }
+  .label-row .month-badge { grid-column: 2 / 5; }
   .pending-item { grid-template-columns: 1fr; }
   .operator-header {
     display: grid;
