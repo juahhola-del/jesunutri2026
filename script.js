@@ -18,13 +18,13 @@ const UNIT_OPTIONS = ["kg", "g", "lt", "ml", "unidad", "caja", "paquete"];
 const MONTHS = [
   { label: "Enero", className: "month-1", color: "#0066FF" },
   { label: "Febrero", className: "month-2", color: "#00D9FF" },
-  { label: "Marzo", className: "month-3", color: "#00FF66" },
+  { label: "Marzo", className: "month-3", color: "#FFFFFF" },
   { label: "Abril", className: "month-4", color: "#99FF00" },
   { label: "Mayo", className: "month-5", color: "#FFD500" },
   { label: "Junio", className: "month-6", color: "#FF7A00" },
   { label: "Julio", className: "month-7", color: "#FF0000" },
   { label: "Agosto", className: "month-8", color: "#FF00AA" },
-  { label: "Septiembre", className: "month-9", color: "#7A00FF" },
+  { label: "Septiembre", className: "month-9", color: "#FF00AA" },
   { label: "Octubre", className: "month-10", color: "#B000FF" },
   { label: "Noviembre", className: "month-11", color: "#6B3E00" },
   { label: "Diciembre", className: "month-12", color: "#BFC7D5" }

@@ -1842,13 +1842,13 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 }
 .month-1 { background: #0066FF; }
 .month-2 { background: #00D9FF; }
-.month-3 { background: #00FF66; }
+.month-3 { background: #FFFFFF; }
 .month-4 { background: #99FF00; }
 .month-5 { background: #FFD500; }
 .month-6 { background: #FF7A00; }
 .month-7 { background: #FF0000; }
 .month-8 { background: #FF00AA; }
-.month-9 { background: #7A00FF; }
+.month-9 { background: #FF00AA; }
 .month-10 { background: #B000FF; }
 .month-11 { background: #6B3E00; }
 .month-12 { background: #BFC7D5; }
