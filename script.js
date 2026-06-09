@@ -24,7 +24,7 @@ const MONTHS = [
   { label: "Junio", className: "month-6", color: "#FF7A00" },
   { label: "Julio", className: "month-7", color: "#FF0000" },
   { label: "Agosto", className: "month-8", color: "#FF00AA" },
-  { label: "Septiembre", className: "month-9", color: "#FF00AA" },
+  { label: "Septiembre", className: "month-9", color: "#14532D" },
   { label: "Octubre", className: "month-10", color: "#B000FF" },
   { label: "Noviembre", className: "month-11", color: "#6B3E00" },
   { label: "Diciembre", className: "month-12", color: "#BFC7D5" }
