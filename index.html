@@ -192,11 +192,12 @@
           </button>
         </section>
 
-        <section class="panel daily-tasks-panel" id="dailyTasksPanel">
+        <div class="modal-backdrop" id="dailyTasksBoardModal" hidden>
+        <section class="modal daily-tasks-panel daily-tasks-board" id="dailyTasksPanel" role="dialog" aria-modal="true" aria-labelledby="dailyTasksPanelTitle">
           <div class="section-heading table-heading">
             <div>
               <p class="eyebrow">Operacion diaria</p>
-              <h2>Tareas / Instrucciones Diarias</h2>
+              <h2 id="dailyTasksPanelTitle">Tareas / Instrucciones Diarias</h2>
               <p>Checklist operativo para bodega, nutricionista y alumnas.</p>
             </div>
             <div class="daily-task-actions">
@@ -206,6 +207,7 @@
               </label>
               <button class="btn small" type="button" id="printDailyTasksBtn">Imprimir checklist</button>
               <button class="btn primary small" type="button" id="newDailyTaskBtn">Nueva tarea</button>
+              <button class="btn small" type="button" id="closeDailyTasksBoardBtn">Cerrar</button>
             </div>
           </div>
           <div class="daily-task-summary">
@@ -236,6 +238,7 @@
           </div>
           <div class="daily-task-list" id="dailyTaskList"></div>
         </section>
+        </div>
 
         <section class="panel pending-admin-panel" id="pendingAdminPanel">
           <div class="section-heading compact-heading">
@@ -1337,9 +1340,7 @@
       <section class="modal labels-modal" role="dialog" aria-modal="true" aria-labelledby="labelsModalTitle">
         <div class="modal-header">
           <div>
-            <p class="eyebrow">Inventario</p>
-            <h2 id="labelsModalTitle">Etiquetas imprimibles</h2>
-            <p class="modal-copy">Indica cuantas etiquetas necesitas por lote y genera una vista lista para imprimir.</p>
+            <h2 id="labelsModalTitle">Etiqueta</h2>
           </div>
         </div>
         <div class="label-tools">

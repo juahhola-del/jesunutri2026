@@ -300,6 +300,7 @@ const elements = {
   expiredItems: document.getElementById("expiredItems"),
   lowStockItems: document.getElementById("lowStockItems"),
   dailyTasksBtn: document.getElementById("dailyTasksBtn"),
+  dailyTasksBoardModal: document.getElementById("dailyTasksBoardModal"),
   dailyTasksPanel: document.getElementById("dailyTasksPanel"),
   dailyTasksDate: document.getElementById("dailyTasksDate"),
   dailyTaskProgress: document.getElementById("dailyTaskProgress"),
@@ -309,6 +310,7 @@ const elements = {
   dailyTaskList: document.getElementById("dailyTaskList"),
   newDailyTaskBtn: document.getElementById("newDailyTaskBtn"),
   printDailyTasksBtn: document.getElementById("printDailyTasksBtn"),
+  closeDailyTasksBoardBtn: document.getElementById("closeDailyTasksBoardBtn"),
   dailyTaskModal: document.getElementById("dailyTaskModal"),
   dailyTaskForm: document.getElementById("dailyTaskForm"),
   dailyTaskModalTitle: document.getElementById("dailyTaskModalTitle"),
@@ -693,6 +695,15 @@ function openDailyTaskModal(task = null) {
 
 function closeDailyTaskModal() {
   elements.dailyTaskModal.hidden = true;
+}
+
+function openDailyTasksBoard() {
+  renderDailyTasks();
+  elements.dailyTasksBoardModal.hidden = false;
+}
+
+function closeDailyTasksBoard() {
+  elements.dailyTasksBoardModal.hidden = true;
 }
 
 function getDailyTaskFromForm() {
@@ -10309,8 +10320,10 @@ elements.exportModal.addEventListener("click", (event) => {
 document.getElementById("confirmExportBtn").addEventListener("click", exportSelectedCsv);
 
 elements.dailyTasksDate.value = formatIsoDate(new Date());
-elements.dailyTasksBtn.addEventListener("click", () => {
-  elements.dailyTasksPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+elements.dailyTasksBtn.addEventListener("click", openDailyTasksBoard);
+elements.closeDailyTasksBoardBtn.addEventListener("click", closeDailyTasksBoard);
+elements.dailyTasksBoardModal.addEventListener("click", (event) => {
+  if (event.target === elements.dailyTasksBoardModal) closeDailyTasksBoard();
 });
 elements.newDailyTaskBtn.addEventListener("click", () => openDailyTaskModal());
 document.getElementById("closeDailyTaskModal").addEventListener("click", closeDailyTaskModal);

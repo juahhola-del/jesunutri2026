@@ -687,6 +687,12 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   scroll-margin-top: 18px;
 }
 
+.daily-tasks-board {
+  width: min(920px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  margin-top: 0;
+}
+
 .daily-task-actions,
 .daily-task-filters {
   display: flex;
@@ -1882,6 +1888,8 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 .bulk-modal, .detail-modal { width: min(1120px, 100%); }
 .compact-modal { width: min(460px, 100%); }
 .labels-modal { width: min(920px, 100%); }
+.labels-modal .modal-header { margin-bottom: 10px; }
+.labels-modal h2 { margin: 0; font-size: 1.35rem; line-height: 1.12; }
 .modal-header { margin-bottom: 18px; }
 .modal-tools { display: flex; align-items: flex-start; gap: 10px; }
 .compact-date { display: grid; gap: 4px; color: var(--muted); font-size: 0.76rem; }
@@ -1948,6 +1956,15 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   align-items: end;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.label-tools .search-box {
+  min-width: 0;
+  gap: 4px;
+}
+
+.label-tools .search-box input {
+  min-height: 36px;
 }
 
 .label-section-title {
@@ -2463,9 +2480,102 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   }
   .actions:not(.header-actions), .btn:not(.logout-btn), .search-box, .form-actions { width: 100%; }
   .history-filters { display: grid; width: 100%; }
-  .label-tools { grid-template-columns: 1fr; }
-  .label-row { grid-template-columns: auto 1fr 82px 82px; }
-  .label-row .month-badge { grid-column: 2 / 5; }
+  .labels-modal {
+    width: 100%;
+    max-height: calc(100vh - 14px);
+    padding: 12px;
+  }
+  .labels-modal .modal-header {
+    margin-bottom: 8px;
+  }
+  .labels-modal h2 {
+    font-size: 1.08rem;
+  }
+  .labels-modal .label-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 7px;
+    margin-bottom: 8px;
+  }
+  .labels-modal .label-tools .search-box {
+    flex: 1 1 100%;
+    width: 100%;
+    font-size: 0.72rem;
+  }
+  .labels-modal .label-tools .search-box input {
+    min-height: 34px;
+    padding: 0 9px;
+    font-size: 0.84rem;
+  }
+  .labels-modal .label-tools .btn {
+    width: auto;
+    min-height: 30px;
+    padding: 0 9px;
+    font-size: 0.72rem;
+  }
+  .labels-modal .label-section-title {
+    margin: 10px 0 6px;
+    font-size: 0.72rem;
+  }
+  .labels-modal .label-list {
+    max-height: min(58vh, 470px);
+    gap: 6px;
+    padding: 6px;
+  }
+  .labels-modal .label-row {
+    grid-template-columns: 16px minmax(0, 1fr) 58px 58px;
+    gap: 6px;
+    padding: 7px;
+  }
+  .labels-modal .label-check {
+    width: 16px;
+    height: 16px;
+  }
+  .labels-modal .label-product {
+    min-width: 0;
+  }
+  .labels-modal .label-product strong {
+    font-size: 0.78rem;
+    line-height: 1.18;
+  }
+  .labels-modal .label-row small {
+    font-size: 0.68rem;
+    line-height: 1.22;
+  }
+  .labels-modal .label-qty-field {
+    gap: 3px;
+    font-size: 0.62rem;
+  }
+  .labels-modal .label-qty-field input {
+    min-height: 30px;
+    padding: 0 5px;
+    font-size: 0.78rem;
+  }
+  .labels-modal .label-row .month-badge {
+    grid-column: 2 / 5;
+    justify-self: start;
+    max-width: 100%;
+    font-size: 0.64rem;
+    padding: 4px 6px;
+  }
+  .labels-modal .form-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+  .labels-modal .form-actions .btn {
+    width: 100%;
+    min-height: 40px;
+    padding: 0 10px;
+    font-size: 0.82rem;
+  }
+  .daily-tasks-board {
+    max-height: calc(100vh - 14px);
+    padding: 14px;
+  }
   .pending-item { grid-template-columns: 1fr; }
   .operator-header {
     display: grid;
