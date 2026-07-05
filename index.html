@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Jesunutri">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=13">
+    <link rel="stylesheet" href="styles.css?v=15">
   </head>
   <body>
     <section class="app-splash" id="appSplash">
@@ -169,6 +169,52 @@
       </div>
 
       <main>
+        <section class="panel local-backend-panel" id="localBackendPanel">
+          <div class="section-heading compact-heading">
+            <div>
+              <p class="eyebrow">Backend local</p>
+              <h2>Modo local</h2>
+              <p>Prioridad operativa en este dispositivo. Supabase queda como respaldo.</p>
+            </div>
+            <span class="backend-mode-pill desconocido" id="localModePill">Sin fuente activa</span>
+          </div>
+          <div class="backend-status-grid">
+            <article>
+              <span>Backend local</span>
+              <strong id="backendLocalStatus">pendiente</strong>
+            </article>
+            <article>
+              <span>Base local</span>
+              <strong id="backendDbStatus">pendiente</strong>
+            </article>
+            <article>
+              <span>Migracion</span>
+              <strong id="backendMigrationStatus">-</strong>
+            </article>
+            <article>
+              <span>Supabase</span>
+              <strong id="backendSupabaseStatus">pendiente</strong>
+            </article>
+            <article>
+              <span>Fuente activa</span>
+              <strong id="backendActiveSource">Sin fuente activa</strong>
+            </article>
+            <article>
+              <span>Ultima revision</span>
+              <strong id="backendLastSync">-</strong>
+            </article>
+          </div>
+          <div class="backend-actions">
+            <button class="btn primary" type="button" id="prepareLocalModeBtn">Preparar modo local</button>
+            <button class="btn" type="button" id="importSupabaseBtn">Importar desde Supabase</button>
+            <button class="btn" type="button" id="refreshBackendStatusBtn">Revisar estado</button>
+            <button class="btn" type="button" id="localBackupBtn">Backup local</button>
+          </div>
+          <div class="backend-error-list" id="backendErrorList">
+            <div class="backend-ok">Sin errores recientes.</div>
+          </div>
+        </section>
+
         <section class="dashboard-grid" aria-label="Resumen de inventario">
           <button class="metric-card dashboard-card" type="button" data-detail="total">
             <span class="metric-label">Total insumos</span>
@@ -1586,7 +1632,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="script.js?v=13"></script>
+    <script src="script.js?v=15"></script>
   </body>
 </html>
 

@@ -1,0 +1,19 @@
+{
+  "name": "jesunutri-local-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend local liviano para JESUnutri con Express y SQLite.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "install-local": "node --no-warnings scripts/install-local.js",
+    "health": "node --no-warnings scripts/health.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

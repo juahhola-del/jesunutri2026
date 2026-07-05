@@ -24,6 +24,28 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# local datasets and generated artifacts
+outputs/
+pedidos/
+Planillas Mayo/
+*.xlsx
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+jesunutri_abastecimiento_pedido_real_errores_*.csv
+[{]*.png
+
+# python generated files
+__pycache__/
+*.pyc
+
+# local backend runtime data
+local-backend/data/
+local-backend/backups/
+
 # vercel
 .vercel/
 

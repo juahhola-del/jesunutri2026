@@ -1,16 +1,237 @@
-﻿const SUPABASE_URL = "https://kfobwrcxvqygmfvvccfl.supabase.co";
+const SUPABASE_URL = "https://kfobwrcxvqygmfvvccfl.supabase.co";
 
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmb2J3cmN4dnF5Z21mdnZjY2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMzY0MTQsImV4cCI6MjA5NTgxMjQxNH0.hgGBTlCDtz3gbBTxnwmikVEtM6FFzRI1pL5BzgRFTPI";
+const LOCAL_BACKEND_URL = window.localStorage.getItem("jesunutri_local_backend_url") || "http://127.0.0.1:8787";
+const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 
-const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    storage: window.localStorage
+function createUnavailableSupabaseClient() {
+  const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
+  const createQuery = () => {
+    const query = {};
+    ["select", "eq", "is", "order", "limit", "maybeSingle", "single", "insert", "update", "delete", "upsert", "in", "gt", "neq"].forEach((method) => {
+      query[method] = () => query;
+    });
+    query.then = (resolve) => resolve({ data: null, error: unavailableError() });
+    return query;
+  };
+  return {
+    from: () => createQuery(),
+    auth: {
+      getSession: async () => ({ data: { session: null }, error: unavailableError() }),
+      signInWithPassword: async () => ({ data: null, error: unavailableError() }),
+      signOut: async () => ({ error: null })
+    }
+  };
+}
+
+const LOCAL_QUERY_TABLES = new Set([
+  "usuarios_app",
+  "productos_insumos",
+  "insumo_lotes",
+  "movimientos_inventario",
+  "ingresos_pendientes",
+  "ingresos_pendientes_detalle",
+  "daily_tasks",
+  "clinical_pac_years",
+  "clinical_pac_items",
+  "clinical_monthly_orders",
+  "clinical_monthly_order_items",
+  "clinical_real_order_imports",
+  "clinical_real_order_items",
+  "clinical_budget_snapshots",
+  "clinical_daily_demands",
+  "clinical_daily_diet_counts",
+  "clinical_daily_enteral_items",
+  "clinical_daily_supply_items",
+  "clinical_daily_import_errors",
+  "clinical_product_links",
+  "clinical_demand_product_links",
+  "inventario_lotes_disponibles",
+  "alertas_stock_minimo",
+  "historial_movimientos_inventario"
+]);
+
+class LocalTableQuery {
+  constructor(table, remoteClient) {
+    this.table = table;
+    this.remoteClient = remoteClient;
+    this.options = {
+      operation: "select",
+      filters: [],
+      orders: []
+    };
   }
-});
+
+  select(columns = "*") {
+    this.options.select = columns;
+    return this;
+  }
+
+  insert(payload) {
+    this.options.operation = "insert";
+    this.options.payload = payload;
+    return this;
+  }
+
+  update(payload) {
+    this.options.operation = "update";
+    this.options.payload = payload;
+    return this;
+  }
+
+  delete() {
+    this.options.operation = "delete";
+    return this;
+  }
+
+  upsert(payload, options = {}) {
+    this.options.operation = "upsert";
+    this.options.payload = payload;
+    this.options.onConflict = options.onConflict || "";
+    return this;
+  }
+
+  eq(column, value) {
+    this.options.filters.push({ op: "eq", column, value });
+    return this;
+  }
+
+  neq(column, value) {
+    this.options.filters.push({ op: "neq", column, value });
+    return this;
+  }
+
+  gt(column, value) {
+    this.options.filters.push({ op: "gt", column, value });
+    return this;
+  }
+
+  is(column, value) {
+    this.options.filters.push({ op: "is", column, value });
+    return this;
+  }
+
+  in(column, value) {
+    this.options.filters.push({ op: "in", column, value });
+    return this;
+  }
+
+  order(column, options = {}) {
+    this.options.orders.push({ column, ascending: options.ascending !== false });
+    return this;
+  }
+
+  limit(value) {
+    this.options.limit = value;
+    return this;
+  }
+
+  single() {
+    this.options.single = true;
+    return this;
+  }
+
+  maybeSingle() {
+    this.options.maybeSingle = true;
+    return this;
+  }
+
+  applyRemoteFilters(query) {
+    (this.options.filters || []).forEach((filter) => {
+      if (filter.op === "eq") query = query.eq(filter.column, filter.value);
+      if (filter.op === "neq") query = query.neq(filter.column, filter.value);
+      if (filter.op === "gt") query = query.gt(filter.column, filter.value);
+      if (filter.op === "is") query = query.is(filter.column, filter.value);
+      if (filter.op === "in") query = query.in(filter.column, filter.value);
+    });
+    (this.options.orders || []).forEach((item) => {
+      query = query.order(item.column, { ascending: item.ascending !== false });
+    });
+    if (this.options.limit) query = query.limit(this.options.limit);
+    if (this.options.single) query = query.single();
+    if (this.options.maybeSingle) query = query.maybeSingle();
+    return query;
+  }
+
+  async executeRemoteFallback(localError) {
+    try {
+      rememberBackendError(localError);
+      if (!this.remoteClient?.from) throw localError;
+      let query = this.remoteClient.from(this.table);
+      if (this.options.operation === "select") {
+        query = query.select(this.options.select || "*");
+      } else if (this.options.operation === "insert") {
+        query = query.insert(this.options.payload);
+        if (this.options.select) query = query.select(this.options.select);
+      } else if (this.options.operation === "update") {
+        query = query.update(this.options.payload);
+        if (this.options.select) query = query.select(this.options.select);
+      } else if (this.options.operation === "delete") {
+        query = query.delete();
+        if (this.options.select) query = query.select(this.options.select);
+      } else if (this.options.operation === "upsert") {
+        query = this.options.onConflict
+          ? query.upsert(this.options.payload, { onConflict: this.options.onConflict })
+          : query.upsert(this.options.payload);
+        if (this.options.select) query = query.select(this.options.select);
+      }
+      const result = await this.applyRemoteFilters(query);
+      if (!result.error) {
+        state.backend.active = "supabase";
+        renderBackendStatus();
+      }
+      return result;
+    } catch (fallbackError) {
+      return { data: null, error: fallbackError || localError };
+    }
+  }
+
+  async execute() {
+    try {
+      const result = await dataProvider.localRequest(`/api/table/${encodeURIComponent(this.table)}/query`, {
+        method: "POST",
+        body: this.options,
+        timeoutMs: 20000
+      });
+      return { data: result.data ?? null, error: null, count: result.count ?? null };
+    } catch (error) {
+      return this.executeRemoteFallback(error);
+    }
+  }
+
+  then(resolve, reject) {
+    return this.execute().then(resolve, reject);
+  }
+}
+
+function createHybridSupabaseClient(remoteClient) {
+  return {
+    auth: remoteClient.auth,
+    from(table) {
+      try {
+        if (LOCAL_QUERY_TABLES.has(table) && typeof shouldUseLocalBackend === "function" && shouldUseLocalBackend()) {
+          return new LocalTableQuery(table, remoteClient);
+        }
+      } catch (error) {
+        return remoteClient.from(table);
+      }
+      return remoteClient.from(table);
+    }
+  };
+}
+
+const remoteSupabaseClient = window.supabase?.createClient
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storage: window.localStorage
+    }
+  })
+  : createUnavailableSupabaseClient();
+const supabaseClient = createHybridSupabaseClient(remoteSupabaseClient);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BULK_COLUMNS = ["nombre", "cantidad", "unidad", "fecha_vencimiento", "lote", "critico", "observaciones"];
@@ -225,6 +446,25 @@ const state = {
   deferredInstallPrompt: null,
   currentUser: null,
   usingFallback: false,
+  backend: {
+    active: "desconocido",
+    local: {
+      available: false,
+      installed: false,
+      status: "pendiente",
+      migrationVersion: null,
+      latestMigration: null,
+      databasePath: "",
+      lastChecked: null,
+      error: ""
+    },
+    supabase: {
+      connected: false,
+      lastChecked: null,
+      error: ""
+    },
+    recentErrors: []
+  },
   clinicalSupply: {
     activeTab: "pac",
     pacYear: new Date().getFullYear(),
@@ -380,6 +620,19 @@ const elements = {
   saveProductSettingsBtn: document.getElementById("saveProductSettingsBtn"),
   installAppBtn: document.getElementById("installAppBtn"),
   installHint: document.getElementById("installHint"),
+  localBackendPanel: document.getElementById("localBackendPanel"),
+  localModePill: document.getElementById("localModePill"),
+  prepareLocalModeBtn: document.getElementById("prepareLocalModeBtn"),
+  importSupabaseBtn: document.getElementById("importSupabaseBtn"),
+  refreshBackendStatusBtn: document.getElementById("refreshBackendStatusBtn"),
+  localBackupBtn: document.getElementById("localBackupBtn"),
+  backendLocalStatus: document.getElementById("backendLocalStatus"),
+  backendDbStatus: document.getElementById("backendDbStatus"),
+  backendMigrationStatus: document.getElementById("backendMigrationStatus"),
+  backendSupabaseStatus: document.getElementById("backendSupabaseStatus"),
+  backendActiveSource: document.getElementById("backendActiveSource"),
+  backendLastSync: document.getElementById("backendLastSync"),
+  backendErrorList: document.getElementById("backendErrorList"),
   clinicalSupplyBtn: document.getElementById("clinicalSupplyBtn"),
   clinicalSupplyPanel: document.getElementById("clinicalSupplyPanel"),
   clinicalPacYear: document.getElementById("clinicalPacYear"),
@@ -567,18 +820,12 @@ async function loadDailyTasks() {
     return;
   }
   try {
-    const { data, error } = await supabaseClient
-      .from("daily_tasks")
-      .select("*")
-      .order("scheduled_time", { ascending: true, nullsFirst: false })
-      .order("created_at", { ascending: true });
-    if (error) throw error;
-    state.dailyTasks = (data || []).map(mapDailyTaskFromDb);
+    state.dailyTasks = await tasksService.list();
     saveDailyTasksLocal();
   } catch (error) {
     console.warn("Tareas diarias en respaldo local", error);
     loadDailyTasksLocal();
-    showToastError("Tareas en respaldo local. Ejecuta SQL 27 para guardar en Supabase.");
+    showToastError("Tareas en respaldo local temporal.");
   }
 }
 
@@ -738,22 +985,10 @@ async function saveDailyTask(event) {
   elements.saveDailyTaskBtn.textContent = "Guardando...";
   try {
     if (state.currentUser?.id) {
-      const payload = dailyTaskToDbPayload(task);
-      if (String(task.id).startsWith("local-")) {
-        const { data, error } = await supabaseClient
-          .from("daily_tasks")
-          .insert(payload)
-          .select()
-          .single();
-        if (error) throw error;
-        task.id = data.id;
-      } else {
-        const { error } = await supabaseClient
-          .from("daily_tasks")
-          .update({ ...payload, updated_at: new Date().toISOString() })
-          .eq("id", task.id);
-        if (error) throw error;
-      }
+      const savedTask = await tasksService.save(task);
+      task.id = savedTask.id;
+      task.createdAt = savedTask.createdAt;
+      task.updatedAt = savedTask.updatedAt;
     }
     state.dailyTasks = [
       ...state.dailyTasks.filter((item) => String(item.id) !== String(task.id)),
@@ -792,12 +1027,15 @@ async function updateDailyTaskStatus(taskId, status) {
   saveDailyTasksLocal();
   renderDailyTasks();
 
-  if (!String(taskId).startsWith("local-") && state.currentUser?.id) {
-    const { error } = await supabaseClient
-      .from("daily_tasks")
-      .update(dailyTaskToDbPayload(updated))
-      .eq("id", taskId);
-    if (error) showToastError("Estado guardado local, no se pudo sincronizar Supabase.");
+  if (state.currentUser?.id) {
+    try {
+      const persisted = await tasksService.updateStatus(updated);
+      state.dailyTasks = state.dailyTasks.map((item) => String(item.id) === String(taskId) ? persisted : item);
+      saveDailyTasksLocal();
+      renderDailyTasks();
+    } catch (error) {
+      showToastError("Estado guardado local temporal, no se pudo sincronizar backend.");
+    }
   }
 }
 
@@ -1041,6 +1279,347 @@ function withTimeout(promise, timeoutMs, message) {
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer));
 }
 
+function rememberBackendError(error) {
+  const message = getSupabaseErrorMessage(error);
+  if (!message) return;
+  state.backend.recentErrors = [
+    { message, at: new Date().toISOString() },
+    ...state.backend.recentErrors
+  ].slice(0, 6);
+}
+
+function shouldUseLocalBackend() {
+  return Boolean(state.backend.local.available && state.backend.local.installed);
+}
+
+function updateActiveBackendMode() {
+  if (shouldUseLocalBackend()) {
+    state.backend.active = "local";
+  } else if (state.backend.supabase.connected) {
+    state.backend.active = "supabase";
+  } else {
+    state.backend.active = "error";
+  }
+}
+
+function renderBackendStatus() {
+  if (!elements.localBackendPanel) return;
+  const local = state.backend.local;
+  const supabaseStatus = state.backend.supabase.connected ? "conectado" : "desconectado";
+  const localStatus = local.available ? "activo" : "inactivo";
+  const dbStatus = local.installed ? "instalada" : "pendiente";
+  const activeLabel = state.backend.active === "local"
+    ? "Modo local activo"
+    : state.backend.active === "supabase"
+      ? "Supabase fallback"
+      : state.backend.active === "error"
+        ? "Sin conexion / error"
+        : "Revisando backend";
+
+  elements.localModePill.textContent = activeLabel;
+  elements.localModePill.className = `backend-mode-pill ${state.backend.active}`;
+  elements.backendLocalStatus.textContent = localStatus;
+  elements.backendDbStatus.textContent = dbStatus;
+  elements.backendMigrationStatus.textContent = local.migrationVersion || "-";
+  elements.backendSupabaseStatus.textContent = supabaseStatus;
+  elements.backendActiveSource.textContent = activeLabel;
+  elements.backendLastSync.textContent = local.lastChecked ? formatDateTime(local.lastChecked) : "-";
+
+  const backendErrors = [
+    local.error,
+    state.backend.supabase.error,
+    ...state.backend.recentErrors.map((item) => item.message)
+  ].filter(Boolean);
+
+  elements.backendErrorList.innerHTML = backendErrors.length
+    ? backendErrors.slice(0, 5).map((message) => `<div>${escapeHtml(message)}</div>`).join("")
+    : '<div class="backend-ok">Sin errores recientes.</div>';
+}
+
+const dataProvider = {
+  table(tableName) {
+    return supabaseClient.from(tableName);
+  },
+
+  async localRequest(path, { method = "GET", body = null, timeoutMs = 4500 } = {}) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${LOCAL_BACKEND_URL}${path}`, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal
+      });
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : {};
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error || `Backend local respondio ${response.status}.`);
+      }
+      return payload;
+    } catch (error) {
+      if (error.name === "AbortError") throw new Error("Backend local no respondio a tiempo.");
+      throw error;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  },
+
+  async checkLocalStatus({ quiet = false } = {}) {
+    try {
+      const status = await this.localRequest("/api/status", { timeoutMs: 3000 });
+      state.backend.local = {
+        available: true,
+        installed: Boolean(status.installed),
+        status: status.status || "pendiente",
+        migrationVersion: status.migrationVersion || null,
+        latestMigration: status.latestMigration || null,
+        databasePath: status.databasePath || "",
+        lastChecked: new Date().toISOString(),
+        error: ""
+      };
+      updateActiveBackendMode();
+      if (Array.isArray(status.recentErrors)) state.backend.recentErrors = status.recentErrors;
+      renderBackendStatus();
+      return status;
+    } catch (error) {
+      state.backend.local = {
+        ...state.backend.local,
+        available: false,
+        installed: false,
+        status: "inactivo",
+        lastChecked: new Date().toISOString(),
+        error: "Backend local inactivo. Ejecuta local-backend\\iniciar-backend-local.cmd."
+      };
+      updateActiveBackendMode();
+      if (!quiet) rememberBackendError(error);
+      renderBackendStatus();
+      return null;
+    }
+  },
+
+  async checkSupabaseStatus() {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 4500);
+    try {
+      const response = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`
+        },
+        signal: controller.signal
+      });
+      state.backend.supabase = {
+        connected: response.status < 500,
+        lastChecked: new Date().toISOString(),
+        error: response.status < 500 ? "" : `Supabase respondio ${response.status}.`
+      };
+      updateActiveBackendMode();
+      renderBackendStatus();
+      return state.backend.supabase.connected;
+    } catch (error) {
+      state.backend.supabase = {
+        connected: false,
+        lastChecked: new Date().toISOString(),
+        error: "Supabase desconectado o inaccesible."
+      };
+      updateActiveBackendMode();
+      renderBackendStatus();
+      return false;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  },
+
+  async installLocal() {
+    const status = await this.localRequest("/api/install", { method: "POST", body: {}, timeoutMs: 20000 });
+    state.backend.local = {
+      available: true,
+      installed: Boolean(status.installed),
+      status: status.status || "pendiente",
+      migrationVersion: status.migrationVersion || null,
+      latestMigration: status.latestMigration || null,
+      databasePath: status.databasePath || "",
+      lastChecked: new Date().toISOString(),
+      error: ""
+    };
+    updateActiveBackendMode();
+    if (Array.isArray(status.recentErrors)) state.backend.recentErrors = status.recentErrors;
+    renderBackendStatus();
+    return status;
+  },
+
+  async backupLocal() {
+    return this.localRequest("/api/backup", { method: "POST", body: {}, timeoutMs: 20000 });
+  },
+
+  async importFromSupabase() {
+    let accessToken = "";
+    try {
+      const { data } = await supabaseClient.auth.getSession();
+      accessToken = data?.session?.access_token || "";
+    } catch (error) {
+      accessToken = "";
+    }
+    return this.localRequest("/api/import-from-supabase", {
+      method: "POST",
+      body: {
+        supabaseUrl: SUPABASE_URL,
+        supabaseKey: SUPABASE_ANON_KEY,
+        accessToken
+      },
+      timeoutMs: 120000
+    });
+  },
+
+  async localLogin(email, password) {
+    return this.localRequest("/api/auth/login", {
+      method: "POST",
+      body: { email, password },
+      timeoutMs: 5000
+    });
+  },
+
+  async localLogout() {
+    return this.localRequest("/api/auth/logout", { method: "POST", body: {}, timeoutMs: 2500 });
+  },
+
+  async localInventorySnapshot() {
+    return this.localRequest("/api/inventory/snapshot", { timeoutMs: 7000 });
+  },
+
+  async listLocalTasks() {
+    return this.localRequest("/api/tasks", { timeoutMs: 7000 });
+  },
+
+  async saveLocalTask(task) {
+    return this.localRequest("/api/tasks", {
+      method: "POST",
+      body: { task, userId: state.currentUser?.id || null },
+      timeoutMs: 7000
+    });
+  },
+
+  async updateLocalTask(taskId, task) {
+    return this.localRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      body: { task, userId: state.currentUser?.id || null },
+      timeoutMs: 7000
+    });
+  },
+
+  async listLocalPendingEntries(scope = "operator") {
+    const params = new URLSearchParams({
+      scope,
+      userId: state.currentUser?.id || ""
+    });
+    return this.localRequest(`/api/pending-entries?${params.toString()}`, { timeoutMs: 7000 });
+  },
+
+  async createLocalPendingEntry(entry, details) {
+    return this.localRequest("/api/pending-entries", {
+      method: "POST",
+      body: { entry, details },
+      timeoutMs: 10000
+    });
+  },
+
+  async updateLocalPendingEntry(entryId, fields) {
+    return this.localRequest(`/api/pending-entries/${encodeURIComponent(entryId)}`, {
+      method: "PATCH",
+      body: { fields },
+      timeoutMs: 7000
+    });
+  },
+
+  async createLocalEntry(payload) {
+    return this.localRequest("/api/inventory/entries", {
+      method: "POST",
+      body: { payload, userId: state.currentUser?.id || null },
+      timeoutMs: 10000
+    });
+  },
+
+  async updateLocalEntry(lotId, payload) {
+    return this.localRequest(`/api/inventory/entries/${encodeURIComponent(lotId)}`, {
+      method: "PATCH",
+      body: { payload, userId: state.currentUser?.id || null },
+      timeoutMs: 10000
+    });
+  },
+
+  async deleteLocalLot(lotId) {
+    return this.localRequest(`/api/inventory/lots/${encodeURIComponent(lotId)}`, {
+      method: "DELETE",
+      body: { userId: state.currentUser?.id || null },
+      timeoutMs: 10000
+    });
+  },
+
+  async updateLocalLot(lotId, fields) {
+    return this.localRequest(`/api/inventory/lots/${encodeURIComponent(lotId)}`, {
+      method: "PATCH",
+      body: { fields },
+      timeoutMs: 7000
+    });
+  },
+
+  async updateLocalProduct(productId, fields) {
+    return this.localRequest(`/api/inventory/products/${encodeURIComponent(productId)}`, {
+      method: "PATCH",
+      body: { fields },
+      timeoutMs: 7000
+    });
+  },
+
+  async createLocalMovements(movements) {
+    return this.localRequest("/api/inventory/movements", {
+      method: "POST",
+      body: { movements, userId: state.currentUser?.id || null },
+      timeoutMs: 10000
+    });
+  }
+};
+
+async function refreshBackendStatus({ quiet = true } = {}) {
+  const [local] = await Promise.all([
+    dataProvider.checkLocalStatus({ quiet }),
+    dataProvider.checkSupabaseStatus()
+  ]);
+  renderBackendStatus();
+  return local;
+}
+
+function saveLocalSession(user) {
+  window.localStorage.setItem(LOCAL_SESSION_STORAGE_KEY, JSON.stringify({
+    user,
+    savedAt: new Date().toISOString()
+  }));
+}
+
+function readLocalSession() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(LOCAL_SESSION_STORAGE_KEY) || "null");
+    if (!saved?.user?.id) return null;
+    return saved;
+  } catch (error) {
+    return null;
+  }
+}
+
+function clearLocalSession() {
+  window.localStorage.removeItem(LOCAL_SESSION_STORAGE_KEY);
+}
+
+async function resumeLocalSession() {
+  const saved = readLocalSession();
+  if (!saved?.user) return false;
+  const status = await dataProvider.checkLocalStatus({ quiet: true });
+  if (!status?.installed) return false;
+  await startAuthenticatedApp({ user: { ...saved.user, source: "local" } });
+  return true;
+}
+
 function isAdmin() {
   return state.currentUser?.rol === "admin";
 }
@@ -1050,8 +1629,18 @@ function requireAdminAction() {
 }
 
 async function loadAuthorizedUser(authUser) {
-  const { data, error } = await supabaseClient
-    .from("usuarios_app")
+  if (authUser?.source === "local") {
+    state.currentUser = {
+      id: authUser.id,
+      email: authUser.email,
+      nombre: authUser.nombre || authUser.email || "Jesu",
+      rol: authUser.rol || "admin",
+      source: "local"
+    };
+    return state.currentUser;
+  }
+
+  const { data, error } = await dataProvider.table("usuarios_app")
     .select("id,email,nombre,rol,activo")
     .eq("id", authUser.id)
     .maybeSingle();
@@ -1073,6 +1662,7 @@ async function loadAuthorizedUser(authUser) {
 
 async function startAuthenticatedApp(session) {
   await withTimeout(loadAuthorizedUser(session.user), 12000, "No se pudo validar el usuario. Revisa internet o permisos RLS.");
+  await refreshBackendStatus({ quiet: true });
   await loadClinicalSupplyState();
   setupClinicalSupplyControls();
   if (isAdmin()) {
@@ -1102,6 +1692,10 @@ async function startAuthenticatedApp(session) {
 
 async function checkInitialSession() {
   clearLoginError();
+  const localStatus = await dataProvider.checkLocalStatus({ quiet: true });
+  dataProvider.checkSupabaseStatus().catch(() => {});
+  if (localStatus?.installed && await resumeLocalSession()) return;
+
   try {
     const { data, error } = await withTimeout(
       supabaseClient.auth.getSession(),
@@ -1109,11 +1703,13 @@ async function checkInitialSession() {
       "Tu sesion expiro."
     );
     if (error || !data.session) {
+      if (await resumeLocalSession()) return;
       showLogin();
       return;
     }
     await startAuthenticatedApp(data.session);
   } catch (authError) {
+    if (await resumeLocalSession()) return;
     showLogin();
     showLoginError(authError.message || "Tu sesion expiro.");
   }
@@ -1240,16 +1836,14 @@ function mapSupabaseLot(row) {
 }
 
 async function loadProductsFromSupabase() {
-  let { data, error } = await supabaseClient
-    .from("productos_insumos")
+  let { data, error } = await dataProvider.table("productos_insumos")
     .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,critico,consumo_promedio_diario,favorito,activo")
     .eq("activo", true)
     .is("deleted_at", null)
     .order("nombre", { ascending: true });
 
   if (error && /consumo_promedio_diario|favorito/i.test(getSupabaseErrorMessage(error))) {
-    const fallback = await supabaseClient
-      .from("productos_insumos")
+    const fallback = await dataProvider.table("productos_insumos")
       .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,critico,activo")
       .eq("activo", true)
       .is("deleted_at", null)
@@ -1272,8 +1866,7 @@ async function loadProductsFromSupabase() {
 async function loadInventoryFromSupabase() {
   await loadProductsFromSupabase();
 
-  const { data, error } = await supabaseClient
-    .from("inventario_lotes_disponibles")
+  const { data, error } = await dataProvider.table("inventario_lotes_disponibles")
     .select("*")
     .gt("cantidad_disponible", 0)
     .eq("activo", true)
@@ -1281,8 +1874,7 @@ async function loadInventoryFromSupabase() {
 
   if (error) throw error;
 
-  const { data: lowStockRows, error: lowStockError } = await supabaseClient
-    .from("alertas_stock_minimo")
+  const { data: lowStockRows, error: lowStockError } = await dataProvider.table("alertas_stock_minimo")
     .select("*");
 
   if (lowStockError) throw lowStockError;
@@ -1291,8 +1883,271 @@ async function loadInventoryFromSupabase() {
   state.lowStockProducts = lowStockRows || [];
   state.usingFallback = false;
   elements.inventorySourceText.textContent = "Datos reales cargados desde Supabase.";
+  state.backend.active = "supabase";
+  renderBackendStatus();
   clearError();
 }
+
+function mapMovementRow(row) {
+  return {
+    id: row.id,
+    productoId: row.producto_id || row.productoId,
+    loteId: row.lote_id || row.loteId,
+    tipo: row.tipo_movimiento || row.tipo,
+    cantidad: Number(row.cantidad || 0),
+    unidad: row.unidad || "-",
+    fecha: row.fecha_movimiento || row.fecha || row.created_at,
+    motivo: row.motivo || "",
+    observacion: row.observacion || "",
+    desviacionFifo: Boolean(row.desviacion_fifo || row.desviacionFifo),
+    loteRecomendadoId: row.lote_recomendado_id || row.loteRecomendadoId || null,
+    producto: row.producto || row.productos_insumos?.nombre || state.products.find((product) => String(product.id) === String(row.producto_id || row.productoId))?.nombre || "Producto",
+    lote: row.lote || row.insumo_lotes?.lote || "-",
+    fechaVencimiento: row.fecha_vencimiento || row.insumo_lotes?.fecha_vencimiento || null
+  };
+}
+
+async function loadInventoryFromLocal() {
+  const snapshot = await dataProvider.localInventorySnapshot();
+  state.products = (snapshot.products || []).map((product) => ({
+    ...product,
+    codigoProducto: getProductCode(product.id),
+    consumo_promedio_diario: Number(product.consumo_promedio_diario || 0),
+    favorito: Boolean(product.favorito),
+    critico: Boolean(product.critico),
+    activo: product.activo !== false && product.activo !== 0,
+    nombre_normalizado: product.nombre_normalizado || normalize(product.nombre)
+  }));
+  state.inventory = (snapshot.inventory || []).map(mapSupabaseLot);
+  state.lowStockProducts = snapshot.lowStock || [];
+  state.movements = (snapshot.movements || []).map(mapMovementRow);
+  state.usingFallback = false;
+  state.backend.active = "local";
+  elements.inventorySourceText.textContent = state.inventory.length
+    ? "Modo local activo. Datos cargados desde SQLite local."
+    : "Modo local activo. Base SQLite local instalada, sin inventario cargado aun.";
+  renderProductSuggestions();
+  renderBackendStatus();
+  clearError();
+}
+
+const inventoryService = {
+  async refresh() {
+    const localStatus = await dataProvider.checkLocalStatus({ quiet: true });
+    if (localStatus?.installed) {
+      await loadInventoryFromLocal();
+      return;
+    }
+    await loadInventoryFromSupabase();
+    await loadMovementHistory();
+  },
+
+  async createEntry(payload) {
+    if (shouldUseLocalBackend()) return dataProvider.createLocalEntry(payload);
+    return null;
+  },
+
+  async updateEntry(lotId, payload) {
+    if (shouldUseLocalBackend()) return dataProvider.updateLocalEntry(lotId, payload);
+    return null;
+  },
+
+  async deleteLot(lotId) {
+    if (shouldUseLocalBackend()) return dataProvider.deleteLocalLot(lotId);
+    return null;
+  },
+
+  async createMovements(movements) {
+    if (shouldUseLocalBackend()) return dataProvider.createLocalMovements(movements);
+    return null;
+  },
+
+  async updateLot(lotId, fields) {
+    if (shouldUseLocalBackend()) return dataProvider.updateLocalLot(lotId, fields);
+    return null;
+  },
+
+  async updateProduct(productId, fields) {
+    if (shouldUseLocalBackend()) return dataProvider.updateLocalProduct(productId, fields);
+    return null;
+  }
+};
+
+const tasksService = {
+  async list() {
+    if (shouldUseLocalBackend()) {
+      const result = await dataProvider.listLocalTasks();
+      return (result.tasks || []).map(mapDailyTaskFromDb);
+    }
+
+    const { data, error } = await dataProvider.table("daily_tasks")
+      .select("*")
+      .order("scheduled_time", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return (data || []).map(mapDailyTaskFromDb);
+  },
+
+  async save(task) {
+    const payload = dailyTaskToDbPayload(task);
+    if (shouldUseLocalBackend()) {
+      const result = await dataProvider.saveLocalTask({ ...payload, id: task.id });
+      return mapDailyTaskFromDb(result.task);
+    }
+
+    if (String(task.id).startsWith("local-")) {
+      const { data, error } = await dataProvider.table("daily_tasks")
+        .insert(payload)
+        .select()
+        .single();
+      if (error) throw error;
+      return mapDailyTaskFromDb(data);
+    }
+
+    const { error } = await dataProvider.table("daily_tasks")
+      .update({ ...payload, updated_at: new Date().toISOString() })
+      .eq("id", task.id);
+    if (error) throw error;
+    return task;
+  },
+
+  async updateStatus(task) {
+    const payload = dailyTaskToDbPayload(task);
+    if (shouldUseLocalBackend()) {
+      const result = await dataProvider.updateLocalTask(task.id, { ...payload, id: task.id });
+      return mapDailyTaskFromDb(result.task);
+    }
+
+    if (!String(task.id).startsWith("local-") && state.currentUser?.id) {
+      const { error } = await dataProvider.table("daily_tasks")
+        .update(payload)
+        .eq("id", task.id);
+      if (error) throw error;
+    }
+    return task;
+  }
+};
+
+const pendingEntriesService = {
+  async create(entry, details) {
+    if (shouldUseLocalBackend()) return dataProvider.createLocalPendingEntry(entry, details);
+
+    const { data: pending, error: pendingError } = await dataProvider.table("ingresos_pendientes")
+      .insert(entry)
+      .select("id")
+      .single();
+    if (pendingError) throw pendingError;
+
+    const detailRows = details.map((detail) => ({
+      ...detail,
+      ingreso_pendiente_id: pending.id
+    }));
+    const { error: detailError } = await dataProvider.table("ingresos_pendientes_detalle")
+      .insert(detailRows);
+    if (detailError) throw detailError;
+    return { ok: true, id: pending.id };
+  },
+
+  async list(scope = "operator") {
+    if (shouldUseLocalBackend()) {
+      const result = await dataProvider.listLocalPendingEntries(scope);
+      return (result.entries || []).map((entry) => ({
+        ...entry,
+        detalles: (entry.detalles || []).map((detail) => ({
+          ...detail,
+          critico: Boolean(detail.critico)
+        }))
+      }));
+    }
+
+    let query = dataProvider.table("ingresos_pendientes")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (scope === "operator") query = query.eq("creado_por", state.currentUser.id);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const ids = (data || []).map((entry) => entry.id);
+    let details = [];
+    if (ids.length) {
+      const { data: detailData, error: detailError } = await dataProvider.table("ingresos_pendientes_detalle")
+        .select("*")
+        .in("ingreso_pendiente_id", ids)
+        .order("created_at", { ascending: true });
+      if (detailError) throw detailError;
+      details = detailData || [];
+    }
+
+    return (data || []).map((entry) => ({
+      ...entry,
+      detalles: details.filter((detail) => detail.ingreso_pendiente_id === entry.id)
+    }));
+  },
+
+  async update(entryId, fields) {
+    if (shouldUseLocalBackend()) return dataProvider.updateLocalPendingEntry(entryId, fields);
+
+    const { error } = await dataProvider.table("ingresos_pendientes")
+      .update(fields)
+      .eq("id", entryId);
+    if (error) throw error;
+    return { ok: true };
+  }
+};
+
+const predictionService = {
+  async loadForecast(year, month) {
+    const forecast = CLINICAL_PREDICTION_FORECASTS.find((item) => item.year === Number(year) && item.month === Number(month)) || null;
+    if (!forecast) {
+      return { rows: [], status: "sin_prediccion_mes", label: "" };
+    }
+    const response = await fetch(forecast.path, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const rows = parseClinicalPredictionCsv(await response.text());
+    return { rows, status: rows.length ? "cargada" : "sin_filas", label: forecast.label };
+  }
+};
+
+const clinicalSupplyService = {
+  async loadHistory(userId, currentHistory = getClinicalDefaultHistory()) {
+    const [pacResult, orderResult, importResult, demandResult] = await Promise.all([
+      dataProvider.table("clinical_pac_years")
+        .select("id,year,approved_budget,requested_budget,total_valued,created_at,updated_at")
+        .eq("created_by", userId)
+        .order("year", { ascending: false })
+        .limit(12),
+      dataProvider.table("clinical_monthly_orders")
+        .select("id,year,month,status,total_valued,created_at,updated_at,pac_year_id")
+        .eq("created_by", userId)
+        .order("updated_at", { ascending: false })
+        .limit(20),
+      dataProvider.table("clinical_real_order_imports")
+        .select("id,year,month,filename,row_count,created_at,pac_year_id,monthly_order_id")
+        .eq("imported_by", userId)
+        .order("created_at", { ascending: false })
+        .limit(20),
+      dataProvider.table("clinical_daily_demands")
+        .select("id,demand_date,filename,status,total_patients,warning_count,created_at")
+        .eq("uploaded_by", userId)
+        .order("demand_date", { ascending: false })
+        .limit(20)
+    ]);
+
+    if (pacResult.error) throw pacResult.error;
+    if (orderResult.error) throw orderResult.error;
+    if (importResult.error) throw importResult.error;
+    if (demandResult.error) console.warn("Historial de demanda diaria no disponible", demandResult.error);
+
+    return {
+      pacYears: pacResult.data || [],
+      monthlyOrders: orderResult.data || [],
+      realImports: importResult.data || [],
+      dailyDemands: demandResult.error ? (currentHistory.dailyDemands || []) : (demandResult.data || [])
+    };
+  }
+};
 
 async function loadMovementHistory() {
   if (state.usingFallback) {
@@ -1301,8 +2156,7 @@ async function loadMovementHistory() {
   }
 
   try {
-    const { data, error } = await supabaseClient
-      .from("movimientos_inventario")
+    const { data, error } = await dataProvider.table("movimientos_inventario")
       .select(`
         id,
         producto_id,
@@ -1324,22 +2178,7 @@ async function loadMovementHistory() {
 
     if (error) throw error;
 
-    state.movements = (data || []).map((row) => ({
-      id: row.id,
-      productoId: row.producto_id,
-      loteId: row.lote_id,
-      tipo: row.tipo_movimiento,
-      cantidad: Number(row.cantidad || 0),
-      unidad: row.unidad || "-",
-      fecha: row.fecha_movimiento || row.created_at,
-      motivo: row.motivo || "",
-      observacion: row.observacion || "",
-      desviacionFifo: Boolean(row.desviacion_fifo),
-      loteRecomendadoId: row.lote_recomendado_id,
-      producto: row.productos_insumos?.nombre || state.products.find((product) => String(product.id) === String(row.producto_id))?.nombre || "Producto",
-      lote: row.insumo_lotes?.lote || "-",
-      fechaVencimiento: row.insumo_lotes?.fecha_vencimiento || null
-    }));
+    state.movements = (data || []).map(mapMovementRow);
   } catch (error) {
     state.movements = [];
     console.warn("No se pudo cargar historial de movimientos", error);
@@ -1364,15 +2203,17 @@ function loadFallbackInventory(error) {
     .map((item) => ({ producto_id: item.productoId, nombre: item.nombre, stock_actual: item.cantidad, stock_minimo: item.stockMinimo }));
   state.movements = [];
   state.usingFallback = true;
+  state.backend.active = "sin_fuente";
+  rememberBackendError(error);
   renderProductSuggestions();
-  elements.inventorySourceText.textContent = "Supabase no respondio correctamente. Mostrando datos mock de respaldo.";
-  showError("No se pudo cargar inventario desde Supabase", error);
+  elements.inventorySourceText.textContent = "Backend local y Supabase no respondieron. Mostrando datos mock de respaldo.";
+  renderBackendStatus();
+  showError("No se pudo cargar inventario desde backend local ni Supabase", error);
 }
 
 async function refreshInventory() {
   try {
-    await loadInventoryFromSupabase();
-    await loadMovementHistory();
+    await inventoryService.refresh();
   } catch (error) {
     loadFallbackInventory(error);
   }
@@ -1625,8 +2466,7 @@ function mapClinicalProductLinkFromDb(row) {
 
 async function loadClinicalProductLinksFromSupabase() {
   if (!state.currentUser?.id) return;
-  let query = supabaseClient
-    .from("clinical_product_links")
+  let query = dataProvider.table("clinical_product_links")
     .select("*")
     .eq("created_by", state.currentUser.id)
     .order("updated_at", { ascending: false });
@@ -1659,8 +2499,7 @@ async function saveClinicalProductLinkToSupabase(link) {
     confirmed_at: normalizeClinicalMatchStatus(link.matchStatus) === "vinculado" ? new Date().toISOString() : null,
     updated_at: new Date().toISOString()
   };
-  const { data, error } = await supabaseClient
-    .from("clinical_product_links")
+  const { data, error } = await dataProvider.table("clinical_product_links")
     .upsert(payload, { onConflict: "source_type,normalized_code,normalized_name,source_category,created_by" })
     .select("*")
     .single();
@@ -2001,22 +2840,15 @@ function getClinicalPredictionForecastConfig() {
 }
 
 async function loadClinicalPredictionForecast() {
-  const forecast = getClinicalPredictionForecastConfig();
-  state.clinicalSupply.predictionLabel = forecast?.label || "";
-  if (!forecast) {
-    state.clinicalSupply.predictionRows = [];
-    state.clinicalSupply.predictionStatus = "sin_prediccion_mes";
-    return;
-  }
   try {
-    const response = await fetch(forecast.path, { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const rows = parseClinicalPredictionCsv(await response.text());
-    state.clinicalSupply.predictionRows = rows;
-    state.clinicalSupply.predictionStatus = rows.length ? "cargada" : "sin_filas";
+    const result = await predictionService.loadForecast(state.clinicalSupply.pacYear, state.clinicalSupply.monthIndex + 1);
+    state.clinicalSupply.predictionRows = result.rows;
+    state.clinicalSupply.predictionStatus = result.status;
+    state.clinicalSupply.predictionLabel = result.label;
   } catch (error) {
     state.clinicalSupply.predictionRows = [];
     state.clinicalSupply.predictionStatus = "no_disponible";
+    state.clinicalSupply.predictionLabel = "";
     console.warn("Prediccion clinica no disponible; se usara regla de respaldo", error);
   }
 }
@@ -2205,50 +3037,15 @@ function getClinicalPacValidationErrorsForRow(row) {
 
 async function loadClinicalHistoryFromSupabase() {
   if (!state.currentUser?.id) return;
-  const [pacResult, orderResult, importResult, demandResult] = await Promise.all([
-    supabaseClient
-      .from("clinical_pac_years")
-      .select("id,year,approved_budget,requested_budget,total_valued,created_at,updated_at")
-      .eq("created_by", state.currentUser.id)
-      .order("year", { ascending: false })
-      .limit(12),
-    supabaseClient
-      .from("clinical_monthly_orders")
-      .select("id,year,month,status,total_valued,created_at,updated_at,pac_year_id")
-      .eq("created_by", state.currentUser.id)
-      .order("updated_at", { ascending: false })
-      .limit(20),
-    supabaseClient
-      .from("clinical_real_order_imports")
-      .select("id,year,month,filename,row_count,created_at,pac_year_id,monthly_order_id")
-      .eq("imported_by", state.currentUser.id)
-      .order("created_at", { ascending: false })
-      .limit(20),
-    supabaseClient
-      .from("clinical_daily_demands")
-      .select("id,demand_date,filename,status,total_patients,warning_count,created_at")
-      .eq("uploaded_by", state.currentUser.id)
-      .order("demand_date", { ascending: false })
-      .limit(20)
-  ]);
-
-  if (pacResult.error) throw pacResult.error;
-  if (orderResult.error) throw orderResult.error;
-  if (importResult.error) throw importResult.error;
-  if (demandResult.error) console.warn("Historial de demanda diaria no disponible", demandResult.error);
-
-  state.clinicalSupply.history = {
-    pacYears: pacResult.data || [],
-    monthlyOrders: orderResult.data || [],
-    realImports: importResult.data || [],
-    dailyDemands: demandResult.error ? (state.clinicalSupply.history?.dailyDemands || []) : (demandResult.data || [])
-  };
+  state.clinicalSupply.history = await clinicalSupplyService.loadHistory(
+    state.currentUser.id,
+    state.clinicalSupply.history || getClinicalDefaultHistory()
+  );
 }
 
 async function loadClinicalCurrentOrderFromSupabase(pacYearId) {
   const month = Number(state.clinicalSupply.monthIndex) + 1;
-  const { data: order, error } = await supabaseClient
-    .from("clinical_monthly_orders")
+  const { data: order, error } = await dataProvider.table("clinical_monthly_orders")
     .select("id,year,month,status,total_valued,pac_year_id")
     .eq("year", state.clinicalSupply.pacYear)
     .eq("month", month)
@@ -2261,8 +3058,7 @@ async function loadClinicalCurrentOrderFromSupabase(pacYearId) {
   state.clinicalSupply.orderRows = state.clinicalSupply.orderRows.filter((row) => row.orderKey !== orderKey);
 
   if (order) {
-    const { data: items, error: itemError } = await supabaseClient
-      .from("clinical_monthly_order_items")
+    const { data: items, error: itemError } = await dataProvider.table("clinical_monthly_order_items")
       .select("*")
       .eq("monthly_order_id", order.id)
       .order("created_at", { ascending: true });
@@ -2271,8 +3067,7 @@ async function loadClinicalCurrentOrderFromSupabase(pacYearId) {
     state.clinicalSupply.orderRows.push(...(items || []).map((item) => mapClinicalOrderItemFromDb(item, order)));
   }
 
-  const { data: importRows, error: importError } = await supabaseClient
-    .from("clinical_real_order_imports")
+  const { data: importRows, error: importError } = await dataProvider.table("clinical_real_order_imports")
     .select("id")
     .eq("year", state.clinicalSupply.pacYear)
     .eq("month", month)
@@ -2287,8 +3082,7 @@ async function loadClinicalCurrentOrderFromSupabase(pacYearId) {
   state.clinicalSupply.realImportDiagnostics = null;
   if (!importId) return;
 
-  const { data: realItems, error: realError } = await supabaseClient
-    .from("clinical_real_order_items")
+  const { data: realItems, error: realError } = await dataProvider.table("clinical_real_order_items")
     .select("*")
     .eq("real_order_import_id", importId)
     .order("created_at", { ascending: true });
@@ -2303,8 +3097,7 @@ async function loadClinicalSupplyState({ useLocal = true } = {}) {
   if (!state.currentUser?.id) return;
 
   try {
-    const { data: pacYear, error } = await supabaseClient
-      .from("clinical_pac_years")
+    const { data: pacYear, error } = await dataProvider.table("clinical_pac_years")
       .select("id,year,approved_budget,requested_budget,total_valued,created_at")
       .eq("year", state.clinicalSupply.pacYear)
       .eq("created_by", state.currentUser.id)
@@ -2317,8 +3110,7 @@ async function loadClinicalSupplyState({ useLocal = true } = {}) {
     if (pacYear) {
       state.clinicalSupply.budgetApproved = Number(pacYear.approved_budget || 0);
       state.clinicalSupply.budgetRequested = Number(pacYear.requested_budget || 0);
-      const { data: items, error: itemError } = await supabaseClient
-        .from("clinical_pac_items")
+      const { data: items, error: itemError } = await dataProvider.table("clinical_pac_items")
         .select("*")
         .eq("pac_year_id", pacYear.id)
         .order("created_at", { ascending: true });
@@ -4180,8 +4972,7 @@ async function updateClinicalRealOrderQuantity(rowId, value) {
   saveClinicalSupplyState();
 
   if (state.currentUser?.id && supabaseClient && /^[0-9a-f-]{36}$/i.test(String(row.id))) {
-    const { error } = await supabaseClient
-      .from("clinical_real_order_items")
+    const { error } = await dataProvider.table("clinical_real_order_items")
       .update({
         quantity: Number(row.cantidad || 0),
         product_id: row.productoId || null,
@@ -4916,8 +5707,7 @@ async function createInventoryProductFromPacRow(row) {
     activo: true
   };
   let { data, error } = await withTimeout(
-    supabaseClient
-      .from("productos_insumos")
+    dataProvider.table("productos_insumos")
       .insert(payload)
       .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,critico,consumo_promedio_diario,favorito,activo")
       .single(),
@@ -4926,8 +5716,7 @@ async function createInventoryProductFromPacRow(row) {
   );
   if (error && /consumo_promedio_diario|favorito|critico/i.test(getSupabaseErrorMessage(error))) {
     const fallback = await withTimeout(
-      supabaseClient
-        .from("productos_insumos")
+      dataProvider.table("productos_insumos")
         .insert({
           nombre: payload.nombre,
           nombre_normalizado: payload.nombre_normalizado,
@@ -5255,8 +6044,7 @@ async function ensureClinicalPacYearSaved({ replaceItems = false } = {}) {
     updated_at: new Date().toISOString()
   };
 
-  const { data: pacYear, error } = await supabaseClient
-    .from("clinical_pac_years")
+  const { data: pacYear, error } = await dataProvider.table("clinical_pac_years")
     .upsert(payload, { onConflict: "year,created_by" })
     .select("id")
     .single();
@@ -5265,8 +6053,7 @@ async function ensureClinicalPacYearSaved({ replaceItems = false } = {}) {
   state.clinicalSupply.pacYearId = pacYear.id;
 
   if (replaceItems) {
-    const { error: deleteError } = await supabaseClient
-      .from("clinical_pac_items")
+    const { error: deleteError } = await dataProvider.table("clinical_pac_items")
       .delete()
       .eq("pac_year_id", pacYear.id);
     if (deleteError) throw deleteError;
@@ -5289,8 +6076,7 @@ async function ensureClinicalPacYearSaved({ replaceItems = false } = {}) {
     });
 
     if (itemPayload.length) {
-      const { data: insertedItems, error: insertError } = await supabaseClient
-        .from("clinical_pac_items")
+      const { data: insertedItems, error: insertError } = await dataProvider.table("clinical_pac_items")
         .insert(itemPayload)
         .select("*");
       if (insertError) throw insertError;
@@ -5312,8 +6098,7 @@ async function saveClinicalBudgetSnapshot(monthlyOrderId = state.clinicalSupply.
   const approved = Number(state.clinicalSupply.budgetApproved || 0);
   const requested = Number(state.clinicalSupply.budgetRequested || 0);
   const pacTotal = getClinicalPacTotal();
-  const { error } = await supabaseClient
-    .from("clinical_budget_snapshots")
+  const { error } = await dataProvider.table("clinical_budget_snapshots")
     .insert({
       pac_year_id: state.clinicalSupply.pacYearId,
       monthly_order_id: monthlyOrderId || null,
@@ -5351,8 +6136,7 @@ async function saveClinicalOrderToSupabase(rows, status = "generated") {
   const pacYearId = await ensureClinicalPacYearSaved({ replaceItems: false });
   const total = getClinicalOrderTotal(rows);
   const month = Number(state.clinicalSupply.monthIndex) + 1;
-  const { data: order, error } = await supabaseClient
-    .from("clinical_monthly_orders")
+  const { data: order, error } = await dataProvider.table("clinical_monthly_orders")
     .upsert({
       year: Number(state.clinicalSupply.pacYear),
       month,
@@ -5368,8 +6152,7 @@ async function saveClinicalOrderToSupabase(rows, status = "generated") {
   if (error) throw error;
   state.clinicalSupply.currentOrderId = order.id;
 
-  const { error: deleteError } = await supabaseClient
-    .from("clinical_monthly_order_items")
+  const { error: deleteError } = await dataProvider.table("clinical_monthly_order_items")
     .delete()
     .eq("monthly_order_id", order.id);
   if (deleteError) throw deleteError;
@@ -5395,8 +6178,7 @@ async function saveClinicalOrderToSupabase(rows, status = "generated") {
   }));
 
   if (itemPayload.length) {
-    const { data: insertedItems, error: insertError } = await supabaseClient
-      .from("clinical_monthly_order_items")
+    const { data: insertedItems, error: insertError } = await dataProvider.table("clinical_monthly_order_items")
       .insert(itemPayload)
       .select("*");
     if (insertError) throw insertError;
@@ -5599,8 +6381,7 @@ async function saveClinicalRealOrderImportToSupabase(rows, filename = "") {
   }
   const year = Number(state.clinicalSupply.pacYear);
   const month = Number(state.clinicalSupply.monthIndex) + 1;
-  const { data: importRow, error } = await supabaseClient
-    .from("clinical_real_order_imports")
+  const { data: importRow, error } = await dataProvider.table("clinical_real_order_imports")
     .insert({
       year,
       month,
@@ -5632,16 +6413,14 @@ async function saveClinicalRealOrderImportToSupabase(rows, filename = "") {
   });
 
   if (itemPayload.length) {
-    const { data: insertedItems, error: insertError } = await supabaseClient
-      .from("clinical_real_order_items")
+    const { data: insertedItems, error: insertError } = await dataProvider.table("clinical_real_order_items")
       .insert(itemPayload)
       .select("*");
     if (insertError) throw insertError;
     state.clinicalSupply.realOrderRows = (insertedItems || []).map(mapClinicalRealItemFromDb);
   }
 
-  const { error: deletePreviousError } = await supabaseClient
-    .from("clinical_real_order_imports")
+  const { error: deletePreviousError } = await dataProvider.table("clinical_real_order_imports")
     .delete()
     .eq("year", year)
     .eq("month", month)
@@ -5716,8 +6495,7 @@ async function revalidateClinicalRealOrder({ silent = false } = {}) {
 
   if (state.currentUser?.id && supabaseClient) {
     const persistedRows = rows.filter((row) => row.id && !String(row.id).startsWith("real-"));
-    const results = await Promise.all(persistedRows.map((row) => supabaseClient
-      .from("clinical_real_order_items")
+    const results = await Promise.all(persistedRows.map((row) => dataProvider.table("clinical_real_order_items")
       .update({
         product_id: row.productoId || null,
         pac_item_id: row.pacRowId && !String(row.pacRowId).startsWith("pac-") ? row.pacRowId : null,
@@ -5814,7 +6592,7 @@ async function persistClinicalDemandRevalidationWarnings(removedWarnings = []) {
   if (!state.currentUser?.id || !supabaseClient) return;
   const removedIds = removedWarnings.map((row) => row.id).filter((id) => /^[0-9a-f-]{36}$/i.test(String(id)));
   if (removedIds.length) {
-    const { error } = await supabaseClient.from("clinical_daily_import_errors").delete().in("id", removedIds);
+    const { error } = await dataProvider.table("clinical_daily_import_errors").delete().in("id", removedIds);
     if (error) throw error;
   }
   const newWarnings = state.clinicalSupply.dailyImportErrors.filter((row) =>
@@ -5837,7 +6615,7 @@ async function persistClinicalDemandRevalidationWarnings(removedWarnings = []) {
       reviewed_at: row.reviewedAt || null,
       reviewed_by: row.reviewedBy || null
     }));
-    const { data, error } = await supabaseClient.from("clinical_daily_import_errors").insert(payload).select("*");
+    const { data, error } = await dataProvider.table("clinical_daily_import_errors").insert(payload).select("*");
     if (error) throw error;
     const savedByKey = new Map((data || []).map((row) => [`${row.daily_demand_id}|${normalize(row.message || "")}`, row]));
     state.clinicalSupply.dailyImportErrors = state.clinicalSupply.dailyImportErrors.map((row) => {
@@ -5854,7 +6632,7 @@ async function persistClinicalDemandRevalidationWarnings(removedWarnings = []) {
   const demandIds = [...new Set(state.clinicalSupply.dailyDemands.map((row) => row.id).filter((id) => /^[0-9a-f-]{36}$/i.test(String(id))))];
   const demandUpdates = await Promise.all(demandIds.map((demandId) => {
     const demand = state.clinicalSupply.dailyDemands.find((row) => String(row.id) === String(demandId));
-    return supabaseClient.from("clinical_daily_demands").update({
+    return dataProvider.table("clinical_daily_demands").update({
       warning_count: Number(demand?.warningCount || 0),
       status: demand?.status || "cargada"
     }).eq("id", demandId);
@@ -6557,8 +7335,7 @@ function removeClinicalDemandLocal(demandId) {
 
 async function deleteClinicalDemandFromSupabase(demandId) {
   if (!state.currentUser?.id || !/^[0-9a-f-]{36}$/i.test(String(demandId))) return;
-  const { error } = await supabaseClient
-    .from("clinical_daily_demands")
+  const { error } = await dataProvider.table("clinical_daily_demands")
     .delete()
     .eq("id", demandId)
     .eq("uploaded_by", state.currentUser.id);
@@ -6568,24 +7345,21 @@ async function deleteClinicalDemandFromSupabase(demandId) {
 async function saveClinicalDemandToSupabase(parsed, { replaceDate = false } = {}) {
   if (!state.currentUser?.id) throw new Error("Usuario no autenticado.");
   if (replaceDate && parsed.demand.demandDate) {
-    const { data: existing, error: existingError } = await supabaseClient
-      .from("clinical_daily_demands")
+    const { data: existing, error: existingError } = await dataProvider.table("clinical_daily_demands")
       .select("id")
       .eq("uploaded_by", state.currentUser.id)
       .eq("demand_date", parsed.demand.demandDate);
     if (existingError) throw existingError;
     const ids = (existing || []).map((row) => row.id).filter((id) => String(id) !== String(parsed.demand.id));
     if (ids.length) {
-      const { error: deleteError } = await supabaseClient
-        .from("clinical_daily_demands")
+      const { error: deleteError } = await dataProvider.table("clinical_daily_demands")
         .delete()
         .in("id", ids)
         .eq("uploaded_by", state.currentUser.id);
       if (deleteError) throw deleteError;
     }
   }
-  const { data: demand, error } = await supabaseClient
-    .from("clinical_daily_demands")
+  const { data: demand, error } = await dataProvider.table("clinical_daily_demands")
     .insert({
       demand_date: parsed.demand.demandDate,
       filename: parsed.demand.filename,
@@ -6618,7 +7392,7 @@ async function saveClinicalDemandToSupabase(parsed, { replaceDate = false } = {}
     observation: row.observation || null
   }));
   if (dietPayload.length) {
-    const { error: dietError } = await supabaseClient.from("clinical_daily_diet_counts").insert(dietPayload);
+    const { error: dietError } = await dataProvider.table("clinical_daily_diet_counts").insert(dietPayload);
     if (dietError) throw dietError;
   }
 
@@ -6634,7 +7408,7 @@ async function saveClinicalDemandToSupabase(parsed, { replaceDate = false } = {}
     observation: row.observation || null
   }));
   if (enteralPayload.length) {
-    const { error: enteralError } = await supabaseClient.from("clinical_daily_enteral_items").insert(enteralPayload);
+    const { error: enteralError } = await dataProvider.table("clinical_daily_enteral_items").insert(enteralPayload);
     if (enteralError) throw enteralError;
   }
 
@@ -6648,7 +7422,7 @@ async function saveClinicalDemandToSupabase(parsed, { replaceDate = false } = {}
     observation: row.observation || null
   }));
   if (supplyPayload.length) {
-    const { error: supplyError } = await supabaseClient.from("clinical_daily_supply_items").insert(supplyPayload);
+    const { error: supplyError } = await dataProvider.table("clinical_daily_supply_items").insert(supplyPayload);
     if (supplyError) throw supplyError;
   }
 
@@ -6667,15 +7441,14 @@ async function saveClinicalDemandToSupabase(parsed, { replaceDate = false } = {}
     reviewed_by: row.reviewedBy || null
   }));
   if (errorPayload.length) {
-    const { error: importError } = await supabaseClient.from("clinical_daily_import_errors").insert(errorPayload);
+    const { error: importError } = await dataProvider.table("clinical_daily_import_errors").insert(errorPayload);
     if (importError) throw importError;
   }
 }
 
 async function loadClinicalDailyDemandFromSupabase() {
   if (!state.currentUser?.id) return;
-  const { data: demands, error } = await supabaseClient
-    .from("clinical_daily_demands")
+  const { data: demands, error } = await dataProvider.table("clinical_daily_demands")
     .select("*")
     .eq("uploaded_by", state.currentUser.id)
     .order("demand_date", { ascending: false })
@@ -6684,10 +7457,10 @@ async function loadClinicalDailyDemandFromSupabase() {
 
   const ids = (demands || []).map((row) => row.id);
   const [dietResult, enteralResult, supplyResult, errorResult] = ids.length ? await Promise.all([
-    supabaseClient.from("clinical_daily_diet_counts").select("*").in("daily_demand_id", ids),
-    supabaseClient.from("clinical_daily_enteral_items").select("*").in("daily_demand_id", ids),
-    supabaseClient.from("clinical_daily_supply_items").select("*").in("daily_demand_id", ids),
-    supabaseClient.from("clinical_daily_import_errors").select("*").in("daily_demand_id", ids)
+    dataProvider.table("clinical_daily_diet_counts").select("*").in("daily_demand_id", ids),
+    dataProvider.table("clinical_daily_enteral_items").select("*").in("daily_demand_id", ids),
+    dataProvider.table("clinical_daily_supply_items").select("*").in("daily_demand_id", ids),
+    dataProvider.table("clinical_daily_import_errors").select("*").in("daily_demand_id", ids)
   ]) : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }];
 
   if (dietResult.error) throw dietResult.error;
@@ -6974,8 +7747,7 @@ async function saveClinicalDemandManualEdit() {
   demand.status = demand.suspiciousReading || demand.warningCount ? "con errores" : "revisada";
   try {
     if (state.currentUser?.id && /^[0-9a-f-]{36}$/i.test(String(demand.id))) {
-      const { error } = await supabaseClient
-        .from("clinical_daily_demands")
+      const { error } = await dataProvider.table("clinical_daily_demands")
         .update({
           total_patients: Number(demand.totalPatients || 0),
           diet_special_total: Number(demand.dietSpecialTotal || 0),
@@ -6985,8 +7757,7 @@ async function saveClinicalDemandManualEdit() {
         .eq("id", demand.id);
       if (error) throw error;
       if (manualDietRow && String(manualDietRow.id).startsWith("diet-manual-")) {
-        const { error: dietError } = await supabaseClient
-          .from("clinical_daily_diet_counts")
+        const { error: dietError } = await dataProvider.table("clinical_daily_diet_counts")
           .insert({
             daily_demand_id: demand.id,
             demand_date: demand.demandDate,
@@ -7019,8 +7790,7 @@ async function markClinicalDemandReviewed() {
   demand.observations = elements.clinicalDemandEditNotes?.value || demand.observations || "";
   try {
     if (state.currentUser?.id && /^[0-9a-f-]{36}$/i.test(String(demand.id))) {
-      const { error } = await supabaseClient
-        .from("clinical_daily_demands")
+      const { error } = await dataProvider.table("clinical_daily_demands")
         .update({
           status: "revisada",
           observations: demand.observations || null,
@@ -7234,8 +8004,7 @@ async function updateClinicalDemandWarningStatus(warningId, status) {
   warning.reviewedBy = state.currentUser?.id || null;
   try {
     if (state.currentUser?.id && /^[0-9a-f-]{36}$/i.test(String(warning.id))) {
-      const { error } = await supabaseClient
-        .from("clinical_daily_import_errors")
+      const { error } = await dataProvider.table("clinical_daily_import_errors")
         .update({
           status,
           reviewed_at: warning.reviewedAt,
@@ -8283,8 +9052,7 @@ async function findOrCreateProduct(payload) {
   const cached = state.products.find((product) => product.nombre_normalizado === payload.nombreNormalizado);
   if (cached) {
     if (payload.critico && !cached.critico && !state.usingFallback) {
-      const { error } = await supabaseClient
-        .from("productos_insumos")
+      const { error } = await dataProvider.table("productos_insumos")
         .update({ critico: true })
         .eq("id", cached.id);
       if (error) throw error;
@@ -8293,8 +9061,7 @@ async function findOrCreateProduct(payload) {
     return cached;
   }
 
-  const { data: existingProduct, error: findError } = await supabaseClient
-    .from("productos_insumos")
+  const { data: existingProduct, error: findError } = await dataProvider.table("productos_insumos")
     .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,critico,consumo_promedio_diario,favorito,activo")
     .eq("nombre_normalizado", payload.nombreNormalizado)
     .maybeSingle();
@@ -8302,8 +9069,7 @@ async function findOrCreateProduct(payload) {
   if (findError) throw findError;
   if (existingProduct) {
     if (payload.critico && !existingProduct.critico) {
-      const { error } = await supabaseClient
-        .from("productos_insumos")
+      const { error } = await dataProvider.table("productos_insumos")
         .update({ critico: true })
         .eq("id", existingProduct.id);
       if (error) throw error;
@@ -8312,8 +9078,7 @@ async function findOrCreateProduct(payload) {
     return existingProduct;
   }
 
-  const { data: createdProduct, error: createError } = await supabaseClient
-    .from("productos_insumos")
+  const { data: createdProduct, error: createError } = await dataProvider.table("productos_insumos")
     .insert({
       nombre: payload.nombre,
       nombre_normalizado: payload.nombreNormalizado,
@@ -8335,10 +9100,14 @@ async function findOrCreateProduct(payload) {
 
 async function createEntry(payload) {
   requireAdminAction();
+  if (shouldUseLocalBackend()) {
+    await inventoryService.createEntry(payload);
+    return;
+  }
+
   const product = await findOrCreateProduct(payload);
 
-  const { data: lot, error: lotError } = await supabaseClient
-    .from("insumo_lotes")
+  const { data: lot, error: lotError } = await dataProvider.table("insumo_lotes")
     .insert({
       producto_id: product.id,
       fecha_recepcion: payload.fechaRecepcion,
@@ -8354,8 +9123,7 @@ async function createEntry(payload) {
 
   if (lotError) throw lotError;
 
-  const { error: movementError } = await supabaseClient
-    .from("movimientos_inventario")
+  const { error: movementError } = await dataProvider.table("movimientos_inventario")
     .insert({
       producto_id: product.id,
       lote_id: lot.id,
@@ -8389,10 +9157,25 @@ async function updateEntry(form) {
   if (!nombre) throw new Error("El nombre del producto es obligatorio.");
   if (nextQuantity < 0) throw new Error("La cantidad no puede ser negativa.");
 
+  if (shouldUseLocalBackend()) {
+    await inventoryService.updateEntry(loteId, {
+      productoId,
+      nombre,
+      nombreNormalizado,
+      unidad,
+      fechaRecepcion,
+      fechaVencimiento,
+      lote,
+      observaciones,
+      currentQuantity,
+      nextQuantity
+    });
+    return;
+  }
+
   let currentProduct = findProductById(productoId);
   if (!currentProduct && !state.usingFallback) {
-    const { data, error } = await supabaseClient
-      .from("productos_insumos")
+    const { data, error } = await dataProvider.table("productos_insumos")
       .select("id,nombre,nombre_normalizado,unidad_default,stock_minimo,critico,consumo_promedio_diario,favorito,activo")
       .eq("id", productoId)
       .maybeSingle();
@@ -8418,8 +9201,7 @@ async function updateEntry(form) {
     );
     if (duplicatedProduct) throw new Error(`Ya existe un producto llamado "${duplicatedProduct.nombre}".`);
     if (!state.usingFallback) {
-      const { data: existingProduct, error: findError } = await supabaseClient
-        .from("productos_insumos")
+      const { data: existingProduct, error: findError } = await dataProvider.table("productos_insumos")
         .select("id,nombre")
         .eq("nombre_normalizado", nombreNormalizado)
         .neq("id", productoId)
@@ -8428,8 +9210,7 @@ async function updateEntry(form) {
       if (existingProduct) throw new Error(`Ya existe un producto llamado "${existingProduct.nombre}".`);
     }
 
-    const { error: productError } = await supabaseClient
-      .from("productos_insumos")
+    const { error: productError } = await dataProvider.table("productos_insumos")
       .update({
         nombre,
         nombre_normalizado: nombreNormalizado,
@@ -8440,8 +9221,7 @@ async function updateEntry(form) {
     if (productError) throw productError;
   }
 
-  const { error: lotError } = await supabaseClient
-    .from("insumo_lotes")
+  const { error: lotError } = await dataProvider.table("insumo_lotes")
     .update({
       fecha_recepcion: fechaRecepcion,
       fecha_vencimiento: fechaVencimiento,
@@ -8457,8 +9237,7 @@ async function updateEntry(form) {
   if (delta === 0) return;
 
   const movementType = delta > 0 ? "ingreso" : "eliminacion";
-  const { error: movementError } = await supabaseClient
-    .from("movimientos_inventario")
+  const { error: movementError } = await dataProvider.table("movimientos_inventario")
     .insert({
       producto_id: productoId,
       lote_id: loteId,
@@ -8485,6 +9264,13 @@ async function deleteEntry(id) {
   });
   if (!confirmed) return;
 
+  if (shouldUseLocalBackend()) {
+    await inventoryService.deleteLot(item.id);
+    await refreshInventory();
+    showToastSuccess("Lote eliminado.");
+    return;
+  }
+
   if (state.usingFallback) {
     state.inventory = state.inventory.filter((entry) => String(entry.id) !== String(id));
     render();
@@ -8492,8 +9278,7 @@ async function deleteEntry(id) {
     return;
   }
 
-  const { error: movementError } = await supabaseClient
-    .from("movimientos_inventario")
+  const { error: movementError } = await dataProvider.table("movimientos_inventario")
     .insert({
       producto_id: item.productoId,
       lote_id: item.id,
@@ -8509,8 +9294,7 @@ async function deleteEntry(id) {
     return;
   }
 
-  const { error: lotError } = await supabaseClient
-    .from("insumo_lotes")
+  const { error: lotError } = await dataProvider.table("insumo_lotes")
     .update({ activo: false, deleted_at: new Date().toISOString() })
     .eq("id", item.id);
 
@@ -8696,8 +9480,12 @@ async function registerUse() {
     }));
   }
 
-  const { error } = await supabaseClient
-    .from("movimientos_inventario")
+  if (shouldUseLocalBackend()) {
+    await inventoryService.createMovements(movements);
+    return;
+  }
+
+  const { error } = await dataProvider.table("movimientos_inventario")
     .insert(movements);
 
   if (error) throw error;
@@ -8755,7 +9543,7 @@ function closeAdjustModal() {
 
 async function registerAdjustment() {
   requireAdminAction();
-  if (state.usingFallback) throw new Error("No se puede ajustar inventario mientras Supabase esta en modo respaldo.");
+  if (state.usingFallback && !shouldUseLocalBackend()) throw new Error("No se puede ajustar inventario sin backend operativo.");
 
   const { product } = getAdjustFormProduct();
   const lotId = elements.adjustForm.elements.lote_id.value;
@@ -8783,8 +9571,12 @@ async function registerAdjustment() {
     observacion
   };
 
-  const { error } = await supabaseClient
-    .from("movimientos_inventario")
+  if (shouldUseLocalBackend()) {
+    await inventoryService.createMovements([movement]);
+    return;
+  }
+
+  const { error } = await dataProvider.table("movimientos_inventario")
     .insert(movement);
 
   if (error) throw error;
@@ -9050,8 +9842,18 @@ async function saveLotBoxQuantity(input) {
   const value = Math.max(0, Math.floor(Number(input.value || 0)));
   if (!lotId) return;
 
-  const { error } = await supabaseClient
-    .from("insumo_lotes")
+  if (shouldUseLocalBackend()) {
+    await inventoryService.updateLot(lotId, { cantidad_por_caja: value || null });
+    state.inventory = state.inventory.map((item) => (
+      String(item.id) === String(lotId)
+        ? { ...item, cantidadPorCaja: value }
+        : item
+    ));
+    showToastSuccess("Cantidad por caja guardada localmente.");
+    return;
+  }
+
+  const { error } = await dataProvider.table("insumo_lotes")
     .update({ cantidad_por_caja: value || null, updated_at: new Date().toISOString() })
     .eq("id", lotId);
 
@@ -9164,7 +9966,7 @@ function closeProductSettingsModal() {
 
 async function saveProductSettings() {
   requireAdminAction();
-  if (state.usingFallback) throw new Error("No se puede configurar producto mientras Supabase esta en modo respaldo.");
+  if (state.usingFallback && !shouldUseLocalBackend()) throw new Error("No se puede configurar producto sin backend operativo.");
 
   const form = elements.productSettingsForm;
   const productId = form.elements.producto_id.value;
@@ -9175,8 +9977,17 @@ async function saveProductSettings() {
   if (stockMinimo < 0) throw new Error("El stock minimo no puede ser negativo.");
   if (consumoPromedioDiario < 0) throw new Error("El consumo promedio diario no puede ser negativo.");
 
-  const { error } = await supabaseClient
-    .from("productos_insumos")
+  if (shouldUseLocalBackend()) {
+    await inventoryService.updateProduct(productId, {
+      stock_minimo: stockMinimo,
+      unidad_default: unidadDefault,
+      consumo_promedio_diario: consumoPromedioDiario,
+      critico: form.elements.critico.checked
+    });
+    return;
+  }
+
+  const { error } = await dataProvider.table("productos_insumos")
     .update({
       stock_minimo: stockMinimo,
       unidad_default: unidadDefault,
@@ -9190,7 +10001,7 @@ async function saveProductSettings() {
 
 async function toggleProductActive() {
   requireAdminAction();
-  if (state.usingFallback) throw new Error("No se puede pausar producto mientras Supabase esta en modo respaldo.");
+  if (state.usingFallback && !shouldUseLocalBackend()) throw new Error("No se puede pausar producto sin backend operativo.");
 
   const productId = elements.productSettingsForm.elements.producto_id.value;
   const product = findProductById(productId);
@@ -9205,8 +10016,15 @@ async function toggleProductActive() {
   });
   if (!confirmed) return;
 
-  const { error } = await supabaseClient
-    .from("productos_insumos")
+  if (shouldUseLocalBackend()) {
+    await inventoryService.updateProduct(productId, { activo: nextActive });
+    closeProductSettingsModal();
+    showToastSuccess(nextActive ? "Producto reactivado." : "Producto pausado.");
+    await refreshInventory();
+    return;
+  }
+
+  const { error } = await dataProvider.table("productos_insumos")
     .update({ activo: nextActive })
     .eq("id", productId);
 
@@ -9561,23 +10379,15 @@ async function createPendingEntryFromOperator() {
   const validRows = state.operatorSessionRows;
   if (!validRows.length) throw new Error("Agrega al menos un producto.");
 
-  const { data: pending, error: pendingError } = await supabaseClient
-    .from("ingresos_pendientes")
-    .insert({
-      creado_por: state.currentUser.id,
-      creado_por_email: state.currentUser.email,
-      creado_por_nombre: state.currentUser.nombre,
-      fecha_recepcion: receiptDate,
-      observacion_general: null,
-      estado: "pendiente"
-    })
-    .select("id")
-    .single();
-
-  if (pendingError) throw pendingError;
-
+  const entry = {
+    creado_por: state.currentUser.id,
+    creado_por_email: state.currentUser.email,
+    creado_por_nombre: state.currentUser.nombre,
+    fecha_recepcion: receiptDate,
+    observacion_general: null,
+    estado: "pendiente"
+  };
   const detailRows = validRows.map((payload) => ({
-    ingreso_pendiente_id: pending.id,
     nombre: payload.nombre,
     nombre_normalizado: payload.nombreNormalizado,
     cantidad: payload.cantidad,
@@ -9588,40 +10398,11 @@ async function createPendingEntryFromOperator() {
     observaciones: payload.observaciones
   }));
 
-  const { error: detailError } = await supabaseClient
-    .from("ingresos_pendientes_detalle")
-    .insert(detailRows);
-
-  if (detailError) throw detailError;
+  await pendingEntriesService.create(entry, detailRows);
 }
 
 async function fetchPendingEntries(scope = "operator") {
-  let query = supabaseClient
-    .from("ingresos_pendientes")
-    .select("*")
-    .order("created_at", { ascending: false });
-
-  if (scope === "operator") query = query.eq("creado_por", state.currentUser.id);
-
-  const { data, error } = await query;
-  if (error) throw error;
-
-  const ids = (data || []).map((entry) => entry.id);
-  let details = [];
-  if (ids.length) {
-    const { data: detailData, error: detailError } = await supabaseClient
-      .from("ingresos_pendientes_detalle")
-      .select("*")
-      .in("ingreso_pendiente_id", ids)
-      .order("created_at", { ascending: true });
-    if (detailError) throw detailError;
-    details = detailData || [];
-  }
-
-  return (data || []).map((entry) => ({
-    ...entry,
-    detalles: details.filter((detail) => detail.ingreso_pendiente_id === entry.id)
-  }));
+  return pendingEntriesService.list(scope);
 }
 
 async function loadOperatorPendingEntries() {
@@ -9752,17 +10533,12 @@ async function approveCurrentPending() {
     });
   }
 
-  const { error } = await supabaseClient
-    .from("ingresos_pendientes")
-    .update({
-      estado: "aprobado",
-      aprobado_por: state.currentUser.id,
-      aprobado_por_email: state.currentUser.email,
-      aprobado_at: new Date().toISOString()
-    })
-    .eq("id", state.currentReview.id);
-
-  if (error) throw error;
+  await pendingEntriesService.update(state.currentReview.id, {
+    estado: "aprobado",
+    aprobado_por: state.currentUser.id,
+    aprobado_por_email: state.currentUser.email,
+    aprobado_at: new Date().toISOString()
+  });
 }
 
 async function rejectCurrentPending() {
@@ -9771,22 +10547,24 @@ async function rejectCurrentPending() {
   const reason = elements.pendingRejectReason.value.trim();
   if (!reason) throw new Error("Debes indicar motivo de rechazo.");
 
-  const { error } = await supabaseClient
-    .from("ingresos_pendientes")
-    .update({
-      estado: "rechazado",
-      rechazado_por: state.currentUser.id,
-      rechazado_por_email: state.currentUser.email,
-      rechazado_at: new Date().toISOString(),
-      motivo_rechazo: reason
-    })
-    .eq("id", state.currentReview.id);
-
-  if (error) throw error;
+  await pendingEntriesService.update(state.currentReview.id, {
+    estado: "rechazado",
+    rechazado_por: state.currentUser.id,
+    rechazado_por_email: state.currentUser.email,
+    rechazado_at: new Date().toISOString(),
+    motivo_rechazo: reason
+  });
 }
 
 async function markAlertReviewed(id) {
   requireAdminAction();
+  if (shouldUseLocalBackend()) {
+    await inventoryService.updateLot(id, { alerta_vencimiento_revisada: true });
+    await refreshInventory();
+    showToastSuccess("Alerta revisada en modo local.");
+    return;
+  }
+
   if (state.usingFallback) {
     const item = state.inventory.find((entry) => String(entry.id) === String(id));
     if (item) item.revisada = true;
@@ -9795,8 +10573,7 @@ async function markAlertReviewed(id) {
     return;
   }
 
-  const { error } = await supabaseClient
-    .from("insumo_lotes")
+  const { error } = await dataProvider.table("insumo_lotes")
     .update({ alerta_vencimiento_revisada: true })
     .eq("id", id);
 
@@ -10133,9 +10910,25 @@ elements.loginForm.addEventListener("submit", async (event) => {
   const password = formData.get("password");
 
   try {
+    const localStatus = await dataProvider.checkLocalStatus({ quiet: true });
+    let localLoginError = null;
+    if (localStatus?.installed) {
+      try {
+        const localSession = await dataProvider.localLogin(email, password);
+        saveLocalSession(localSession.user);
+        await startAuthenticatedApp({ user: { ...localSession.user, source: "local" } });
+        elements.loginForm.reset();
+        showToastSuccess("Modo local activo.");
+        return;
+      } catch (error) {
+        localLoginError = error;
+      }
+    }
+
     const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
     if (error) throw error;
     if (!data?.session) throw new Error("Supabase no devolvio una sesion activa.");
+    clearLocalSession();
     await startAuthenticatedApp(data.session);
     elements.loginForm.reset();
   } catch (error) {
@@ -10149,11 +10942,15 @@ elements.loginForm.addEventListener("submit", async (event) => {
 });
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {
-  await supabaseClient.auth.signOut();
+  clearLocalSession();
+  try { await dataProvider.localLogout(); } catch (error) {}
+  try { await supabaseClient.auth.signOut(); } catch (error) {}
   showLogin();
 });
 document.getElementById("operatorLogoutBtn").addEventListener("click", async () => {
-  await supabaseClient.auth.signOut();
+  clearLocalSession();
+  try { await dataProvider.localLogout(); } catch (error) {}
+  try { await supabaseClient.auth.signOut(); } catch (error) {}
   showLogin();
 });
 
@@ -10388,6 +11185,90 @@ elements.printLabelsBtn.addEventListener("click", printSelectedLabels);
 document.getElementById("backupBtn").addEventListener("click", exportBackupCsv);
 document.getElementById("criticalViewBtn").addEventListener("click", () => {
   elements.compactCriticalPanel.hidden = !elements.compactCriticalPanel.hidden;
+});
+
+elements.prepareLocalModeBtn?.addEventListener("click", async () => {
+  elements.prepareLocalModeBtn.disabled = true;
+  elements.prepareLocalModeBtn.textContent = "Preparando...";
+  try {
+    const status = await dataProvider.installLocal();
+    await dataProvider.checkSupabaseStatus();
+    await refreshInventory();
+    showModalSuccess(
+      "Modo local preparado",
+      `Base local ${status.installed ? "instalada" : "pendiente"}. Migracion ${status.migrationVersion || "-"}.`
+    );
+  } catch (error) {
+    rememberBackendError(error);
+    renderBackendStatus();
+    showModalError(
+      "Backend local inactivo",
+      "Ejecuta local-backend\\iniciar-backend-local.cmd y vuelve a presionar Preparar modo local."
+    );
+  } finally {
+    elements.prepareLocalModeBtn.disabled = false;
+    elements.prepareLocalModeBtn.textContent = "Preparar modo local";
+  }
+});
+
+elements.importSupabaseBtn?.addEventListener("click", async () => {
+  const confirmed = await showModalConfirm({
+    title: "Importar desde Supabase",
+    message: "Se copiaran tablas operativas al SQLite local manteniendo IDs originales y saltando duplicados conflictivos.",
+    confirmText: "Importar",
+    variant: "warning"
+  });
+  if (!confirmed) return;
+
+  elements.importSupabaseBtn.disabled = true;
+  elements.importSupabaseBtn.textContent = "Importando...";
+  try {
+    const result = await dataProvider.importFromSupabase();
+    await refreshBackendStatus({ quiet: true });
+    await refreshInventory();
+    const errorTables = (result.tables || []).filter((table) => table.errors?.length);
+    const errorText = errorTables.length
+      ? ` Tablas con aviso: ${errorTables.slice(0, 4).map((table) => table.table).join(", ")}${errorTables.length > 4 ? "..." : ""}.`
+      : "";
+    await showModalSuccess(
+      "Importacion terminada",
+      `Leidos ${formatNumber(result.totals?.fetched || 0)}, nuevos ${formatNumber(result.totals?.inserted || 0)}, actualizados ${formatNumber(result.totals?.updated || 0)}, duplicados protegidos ${formatNumber(result.totals?.duplicates || 0)}, saltados ${formatNumber(result.totals?.skipped || 0)}.${errorText}`
+    );
+  } catch (error) {
+    rememberBackendError(error);
+    renderBackendStatus();
+    showModalError("No se pudo importar", getSupabaseErrorMessage(error));
+  } finally {
+    elements.importSupabaseBtn.disabled = false;
+    elements.importSupabaseBtn.textContent = "Importar desde Supabase";
+  }
+});
+
+elements.refreshBackendStatusBtn?.addEventListener("click", async () => {
+  elements.refreshBackendStatusBtn.disabled = true;
+  try {
+    await refreshBackendStatus({ quiet: false });
+    showToastSuccess("Estado actualizado.");
+  } finally {
+    elements.refreshBackendStatusBtn.disabled = false;
+  }
+});
+
+elements.localBackupBtn?.addEventListener("click", async () => {
+  elements.localBackupBtn.disabled = true;
+  elements.localBackupBtn.textContent = "Respaldando...";
+  try {
+    const backup = await dataProvider.backupLocal();
+    showModalSuccess("Backup local creado", backup.backupPath || "Respaldo generado.");
+    await refreshBackendStatus({ quiet: true });
+  } catch (error) {
+    rememberBackendError(error);
+    renderBackendStatus();
+    showModalError("No se pudo respaldar", getSupabaseErrorMessage(error));
+  } finally {
+    elements.localBackupBtn.disabled = false;
+    elements.localBackupBtn.textContent = "Backup local";
+  }
 });
 
 elements.clinicalSupplyBtn?.addEventListener("click", () => {

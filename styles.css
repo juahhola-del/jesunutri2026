@@ -650,6 +650,97 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   display: none;
 }
 
+.local-backend-panel {
+  border-color: rgba(35, 196, 131, 0.24);
+  background: rgba(17, 24, 39, 0.92);
+}
+
+.backend-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  border: 1px solid rgba(135, 146, 162, 0.28);
+  border-radius: 999px;
+  padding: 0 12px;
+  background: rgba(135, 146, 162, 0.12);
+  color: #d2d8e0;
+  font-weight: 900;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.backend-mode-pill.local {
+  border-color: rgba(35, 196, 131, 0.44);
+  background: rgba(35, 196, 131, 0.14);
+  color: #baf7d9;
+}
+
+.backend-mode-pill.supabase {
+  border-color: rgba(242, 201, 76, 0.44);
+  background: rgba(242, 201, 76, 0.14);
+  color: #ffe58a;
+}
+
+.backend-status-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.backend-status-grid article {
+  min-height: 72px;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(11, 18, 32, 0.56);
+}
+
+.backend-status-grid span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.backend-status-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.backend-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.backend-error-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  color: #ffc4c2;
+  font-size: 0.82rem;
+}
+
+.backend-error-list div {
+  border: 1px solid rgba(239, 83, 80, 0.24);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(239, 83, 80, 0.08);
+}
+
+.backend-error-list .backend-ok {
+  border-color: rgba(35, 196, 131, 0.22);
+  background: rgba(35, 196, 131, 0.08);
+  color: #baf7d9;
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2160,6 +2251,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
     width: auto;
   }
   .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .backend-status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .critical-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analytics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .compact-critical-item { grid-template-columns: 1fr 1fr; }
@@ -2453,6 +2545,8 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
     justify-self: end;
   }
   .dashboard-grid, .form-grid { grid-template-columns: 1fr; }
+  .backend-status-grid { grid-template-columns: 1fr; }
+  .backend-actions { display: grid; }
   .critical-list { grid-template-columns: 1fr; }
   .analytics-grid { grid-template-columns: 1fr; }
   .clinical-card-grid,

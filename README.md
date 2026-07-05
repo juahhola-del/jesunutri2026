@@ -20,11 +20,50 @@ El principio central del proyecto es que el stock no se edita manualmente como f
 
 ## Stack Tecnologico
 
-- Supabase.
-- PostgreSQL.
+- Backend local Node/Express + SQLite como prioridad operativa en el PC de Jesu.
+- Supabase como respaldo remoto y futura sincronizacion.
+- PostgreSQL remoto por Supabase.
 - Frontend futuro tipo ERP operativo.
 - Vercel para despliegue futuro.
 - OCR o lectura de Excel para importaciones futuras.
+
+## Modo local
+
+La carpeta `local-backend/` contiene el backend local recomendado para operar sin depender de Supabase.
+
+Uso rapido en Windows:
+
+1. Ejecutar `local-backend/preparar-backend-local.cmd` una vez.
+2. Ejecutar `local-backend/iniciar-backend-local.cmd` cada vez que se use la app.
+3. En la app, usar el panel `Modo local` y el boton `Preparar modo local`.
+4. Si hay datos reales en Supabase, usar `Importar desde Supabase` para copiarlos a SQLite local sin duplicar filas.
+
+Para importar datos reales desde Supabase hacia SQLite local, el boton `Importar desde Supabase` reutiliza la configuracion que ya usa la app. Si existe `.env` en la raiz del proyecto, el backend local tambien lo lee; si existe `local-backend/.env`, lo usa solo como configuracion local ignorada por Git.
+
+Solo si las politicas de Supabase bloquean la lectura con usuario normal, configura la variable estandar ya usada por el proyecto:
+
+```text
+SUPABASE_URL=https://xxxxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<opcional-si-rls-bloquea-la-lectura>
+```
+
+El archivo `.env` no debe subirse a GitHub. Tampoco deben incluirse bases SQLite, backups, logs ni credenciales. El `.gitignore` excluye `.env`, `local-backend/data/`, `local-backend/backups/`, `*.log`, planillas reales y outputs generados.
+
+Antes de usar el modo local como sistema real, valida:
+
+- `POST /api/import-from-supabase` sin errores criticos por tabla.
+- Conteos de Supabase vs SQLite para inventario, usuarios, ingresos pendientes, tareas y tablas clinicas.
+- Login local, inventario, ingresos, consumos, ajustes, etiquetas, tareas, abastecimiento clinico y prediccion de pedidos.
+- Arranque de la app con backend local activo aunque Supabase este inaccesible.
+
+Credencial local inicial:
+
+```text
+Email: jesu@nutri.cl
+Password: jesu-local
+```
+
+Durante la importacion, si Supabase entrega filas en `usuarios_app`, se importan esos usuarios y no se fuerza el seed local. El usuario `jesu@nutri.cl` se crea solo cuando la tabla local queda vacia, para que el sistema pueda iniciar sin depender de Supabase.
 
 ## Arquitectura
 
