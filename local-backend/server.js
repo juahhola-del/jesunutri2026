@@ -1,6 +1,6 @@
 const cors = require("cors");
 const express = require("express");
-const { HOST, PORT, SUPABASE_IMPORT } = require("./config");
+const { HOST, LABEL_IMAGES_DIR, PORT, SUPABASE_IMPORT } = require("./config");
 const {
   IMPORT_TABLES,
   createBackup,
@@ -66,6 +66,11 @@ app.use(cors({
   credentials: false
 }));
 app.use(express.json({ limit: "10mb" }));
+app.use("/label-images", express.static(LABEL_IMAGES_DIR, {
+  fallthrough: false,
+  immutable: true,
+  maxAge: "30d"
+}));
 
 app.get("/", (req, res) => {
   res.json({

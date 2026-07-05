@@ -59,7 +59,7 @@
               <p>Registra productos para que Jesu revise y apruebe.</p>
             </div>
             <div class="operator-scan-actions">
-              <button class="btn scan-entry-btn" type="button" id="startContinuousScanBtn">Escanear productos</button>
+              <button class="btn scan-entry-btn" type="button" id="startContinuousScanBtn">Ingresar productos</button>
               <div class="receipt-display pos-receipt">Recepcion: <strong id="operatorReceiptDisplay"></strong></div>
               <input id="operatorReceiptDate" type="date" hidden>
             </div>
@@ -158,7 +158,8 @@
         <div class="actions header-actions">
           <button class="btn primary action-tile" type="button" id="bulkEntryBtn">Ingreso masivo</button>
           <button class="btn use-stock-btn action-tile" type="button" id="useStockBtn">Stock consumido</button>
-          <button class="btn action-tile learn-products-btn" type="button" id="learnProductsBtn">Aprender productos</button>
+          <button class="btn action-tile learn-products-btn" type="button" id="learnProductsBtn">Aprender etiquetas</button>
+          <button class="btn action-tile" type="button" id="reviewScanSessionsBtn">Revisar ingresos por escaneo</button>
           <button class="btn action-tile" type="button" id="labelsBtn">Etiquetas</button>
           <button class="btn action-tile daily-task-tile" type="button" id="dailyTasksBtn">Tareas del dia</button>
           <button class="btn action-tile" type="button" id="adjustStockBtn">Ajuste inventario</button>
@@ -300,6 +301,18 @@
           </div>
           <div class="internal-notice admin-notice" id="adminPendingNotice" hidden></div>
           <div class="pending-list" id="adminPendingList"></div>
+        </section>
+
+        <section class="panel pending-admin-panel" id="scanSessionsAdminPanel" hidden>
+          <div class="section-heading compact-heading">
+            <div>
+              <h2>Ingresos por escaneo</h2>
+              <p>Sesiones escaneadas listas para revisar y aprobar.</p>
+            </div>
+            <span class="pill" id="scanSessionsCount">0 sesiones</span>
+          </div>
+          <div class="internal-notice admin-notice" id="scanSessionsNotice" hidden></div>
+          <div class="pending-list" id="scanSessionsList"></div>
         </section>
 
         <section class="panel critical-panel">
@@ -1122,8 +1135,8 @@
         <div class="modal-header">
           <div>
             <p class="eyebrow">Camara</p>
-            <h2 id="continuousScanTitle">Escanear productos</h2>
-            <p class="modal-copy">Los resultados quedan en revision, no modifican inventario.</p>
+            <h2 id="continuousScanTitle">Ingresar productos</h2>
+            <p class="modal-copy">Escanea, confirma cantidad de empaques y envia a revision.</p>
           </div>
           <button class="icon-btn" type="button" id="closeContinuousScanModal" aria-label="Cerrar">x</button>
         </div>
@@ -1137,6 +1150,17 @@
           </div>
           <aside class="scan-side-panel">
             <div class="scan-capability-list" id="scanCapabilitiesStatus"></div>
+            <article class="scan-accept-card" id="scanAcceptCard" hidden>
+              <div id="scanAcceptSummary"></div>
+              <label>
+                <span>Cantidad recibida</span>
+                <input id="scanPackageCountInput" type="number" min="0.001" step="0.001" inputmode="decimal" placeholder="Ej. 5">
+              </label>
+              <div class="modal-actions compact-actions">
+                <button class="btn secondary" type="button" id="skipScanItemBtn">Omitir</button>
+                <button class="btn primary" type="button" id="acceptScanItemBtn">Aceptar item</button>
+              </div>
+            </article>
             <div class="scan-detected-list" id="continuousScanDetectedList">
               <div class="empty compact-empty">Aun no hay capturas en esta sesion.</div>
             </div>
@@ -1145,7 +1169,7 @@
 
         <div class="form-actions scan-actions">
           <button class="btn" type="button" id="pauseContinuousScanBtn">Pausar escaneo</button>
-          <button class="btn primary" type="button" id="finishContinuousScanBtn">Finalizar</button>
+          <button class="btn primary" type="button" id="finishContinuousScanBtn">Finalizar ingreso</button>
         </div>
       </section>
     </div>
@@ -1155,7 +1179,7 @@
         <div class="modal-header">
           <div>
             <p class="eyebrow">Camara</p>
-            <h2 id="productLearningTitle">Aprender productos</h2>
+            <h2 id="productLearningTitle">Aprender etiquetas</h2>
             <p class="modal-copy">Guarda relaciones codigo-producto. No modifica inventario.</p>
           </div>
           <button class="icon-btn" type="button" id="closeProductLearningModal" aria-label="Cerrar">x</button>
@@ -1174,6 +1198,35 @@
               <div class="empty compact-empty">Apunta la camara a una etiqueta o codigo.</div>
             </article>
             <div class="learning-current-link" id="productLearningCurrentLink" hidden></div>
+            <div class="learning-image-preview" id="productLearningImagePreview" hidden></div>
+            <section class="learning-detected-edit">
+              <div class="learning-rule-grid">
+                <label>
+                  <span>Codigo detectado</span>
+                  <input id="productLearningCodeInput" type="text" placeholder="Codigo">
+                </label>
+                <label>
+                  <span>Lote detectado</span>
+                  <input id="productLearningLotInput" type="text" placeholder="Lote">
+                </label>
+                <label>
+                  <span>Vencimiento</span>
+                  <input id="productLearningExpiryInput" type="date">
+                </label>
+                <label>
+                  <span>Elaboracion</span>
+                  <input id="productLearningMfgInput" type="date">
+                </label>
+                <label>
+                  <span>Cantidad GS1</span>
+                  <input id="productLearningDetectedQuantityInput" type="number" min="0" step="0.001" inputmode="decimal">
+                </label>
+                <label class="learning-rule-notes">
+                  <span>Observaciones</span>
+                  <textarea id="productLearningNotesInput" rows="2" placeholder="Correcciones o contexto de etiqueta"></textarea>
+                </label>
+              </div>
+            </section>
             <label class="learning-product-search">
               <span>Producto del inventario</span>
               <input id="productLearningSearch" type="search" placeholder="Buscar por nombre, codigo o formato">
@@ -1220,6 +1273,8 @@
                     <option value="lt">Litro</option>
                     <option value="ml">ml</option>
                     <option value="caja">Caja</option>
+                    <option value="manga">Manga</option>
+                    <option value="pack">Pack</option>
                     <option value="paquete">Paquete</option>
                   </select>
                 </label>
@@ -1666,6 +1721,34 @@
       </section>
     </div>
 
+    <div class="modal-backdrop" id="scanSessionReviewModal" hidden>
+      <section class="modal pending-review-modal scan-session-review-modal" role="dialog" aria-modal="true" aria-labelledby="scanSessionReviewTitle">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Revision escaneo</p>
+            <h2 id="scanSessionReviewTitle">Ingreso por escaneo</h2>
+            <p class="modal-copy" id="scanSessionReviewMeta"></p>
+          </div>
+          <button class="icon-btn" type="button" id="closeScanSessionReviewModal" aria-label="Cerrar">x</button>
+        </div>
+
+        <div class="bulk-error-list" id="scanSessionReviewErrorList" hidden></div>
+
+        <label class="operator-observation reject-reason-field">
+          <span>Notas de revision</span>
+          <textarea id="scanSessionReviewNotes" rows="2" placeholder="Motivo de rechazo o ajustes"></textarea>
+        </label>
+
+        <div class="scan-session-review-list" id="scanSessionReviewItems"></div>
+
+        <div class="form-actions">
+          <button class="btn danger-btn" type="button" id="rejectScanSessionBtn">Rechazar sesion</button>
+          <button class="btn" type="button" id="cancelScanSessionReview">Cancelar</button>
+          <button class="btn primary" type="button" id="approveScanSessionBtn">Aprobar sesion</button>
+        </div>
+      </section>
+    </div>
+
     <div class="modal-backdrop" id="productSettingsModal" hidden>
       <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="productSettingsTitle">
         <form id="productSettingsForm" class="entry-form">
@@ -1764,8 +1847,8 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="vendor/zxing-browser.min.js?v=22"></script>
-    <script src="script.js?v=22"></script>
+    <script src="vendor/zxing-browser.min.js?v=23"></script>
+    <script src="script.js?v=23"></script>
   </body>
 </html>
 

@@ -1881,6 +1881,76 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   width: min(1180px, 100%);
 }
 
+.scan-session-review-list {
+  display: grid;
+  gap: 12px;
+  max-height: 62vh;
+  overflow: auto;
+}
+
+.scan-session-review-item {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(21, 31, 47, 0.58);
+}
+
+.scan-session-review-item header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.scan-session-review-item strong,
+.scan-session-review-item small {
+  display: block;
+}
+
+.scan-session-review-item small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.scan-session-review-item select,
+.scan-session-review-grid input {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 9px;
+  background: #0b1220;
+  color: var(--text);
+  outline: none;
+}
+
+.scan-session-review-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.scan-session-review-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.scan-session-review-grid input {
+  width: 100%;
+}
+
+.scan-session-item-image {
+  width: 100%;
+  max-height: 180px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
 .remove-row-btn {
   min-width: 34px;
 }
@@ -2111,6 +2181,54 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   overflow: auto;
 }
 
+.scan-accept-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(35, 196, 131, 0.52);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(35, 196, 131, 0.10);
+}
+
+.scan-accept-card[hidden] {
+  display: none;
+}
+
+.scan-accept-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.scan-accept-card input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #0b1220;
+  color: var(--text);
+  outline: none;
+}
+
+.scan-accept-card input:focus {
+  border-color: var(--blue);
+}
+
+#scanAcceptSummary {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+#scanAcceptSummary strong,
+#scanAcceptSummary b {
+  color: var(--text);
+}
+
 .scan-detected-card {
   display: grid;
   gap: 8px;
@@ -2200,6 +2318,58 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 
 .learning-current-link b {
   color: var(--text);
+}
+
+.learning-image-preview {
+  min-height: 86px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(5, 8, 13, 0.38);
+}
+
+.learning-image-preview img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: cover;
+}
+
+.learning-detected-edit {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(21, 31, 47, 0.58);
+}
+
+.learning-detected-edit label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.learning-detected-edit label:last-child {
+  grid-column: 1 / -1;
+}
+
+.learning-detected-edit input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 9px;
+  background: #0b1220;
+  color: var(--text);
+  outline: none;
+}
+
+.learning-detected-edit input:focus {
+  border-color: var(--blue);
 }
 
 .learning-meta-grid {
@@ -2610,6 +2780,7 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
   .scan-camera-shell,
   .scan-camera-shell video { min-height: 360px; }
   .scan-detected-list { max-height: 260px; }
+  .scan-session-review-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pos-chip-list { justify-content: flex-start; }
   .unit-tiles { flex-wrap: wrap; }
 }
@@ -2644,6 +2815,12 @@ tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
     align-items: center;
     gap: 10px;
     margin-bottom: 10px;
+  }
+
+  .learning-detected-edit,
+  .learning-rule-grid,
+  .scan-session-review-grid {
+    grid-template-columns: 1fr;
   }
 
   .operator-logo {

@@ -49,6 +49,9 @@ const LOCAL_QUERY_TABLES = new Set([
   "clinical_product_links",
   "clinical_demand_product_links",
   "product_code_links",
+  "product_label_images",
+  "operator_scan_sessions",
+  "operator_scan_session_items",
   "inventario_lotes_disponibles",
   "alertas_stock_minimo",
   "historial_movimientos_inventario"
@@ -237,7 +240,7 @@ const supabaseClient = createHybridSupabaseClient(remoteSupabaseClient);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BULK_COLUMNS = ["nombre", "cantidad", "unidad", "fecha_vencimiento", "lote", "critico", "observaciones"];
-const UNIT_OPTIONS = ["kg", "g", "lt", "ml", "unidad", "caja", "paquete"];
+const UNIT_OPTIONS = ["kg", "g", "lt", "ml", "unidad", "caja", "manga", "pack", "paquete"];
 const CONTINUOUS_SCAN_INTERVAL_MS = 420;
 const CONTINUOUS_SCAN_COOLDOWN_MS = 4500;
 const CONTINUOUS_SCAN_DUPLICATE_MS = 90000;
@@ -250,6 +253,8 @@ const CONTINUOUS_SCAN_MIN_SHARPNESS = 8;
 const PRODUCT_LEARNING_SCAN_INTERVAL_MS = 380;
 const PRODUCT_LEARNING_BARCODE_STABLE_TICKS = 2;
 const PRODUCT_LEARNING_REPEAT_GRACE_MS = 2200;
+const CONTINUOUS_SCAN_TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+let continuousScanTesseractPromise = null;
 const MONTHS = [
   { label: "Enero", className: "month-1", color: "#0066FF" },
   { label: "Febrero", className: "month-2", color: "#00D9FF" },
@@ -452,6 +457,9 @@ const state = {
   dailyTasks: [],
   movements: [],
   pendingEntries: [],
+  operatorScanSessions: [],
+  currentScanReview: null,
+  activeOperatorScanSession: null,
   currentReview: null,
   bulkSessionRows: [],
   bulkEditingIndex: null,
@@ -484,7 +492,8 @@ const state = {
     recentBarcodeCaptures: {},
     lastSignature: "",
     lastScanSummary: null,
-    captures: []
+    captures: [],
+    pendingCapture: null
   },
   productLearning: {
     stream: null,
@@ -502,6 +511,7 @@ const state = {
     currentExtraction: null,
     currentOcr: null,
     currentBarcodeKey: "",
+    currentImageDataUrl: "",
     candidateBarcodeKey: "",
     candidateBarcodeTicks: 0,
     selectedProductId: null,
@@ -601,11 +611,17 @@ const elements = {
   sendPendingBtn: document.getElementById("sendPendingBtn"),
   startContinuousScanBtn: document.getElementById("startContinuousScanBtn"),
   learnProductsBtn: document.getElementById("learnProductsBtn"),
+  reviewScanSessionsBtn: document.getElementById("reviewScanSessionsBtn"),
   continuousScanModal: document.getElementById("continuousScanModal"),
   continuousScanVideo: document.getElementById("continuousScanVideo"),
   continuousScanCanvas: document.getElementById("continuousScanCanvas"),
   continuousScanStatus: document.getElementById("continuousScanStatus"),
   scanCapabilitiesStatus: document.getElementById("scanCapabilitiesStatus"),
+  scanAcceptCard: document.getElementById("scanAcceptCard"),
+  scanAcceptSummary: document.getElementById("scanAcceptSummary"),
+  scanPackageCountInput: document.getElementById("scanPackageCountInput"),
+  acceptScanItemBtn: document.getElementById("acceptScanItemBtn"),
+  skipScanItemBtn: document.getElementById("skipScanItemBtn"),
   continuousScanDetectedList: document.getElementById("continuousScanDetectedList"),
   pauseContinuousScanBtn: document.getElementById("pauseContinuousScanBtn"),
   finishContinuousScanBtn: document.getElementById("finishContinuousScanBtn"),
@@ -616,6 +632,13 @@ const elements = {
   productLearningCapabilities: document.getElementById("productLearningCapabilities"),
   productLearningDetected: document.getElementById("productLearningDetected"),
   productLearningCurrentLink: document.getElementById("productLearningCurrentLink"),
+  productLearningImagePreview: document.getElementById("productLearningImagePreview"),
+  productLearningCodeInput: document.getElementById("productLearningCodeInput"),
+  productLearningLotInput: document.getElementById("productLearningLotInput"),
+  productLearningExpiryInput: document.getElementById("productLearningExpiryInput"),
+  productLearningMfgInput: document.getElementById("productLearningMfgInput"),
+  productLearningDetectedQuantityInput: document.getElementById("productLearningDetectedQuantityInput"),
+  productLearningNotesInput: document.getElementById("productLearningNotesInput"),
   productLearningSearch: document.getElementById("productLearningSearch"),
   productLearningResults: document.getElementById("productLearningResults"),
   productLearningPackageRule: document.getElementById("productLearningPackageRule"),
@@ -633,6 +656,10 @@ const elements = {
   adminPendingList: document.getElementById("adminPendingList"),
   pendingCount: document.getElementById("pendingCount"),
   adminPendingNotice: document.getElementById("adminPendingNotice"),
+  scanSessionsAdminPanel: document.getElementById("scanSessionsAdminPanel"),
+  scanSessionsCount: document.getElementById("scanSessionsCount"),
+  scanSessionsNotice: document.getElementById("scanSessionsNotice"),
+  scanSessionsList: document.getElementById("scanSessionsList"),
   totalItems: document.getElementById("totalItems"),
   soonItems: document.getElementById("soonItems"),
   expiredItems: document.getElementById("expiredItems"),
@@ -821,6 +848,14 @@ const elements = {
   pendingRejectReason: document.getElementById("pendingRejectReason"),
   approvePendingBtn: document.getElementById("approvePendingBtn"),
   rejectPendingBtn: document.getElementById("rejectPendingBtn"),
+  scanSessionReviewModal: document.getElementById("scanSessionReviewModal"),
+  scanSessionReviewTitle: document.getElementById("scanSessionReviewTitle"),
+  scanSessionReviewMeta: document.getElementById("scanSessionReviewMeta"),
+  scanSessionReviewItems: document.getElementById("scanSessionReviewItems"),
+  scanSessionReviewErrorList: document.getElementById("scanSessionReviewErrorList"),
+  scanSessionReviewNotes: document.getElementById("scanSessionReviewNotes"),
+  approveScanSessionBtn: document.getElementById("approveScanSessionBtn"),
+  rejectScanSessionBtn: document.getElementById("rejectScanSessionBtn"),
   detailModal: document.getElementById("detailModal"),
   detailModalTitle: document.getElementById("detailModalTitle"),
   detailTableBody: document.getElementById("detailTableBody"),
@@ -1863,6 +1898,7 @@ async function startAuthenticatedApp(session) {
       await withTimeout(refreshInventory(), 18000, "No se pudo cargar inventario a tiempo.");
       await withTimeout(loadAdminPendingEntries(), 12000, "No se pudieron cargar ingresos pendientes.");
       renderAdminPendingEntries();
+      renderAdminScanSessions();
     } catch (error) {
       showError("Sesion iniciada, pero hubo un problema cargando datos", error);
     }
@@ -2195,6 +2231,11 @@ function safeParseJson(value, fallback = null) {
   }
 }
 
+function createClientId(prefix = "local") {
+  const id = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${id}`;
+}
+
 function mapProductCodeLinkFromDb(row = {}) {
   const gs1Payload = safeParseJson(row.gs1_payload_json ?? row.gs1PayloadJson ?? row.gs1Payload, {});
   return {
@@ -2216,6 +2257,9 @@ function mapProductCodeLinkFromDb(row = {}) {
     baseUnit: row.base_unit ?? row.baseUnit ?? "",
     conversionFactor: row.conversion_factor ?? row.conversionFactor ?? null,
     conversionNotes: row.conversion_notes ?? row.conversionNotes ?? "",
+    labelImagePath: row.label_image_path ?? row.labelImagePath ?? "",
+    labelImageId: row.label_image_id ?? row.labelImageId ?? "",
+    labelTextOcr: row.label_text_ocr ?? row.labelTextOcr ?? "",
     source: row.source ?? "",
     confidence: Number(row.confidence || 0),
     createdBy: row.created_by ?? row.createdBy ?? "",
@@ -2247,6 +2291,10 @@ function productCodeLinkToDbPayload(link = {}) {
     base_unit: link.baseUnit || null,
     conversion_factor: link.conversionFactor ?? null,
     conversion_notes: link.conversionNotes || null,
+    label_image_path: link.labelImagePath || null,
+    label_image_id: link.labelImageId || null,
+    label_text_ocr: link.labelTextOcr || null,
+    label_image_data_url: link.labelImageDataUrl || null,
     source: link.source || "camera_learning",
     confidence: link.confidence || 0,
     created_by: link.createdBy || state.currentUser?.id || null,
@@ -2269,7 +2317,188 @@ const productCodeLinkService = {
       const result = await dataProvider.upsertLocalProductCodeLink(payload);
       return mapProductCodeLinkFromDb(result.link);
     }
-    throw new Error("Aprender productos requiere backend local activo. No se sincroniza con Supabase.");
+    throw new Error("Aprender etiquetas requiere backend local activo. No se sincroniza con Supabase.");
+  }
+};
+
+function mapOperatorScanSessionItemFromDb(row = {}) {
+  const metadata = safeParseJson(row.metadata_json ?? row.metadataJson, {});
+  return {
+    id: row.id,
+    sessionId: row.session_id ?? row.sessionId ?? "",
+    productId: row.product_id ?? row.productId ?? "",
+    productCodeLinkId: row.product_code_link_id ?? row.productCodeLinkId ?? "",
+    rawCode: row.raw_code ?? row.rawCode ?? "",
+    normalizedCode: row.normalized_code ?? row.normalizedCode ?? "",
+    productNameSnapshot: row.product_name_snapshot ?? row.productNameSnapshot ?? "",
+    packageType: row.package_type ?? row.packageType ?? "",
+    packageQuantity: row.package_quantity ?? row.packageQuantity ?? null,
+    packageUnit: row.package_unit ?? row.packageUnit ?? "",
+    baseUnit: row.base_unit ?? row.baseUnit ?? "",
+    conversionFactor: row.conversion_factor ?? row.conversionFactor ?? null,
+    packageCount: row.package_count ?? row.packageCount ?? null,
+    totalQuantity: row.total_quantity ?? row.totalQuantity ?? null,
+    lot: row.lot ?? "",
+    expiryDate: row.expiry_date ?? row.expiryDate ?? "",
+    mfgDate: row.mfg_date ?? row.mfgDate ?? "",
+    confidence: Number(row.confidence || 0),
+    imagePath: row.image_path ?? row.imagePath ?? "",
+    status: row.status || "pending",
+    notes: row.notes || "",
+    metadata,
+    createdAt: row.created_at ?? row.createdAt ?? "",
+    updatedAt: row.updated_at ?? row.updatedAt ?? ""
+  };
+}
+
+function mapOperatorScanSessionFromDb(row = {}, items = []) {
+  return {
+    id: row.id,
+    operatorId: row.operator_id ?? row.operatorId ?? "",
+    operatorEmail: row.operator_email ?? row.operatorEmail ?? "",
+    operatorName: row.operator_name ?? row.operatorName ?? "",
+    status: row.status || "active",
+    startedAt: row.started_at ?? row.startedAt ?? "",
+    lastActivityAt: row.last_activity_at ?? row.lastActivityAt ?? "",
+    submittedAt: row.submitted_at ?? row.submittedAt ?? "",
+    reviewedBy: row.reviewed_by ?? row.reviewedBy ?? "",
+    reviewedByEmail: row.reviewed_by_email ?? row.reviewedByEmail ?? "",
+    reviewedAt: row.reviewed_at ?? row.reviewedAt ?? "",
+    notes: row.notes || "",
+    timeoutMinutes: Number(row.timeout_minutes ?? row.timeoutMinutes ?? 30),
+    createdAt: row.created_at ?? row.createdAt ?? "",
+    updatedAt: row.updated_at ?? row.updatedAt ?? "",
+    items: items.filter((item) => String(item.sessionId) === String(row.id))
+  };
+}
+
+function requireLocalScanSessions() {
+  if (!shouldUseLocalBackend()) {
+    throw new Error("Ingreso por escaneo requiere backend local activo. No se sincroniza con Supabase.");
+  }
+}
+
+const scanSessionService = {
+  async list(scope = "operator") {
+    requireLocalScanSessions();
+    let query = dataProvider.table("operator_scan_sessions").select("*").order("created_at", { ascending: false });
+    if (scope === "operator" && state.currentUser?.id) query = query.eq("operator_id", state.currentUser.id);
+    const { data: sessionRows, error: sessionError } = await query;
+    if (sessionError) throw sessionError;
+    const sessionIds = (sessionRows || []).map((session) => session.id).filter(Boolean);
+    let items = [];
+    if (sessionIds.length) {
+      const { data: itemRows, error: itemError } = await dataProvider.table("operator_scan_session_items")
+        .select("*")
+        .in("session_id", sessionIds)
+        .order("created_at", { ascending: true });
+      if (itemError) throw itemError;
+      items = (itemRows || []).map(mapOperatorScanSessionItemFromDb);
+    }
+    return (sessionRows || []).map((session) => mapOperatorScanSessionFromDb(session, items));
+  },
+
+  async get(sessionId) {
+    requireLocalScanSessions();
+    const { data: session, error: sessionError } = await dataProvider.table("operator_scan_sessions")
+      .select("*")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (sessionError) throw sessionError;
+    if (!session) return null;
+    const { data: itemRows, error: itemError } = await dataProvider.table("operator_scan_session_items")
+      .select("*")
+      .eq("session_id", sessionId)
+      .order("created_at", { ascending: true });
+    if (itemError) throw itemError;
+    return mapOperatorScanSessionFromDb(session, (itemRows || []).map(mapOperatorScanSessionItemFromDb));
+  },
+
+  async createActive() {
+    requireLocalScanSessions();
+    const nowIso = new Date().toISOString();
+    const payload = {
+      id: createClientId("scan-session"),
+      operator_id: state.currentUser?.id || null,
+      operator_email: state.currentUser?.email || null,
+      operator_name: state.currentUser?.nombre || state.currentUser?.email || null,
+      status: "active",
+      started_at: nowIso,
+      last_activity_at: nowIso,
+      timeout_minutes: 30
+    };
+    const { data, error } = await dataProvider.table("operator_scan_sessions")
+      .insert(payload)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return mapOperatorScanSessionFromDb(data || payload, []);
+  },
+
+  async addItem(sessionId, item) {
+    requireLocalScanSessions();
+    const payload = {
+      id: item.id || createClientId("scan-item"),
+      session_id: sessionId,
+      product_id: item.productId || null,
+      product_code_link_id: item.productCodeLinkId || null,
+      raw_code: item.rawCode || null,
+      normalized_code: item.normalizedCode || null,
+      product_name_snapshot: item.productNameSnapshot || null,
+      package_type: item.packageType || null,
+      package_quantity: item.packageQuantity ?? null,
+      package_unit: item.packageUnit || null,
+      base_unit: item.baseUnit || null,
+      conversion_factor: item.conversionFactor ?? null,
+      package_count: item.packageCount ?? null,
+      total_quantity: item.totalQuantity ?? null,
+      lot: item.lot || null,
+      expiry_date: item.expiryDate || null,
+      mfg_date: item.mfgDate || null,
+      confidence: item.confidence ?? null,
+      image_path: item.imagePath || null,
+      status: item.status || "pending",
+      notes: item.notes || null,
+      metadata_json: item.metadata || {}
+    };
+    const { data, error } = await dataProvider.table("operator_scan_session_items")
+      .insert(payload)
+      .select("*")
+      .single();
+    if (error) throw error;
+    await this.updateSession(sessionId, { status: "active", last_activity_at: new Date().toISOString() });
+    return mapOperatorScanSessionItemFromDb(data || payload);
+  },
+
+  async updateSession(sessionId, fields) {
+    requireLocalScanSessions();
+    const { data, error } = await dataProvider.table("operator_scan_sessions")
+      .update(fields)
+      .eq("id", sessionId)
+      .select("*")
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapOperatorScanSessionFromDb(data, []) : null;
+  },
+
+  async updateItem(itemId, fields) {
+    requireLocalScanSessions();
+    const { data, error } = await dataProvider.table("operator_scan_session_items")
+      .update(fields)
+      .eq("id", itemId)
+      .select("*")
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapOperatorScanSessionItemFromDb(data) : null;
+  },
+
+  async submit(sessionId, notes = "") {
+    return this.updateSession(sessionId, {
+      status: "submitted",
+      submitted_at: new Date().toISOString(),
+      last_activity_at: new Date().toISOString(),
+      notes: notes || null
+    });
   }
 };
 
@@ -10929,7 +11158,37 @@ function setupContinuousZxingReader() {
 }
 
 function detectContinuousOcrSupport() {
-  return false;
+  return Boolean(window.TextDetector || window.Tesseract?.recognize || navigator.onLine);
+}
+
+async function ensureContinuousScanTesseract() {
+  if (window.Tesseract?.recognize) return true;
+  if (!navigator.onLine || !document?.head) return false;
+  if (!continuousScanTesseractPromise) {
+    continuousScanTesseractPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[src="${CONTINUOUS_SCAN_TESSERACT_URL}"]`);
+      if (existing) {
+        existing.addEventListener("load", () => resolve(true), { once: true });
+        existing.addEventListener("error", reject, { once: true });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = CONTINUOUS_SCAN_TESSERACT_URL;
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = () => resolve(true);
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+  try {
+    await continuousScanTesseractPromise;
+    return Boolean(window.Tesseract?.recognize);
+  } catch (error) {
+    console.warn("No se pudo cargar Tesseract.js", error);
+    continuousScanTesseractPromise = null;
+    return false;
+  }
 }
 
 function renderContinuousScanCapabilities() {
@@ -10940,6 +11199,7 @@ function renderContinuousScanCapabilities() {
     ["Linterna", scan.torchSupported ? (scan.torchEnabled ? "activa" : "soportada") : "no disponible"],
     ["Barcode", scan.barcodeSupported ? "activo" : "no disponible"],
     ["ZXing", scan.zxingSupported ? "fallback activo" : "no disponible"],
+    ["OCR", scan.ocrSupported ? "adaptable" : "no disponible"],
     ["Capturas", String(scan.captures.length)],
     ["Ultimo codigo", scan.lastScanSummary?.code || "-"],
     ["Motor", scan.lastScanSummary?.engine || "-"],
@@ -10976,10 +11236,13 @@ function resetContinuousScanStateForSession() {
     recentBarcodeCaptures: {},
     lastSignature: "",
     lastScanSummary: null,
-    captures: []
+    captures: [],
+    pendingCapture: null
   });
+  if (elements.scanPackageCountInput) elements.scanPackageCountInput.value = "";
   elements.pauseContinuousScanBtn.textContent = "Pausar escaneo";
   renderContinuousScanDetectedList();
+  renderContinuousScanAcceptCard();
   renderContinuousScanCapabilities();
 }
 
@@ -11077,6 +11340,8 @@ async function openContinuousScanModal() {
   resetContinuousScanStateForSession();
   elements.continuousScanModal.hidden = false;
   try {
+    state.activeOperatorScanSession = await scanSessionService.createActive();
+    setContinuousScanStatus("Sesion de ingreso creada. Solicitando camara...");
     await startContinuousScanner();
   } catch (error) {
     setContinuousScanStatus(getSupabaseErrorMessage(error));
@@ -11108,10 +11373,32 @@ function closeContinuousScanModal() {
   elements.continuousScanModal.hidden = true;
 }
 
-function finishContinuousScan() {
-  const count = state.continuousScan.captures.length;
-  closeContinuousScanModal();
-  if (count > 0) showToastSuccess(`${count} captura${count === 1 ? "" : "s"} agregada${count === 1 ? "" : "s"} para revision.`);
+async function finishContinuousScan() {
+  if (state.continuousScan.pendingCapture) {
+    showToastError("Acepta u omite la lectura actual antes de finalizar.");
+    return;
+  }
+  const session = state.activeOperatorScanSession;
+  const itemCount = session?.items?.length || 0;
+  try {
+    if (session?.id && itemCount > 0) {
+      await scanSessionService.submit(session.id, `Sesion enviada desde ingreso por escaneo con ${itemCount} item(s).`);
+      state.activeOperatorScanSession = null;
+      await loadOperatorPendingEntries();
+      showToastSuccess(`Sesion enviada a revision con ${itemCount} item${itemCount === 1 ? "" : "s"}.`);
+    } else if (session?.id) {
+      await scanSessionService.updateSession(session.id, {
+        status: "expired",
+        notes: "Sesion cerrada sin items."
+      });
+      state.activeOperatorScanSession = null;
+      showToastSuccess("Sesion cerrada sin items.");
+    }
+  } catch (error) {
+    showToastError(getSupabaseErrorMessage(error));
+  } finally {
+    closeContinuousScanModal();
+  }
 }
 
 function toggleContinuousScanPause() {
@@ -11121,6 +11408,29 @@ function toggleContinuousScanPause() {
   elements.pauseContinuousScanBtn.textContent = scan.paused ? "Reanudar escaneo" : "Pausar escaneo";
   setContinuousScanStatus(scan.paused ? "Escaneo pausado. La camara sigue abierta." : "Escaneo continuo reanudado.");
   renderContinuousScanCapabilities();
+}
+
+async function maybeExpireActiveOperatorScanSession() {
+  const session = state.activeOperatorScanSession;
+  if (!session?.id || state.continuousScan.pendingCapture) return false;
+  const timeoutMinutes = Number(session.timeoutMinutes || 30);
+  const lastActivity = new Date(session.lastActivityAt || session.startedAt || Date.now()).getTime();
+  if (!Number.isFinite(lastActivity) || Date.now() - lastActivity < timeoutMinutes * 60 * 1000) return false;
+  const itemCount = session.items?.length || 0;
+  if (itemCount > 0) {
+    await scanSessionService.submit(session.id, `Sesion enviada automaticamente por ${timeoutMinutes} minutos sin actividad.`);
+    await loadOperatorPendingEntries();
+    showToastSuccess("Sesion enviada automaticamente a revision por inactividad.");
+  } else {
+    await scanSessionService.updateSession(session.id, {
+      status: "expired",
+      notes: `Sesion expirada por ${timeoutMinutes} minutos sin actividad.`
+    });
+    showToastSuccess("Sesion expirada sin items.");
+  }
+  state.activeOperatorScanSession = null;
+  closeContinuousScanModal();
+  return true;
 }
 
 function getFrameMetrics(canvas, context, previousMetrics) {
@@ -11181,13 +11491,20 @@ function getSignatureDistance(a, b) {
   return total / a.length;
 }
 
-function normalizeBarcodeDetectorResults(results = []) {
+function normalizeBarcodeDetectorResults(results = [], source = "full") {
   return (results || [])
     .map((barcode) => ({
       rawValue: barcode.rawValue || "",
       format: barcode.format || "unknown",
       engine: "BarcodeDetector",
-      confidence: 1
+      confidence: 1,
+      source,
+      boundingBox: barcode.boundingBox ? {
+        x: Number(barcode.boundingBox.x || 0),
+        y: Number(barcode.boundingBox.y || 0),
+        width: Number(barcode.boundingBox.width || 0),
+        height: Number(barcode.boundingBox.height || 0)
+      } : null
     }))
     .filter((barcode) => barcode.rawValue);
 }
@@ -11205,14 +11522,51 @@ function normalizeZxingResult(result) {
   };
 }
 
+function scoreBarcodeCandidate(barcode) {
+  const rawValue = barcode?.rawValue || "";
+  const gs1 = parseGs1(rawValue);
+  let score = 0;
+  if (gs1.isGs1) score += 120;
+  if (gs1.fields?.gtin || gs1.fields?.contentGtin) score += 35;
+  if (gs1.fields?.lot) score += 45;
+  if (gs1.fields?.expirationDate || gs1.fields?.bestBeforeDate) score += 45;
+  if (String(rawValue).includes("(") || String(rawValue).includes(GS1_GROUP_SEPARATOR)) score += 18;
+  if (/code[_-]?128/i.test(barcode?.format || "")) score += 8;
+  score += Math.min(String(rawValue).length, 80) / 10;
+  if (barcode?.engine === "ZXing") score += 2;
+  return score;
+}
+
+function rankBarcodeCandidates(candidates = []) {
+  const unique = new Map();
+  candidates
+    .filter((barcode) => barcode?.rawValue)
+    .forEach((barcode) => {
+      const key = `${normalizeScanCode(barcode.rawValue)}|${barcode.format || ""}`;
+      const current = unique.get(key);
+      if (!current || scoreBarcodeCandidate(barcode) > scoreBarcodeCandidate(current)) {
+        unique.set(key, barcode);
+      }
+    });
+  return [...unique.values()].sort((a, b) => scoreBarcodeCandidate(b) - scoreBarcodeCandidate(a));
+}
+
+function hasGs1BarcodeCandidate(candidates = []) {
+  return candidates.some((barcode) => parseGs1(barcode?.rawValue || "").isGs1);
+}
+
 function createContinuousScanRoiCanvases(video) {
   if (!video?.videoWidth || !video?.videoHeight) return [];
   const width = video.videoWidth;
   const height = video.videoHeight;
   const definitions = [
+    { x: 0, y: 0, width, height: Math.round(height * 0.35) },
+    { x: 0, y: Math.round(height * 0.08), width, height: Math.round(height * 0.35) },
     { x: 0, y: Math.round(height * 0.25), width, height: Math.round(height * 0.55) },
     { x: 0, y: Math.round(height * 0.15), width, height: Math.round(height * 0.45) },
-    { x: 0, y: Math.round(height * 0.45), width, height: Math.round(height * 0.40) }
+    { x: 0, y: Math.round(height * 0.45), width, height: Math.round(height * 0.40) },
+    { x: Math.round(width * 0.08), y: Math.round(height * 0.15), width: Math.round(width * 0.84), height: Math.round(height * 0.36) },
+    { x: Math.round(width * 0.08), y: Math.round(height * 0.32), width: Math.round(width * 0.84), height: Math.round(height * 0.36) }
   ];
   return definitions.map((definition) => {
     const canvas = document.createElement("canvas");
@@ -11236,9 +11590,10 @@ function createContinuousScanRoiCanvases(video) {
 
 async function detectBarcodesWithBarcodeDetectorForScanner(video, scan) {
   if (!scan?.barcodeDetector) return [];
+  const candidates = [];
   try {
-    const detected = normalizeBarcodeDetectorResults(await scan.barcodeDetector.detect(video));
-    if (detected.length) return detected;
+    const detected = normalizeBarcodeDetectorResults(await scan.barcodeDetector.detect(video), "full");
+    candidates.push(...detected);
   } catch (error) {
     console.warn("BarcodeDetector fallo en frame", error);
   }
@@ -11246,13 +11601,13 @@ async function detectBarcodesWithBarcodeDetectorForScanner(video, scan) {
   const roiCanvases = createContinuousScanRoiCanvases(video);
   for (const roiCanvas of roiCanvases) {
     try {
-      const detected = normalizeBarcodeDetectorResults(await scan.barcodeDetector.detect(roiCanvas));
-      if (detected.length) return detected;
+      const detected = normalizeBarcodeDetectorResults(await scan.barcodeDetector.detect(roiCanvas), "roi");
+      candidates.push(...detected);
     } catch (error) {
       console.warn("BarcodeDetector fallo en recorte", error);
     }
   }
-  return [];
+  return rankBarcodeCandidates(candidates);
 }
 
 async function detectBarcodesWithBarcodeDetector(video) {
@@ -11264,10 +11619,11 @@ async function detectBarcodesWithZxingForScanner(video, scan) {
   const now = Date.now();
   if (now - scan.lastZxingAttemptAt < CONTINUOUS_SCAN_ZXING_INTERVAL_MS) return [];
   scan.lastZxingAttemptAt = now;
+  const candidates = [];
   try {
     const result = scan.zxingReader.decode(video);
     const normalized = normalizeZxingResult(result);
-    return normalized ? [normalized] : [];
+    if (normalized) candidates.push(normalized);
   } catch (error) {
     const message = String(error?.message || error || "");
     if (!/not.?found|no multi format readers|could not find|No barcode/i.test(message)) {
@@ -11279,7 +11635,7 @@ async function detectBarcodesWithZxingForScanner(video, scan) {
     try {
       const result = scan.zxingReader.decodeFromCanvas(roiCanvas);
       const normalized = normalizeZxingResult(result);
-      if (normalized) return [normalized];
+      if (normalized) candidates.push(normalized);
     } catch (error) {
       const message = String(error?.message || error || "");
       if (!/not.?found|no multi format readers|could not find|No barcode/i.test(message)) {
@@ -11287,7 +11643,7 @@ async function detectBarcodesWithZxingForScanner(video, scan) {
       }
     }
   }
-  return [];
+  return rankBarcodeCandidates(candidates);
 }
 
 async function detectBarcodesWithZxing(video) {
@@ -11332,6 +11688,11 @@ function updateScanBarcodeCandidate(scan, barcodeValue, requiredTicks = CONTINUO
 async function continuousScanLoop() {
   const scan = state.continuousScan;
   if (!scan.running) return;
+  try {
+    if (await maybeExpireActiveOperatorScanSession()) return;
+  } catch (error) {
+    console.warn("No se pudo cerrar sesion expirada", error);
+  }
   if (!scan.paused && !scan.processing) {
     scan.processing = true;
     try {
@@ -11347,6 +11708,10 @@ async function continuousScanLoop() {
 
 async function processContinuousScanFrame() {
   const scan = state.continuousScan;
+  if (scan.pendingCapture) {
+    setContinuousScanStatus("Confirma cantidad u omite la lectura actual para seguir escaneando.");
+    return;
+  }
   const video = elements.continuousScanVideo;
   if (!video.videoWidth || !video.videoHeight) return;
 
@@ -11358,8 +11723,9 @@ async function processContinuousScanFrame() {
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
   let barcodes = await detectBarcodesWithBarcodeDetector(video);
-  if (!barcodes.length) {
-    barcodes = await detectBarcodesWithZxing(video);
+  if (!hasGs1BarcodeCandidate(barcodes)) {
+    const zxingBarcodes = await detectBarcodesWithZxing(video);
+    barcodes = rankBarcodeCandidates([...barcodes, ...zxingBarcodes]);
   }
 
   const metrics = getFrameMetrics(canvas, context, scan.lastFrameMetrics);
@@ -11404,23 +11770,36 @@ async function runContinuousScanOcr(canvas) {
       const detector = new window.TextDetector();
       const rows = await detector.detect(canvas);
       const text = rows.map((row) => row.rawValue || row.text || "").filter(Boolean).join("\n");
-      return { text, method: "TextDetector", notice: text ? "" : "OCR nativo sin texto legible." };
+      return {
+        text,
+        method: "TextDetector",
+        status: "ok",
+        fields: extractAdaptiveLabelFields(text),
+        notice: text ? "" : "OCR nativo sin texto legible."
+      };
     } catch (error) {
       console.warn("TextDetector no pudo leer OCR", error);
     }
   }
 
-  if (window.Tesseract?.recognize) {
+  if (await ensureContinuousScanTesseract()) {
     try {
       const result = await window.Tesseract.recognize(canvas, "spa+eng");
-      return { text: result?.data?.text || "", method: "Tesseract.js", notice: "" };
+      const text = result?.data?.text || "";
+      return {
+        text,
+        method: "Tesseract.js",
+        status: "ok",
+        fields: extractAdaptiveLabelFields(text),
+        notice: text ? "" : "OCR sin texto legible en esta captura."
+      };
     } catch (error) {
       console.warn("Tesseract.js no pudo leer OCR", error);
-      return { text: "", method: "Tesseract.js", notice: "OCR fallo en esta captura." };
+      return { text: "", method: "Tesseract.js", status: "error", fields: {}, notice: "OCR fallo en esta captura." };
     }
   }
 
-  return { text: "", method: "no disponible", notice: "OCR no disponible sin motor local o externo." };
+  return { text: "", method: "no disponible", status: "unavailable", fields: {}, notice: "OCR no disponible sin motor local o externo." };
 }
 
 function getOcrLines(text) {
@@ -11463,9 +11842,113 @@ function unitFromPresentation(value) {
   return "";
 }
 
+function makeIsoDate(year, month, day) {
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(day);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return "";
+  if (y < 2000 || y > 2099 || m < 1 || m > 12 || d < 1 || d > 31) return "";
+  const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return isValidIsoDate(iso) ? iso : "";
+}
+
+function scoreFlexibleDateCandidate(iso, mode = "generic", preferred = false) {
+  if (!isValidIsoDate(iso)) return -9999;
+  const today = getToday().getTime();
+  const date = new Date(`${iso}T00:00:00`).getTime();
+  const days = Math.round((date - today) / 86400000);
+  let score = preferred ? 20 : 0;
+  if (mode === "expiry") {
+    if (days >= -45 && days <= 3650) score += 120;
+    if (days >= 0) score += 35;
+    score -= Math.abs(days - 365) / 120;
+  } else if (mode === "mfg") {
+    if (days <= 45 && days >= -3650) score += 120;
+    if (days <= 0) score += 35;
+    score -= Math.abs(days + 120) / 120;
+  } else {
+    score -= Math.abs(days) / 240;
+  }
+  return score;
+}
+
+function parseFlexibleLabelDate(value, { mode = "generic", preferGs1 = false } = {}) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const normalizedText = normalize(raw).replace(/[,_]/g, " ");
+  const monthDay = normalizedText.match(/\b(\d{1,2})\s+(ene|enero|feb|febrero|mar|marzo|abr|abril|may|mayo|jun|junio|jul|julio|ago|agosto|sep|sept|setiembre|septiembre|oct|octubre|nov|noviembre|dic|diciembre)\s+(\d{2,4})\b/);
+  if (monthDay) {
+    const year = monthDay[3].length === 2 ? 2000 + Number(monthDay[3]) : Number(monthDay[3]);
+    const iso = makeIsoDate(year, CLINICAL_MONTH_NAME_ALIASES[monthDay[2]] + 1, monthDay[1]);
+    if (iso) return iso;
+  }
+  const monthYear = normalizedText.match(/\b(ene|enero|feb|febrero|mar|marzo|abr|abril|may|mayo|jun|junio|jul|julio|ago|agosto|sep|sept|setiembre|septiembre|oct|octubre|nov|noviembre|dic|diciembre)\s+(\d{2,4})\b/);
+  if (monthYear) {
+    const month = CLINICAL_MONTH_NAME_ALIASES[monthYear[1]] + 1;
+    const year = monthYear[2].length === 2 ? 2000 + Number(monthYear[2]) : Number(monthYear[2]);
+    return makeIsoDate(year, month, new Date(year, month, 0).getDate());
+  }
+
+  const candidates = [];
+  const separated = raw.match(/\b(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})\b/);
+  if (separated) {
+    const [first, second, third] = separated.slice(1);
+    if (first.length === 4) {
+      const iso = makeIsoDate(first, second, third);
+      if (iso) candidates.push({ iso, preferred: true });
+    } else {
+      const year = third.length === 2 ? 2000 + Number(third) : Number(third);
+      const iso = makeIsoDate(year, second, first);
+      if (iso) candidates.push({ iso, preferred: true });
+    }
+  }
+
+  const digits = raw.replace(/\D/g, "");
+  if (/^\d{8}$/.test(digits)) {
+    const yyyymmdd = makeIsoDate(digits.slice(0, 4), digits.slice(4, 6), digits.slice(6, 8));
+    const ddmmyyyy = makeIsoDate(digits.slice(4, 8), digits.slice(2, 4), digits.slice(0, 2));
+    if (yyyymmdd) candidates.push({ iso: yyyymmdd, preferred: true });
+    if (ddmmyyyy) candidates.push({ iso: ddmmyyyy, preferred: false });
+  } else if (/^\d{6}$/.test(digits)) {
+    const yymmdd = makeIsoDate(2000 + Number(digits.slice(0, 2)), digits.slice(2, 4), digits.slice(4, 6));
+    const ddmmyy = makeIsoDate(2000 + Number(digits.slice(4, 6)), digits.slice(2, 4), digits.slice(0, 2));
+    if (yymmdd) candidates.push({ iso: yymmdd, preferred: preferGs1 });
+    if (ddmmyy) candidates.push({ iso: ddmmyy, preferred: !preferGs1 });
+  }
+
+  const best = candidates
+    .filter((candidate, index, list) => list.findIndex((item) => item.iso === candidate.iso) === index)
+    .sort((a, b) => scoreFlexibleDateCandidate(b.iso, mode, b.preferred) - scoreFlexibleDateCandidate(a.iso, mode, a.preferred))[0];
+  return best?.iso || "";
+}
+
+function getLabelDatePattern() {
+  return "(\\d{4}[./-]?\\d{2}[./-]?\\d{2}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}|\\d{6}|\\d{1,2}\\s+(?:ene|enero|feb|febrero|mar|marzo|abr|abril|may|mayo|jun|junio|jul|julio|ago|agosto|sep|sept|setiembre|septiembre|oct|octubre|nov|noviembre|dic|diciembre)\\s+\\d{2,4}|(?:ene|enero|feb|febrero|mar|marzo|abr|abril|may|mayo|jun|junio|jul|julio|ago|agosto|sep|sept|setiembre|septiembre|oct|octubre|nov|noviembre|dic|diciembre)\\s+\\d{2,4})";
+}
+
+function normalizeOcrLotValue(value) {
+  let lot = normalizeLotValue(value).replace(/[.,;:]+$/g, "");
+  lot = lot.replace(/^O(?=\d)/, "0");
+  lot = lot.replace(/(\d)O(?=\d)/g, "$10");
+  return lot;
+}
+
 function extractLotFromText(text) {
-  const match = String(text || "").match(/\b(?:lote|lot|batch|lt|l)\s*[:#.-]?\s*([A-Z0-9][A-Z0-9-]{2,24})\b/i);
-  return match ? normalizeLotValue(match[1]) : "";
+  const lines = getOcrLines(text);
+  const candidates = [];
+  for (const line of lines) {
+    const strong = line.match(/\b(?:lote|lot|batch|lt)\b\s*[:#.-]?\s*([A-Z0-9][A-Z0-9/_-]{1,24})\b/i);
+    if (strong) candidates.push(strong[1]);
+    const short = line.match(/(?:^|\s)L\s*[:#.-]?\s*([A-Z0-9][A-Z0-9/_-]{1,24})\b/i);
+    if (short && /\b(?:venc|vence|vto|elab|fecha|prod|codigo|cod|consumir|antes)\b/i.test(line)) candidates.push(short[1]);
+  }
+  const value = candidates
+    .map(normalizeOcrLotValue)
+    .find((candidate) =>
+      candidate &&
+      !/^(VENC|VENCE|VTO|EXP|CAD|ELAB|FECHA|CODIGO|COD)$/.test(candidate)
+    );
+  return value || "";
 }
 
 function parseMonthYearExpiry(value) {
@@ -11481,17 +11964,35 @@ function parseMonthYearExpiry(value) {
 
 function extractExpiryFromText(text) {
   const raw = String(text || "");
-  const labeled = raw.match(/\b(?:consumir antes de|vence|vencimiento|venc|vto|cad|caduca|exp|expiry|fecha vencimiento|f\.?\s*vencimiento|v)\b[^\dA-Z]{0,20}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{6,8}|[A-Z]{3,10}\s+\d{2,4})/i);
-  const generic = raw.match(/\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b/);
-  const value = (labeled?.[1] || generic?.[1] || "").trim();
-  const parsed = parseMonthYearExpiry(value) || parseDateInput(value);
-  return parsed && isValidIsoDate(parsed) ? parsed : "";
+  const datePattern = getLabelDatePattern();
+  const labeledPattern = new RegExp(`\\b(?:consumir\\s+antes\\s+de|vence|vencimiento|venc|vto|cad|caduca|exp|expiry|fecha\\s+vencimiento|f\\.?\\s*vencimiento|v)\\b[^0-9A-Z]{0,24}${datePattern}`, "i");
+  const labeled = raw.match(labeledPattern);
+  const value = (labeled?.[1] || "").trim();
+  const parsed = parseFlexibleLabelDate(value, { mode: "expiry" }) || parseMonthYearExpiry(value);
+  if (parsed && isValidIsoDate(parsed)) return parsed;
+  if (/\b(?:consumir\s+antes\s+de|vence|vencimiento|venc|vto|cad|caduca|exp|expiry|fecha\s+vencimiento|f\.?\s*vencimiento|v)\b/i.test(raw)) {
+    return "";
+  }
+
+  const genericMatches = raw.match(new RegExp(datePattern, "gi")) || [];
+  if (genericMatches.length === 1) {
+    const generic = parseFlexibleLabelDate(genericMatches[0], { mode: "expiry" });
+    return generic && isValidIsoDate(generic) ? generic : "";
+  }
+  return "";
 }
 
 function extractManufacturingDateFromText(text) {
   const raw = String(text || "");
-  const labeled = raw.match(/\b(?:elaboracion|elab|fabricacion|fab|fecha elaboracion|f\.?\s*elaboracion|e)\b[^\d]{0,18}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{6,8})/i);
-  const parsed = parseDateInput((labeled?.[1] || "").trim());
+  const datePattern = getLabelDatePattern();
+  const labeledPattern = new RegExp(`\\b(?:elaboracion|elab|fabricacion|fab|fecha\\s+elaboracion|f\\.?\\s*elaboracion|e)\\b[^0-9A-Z]{0,24}${datePattern}`, "i");
+  const labeled = raw.match(labeledPattern);
+  const parsed = parseFlexibleLabelDate((labeled?.[1] || "").trim(), { mode: "mfg" });
+  if (parsed && isValidIsoDate(parsed)) return parsed;
+
+  const lotBeforeExpiry = raw.match(new RegExp(`\\b(?:lote|lot|batch|lt)\\b[^\\n\\r]{0,80}?${datePattern}[^\\n\\r]{0,40}\\b(?:venc|vence|vto|exp)\\b`, "i"));
+  const inferred = parseFlexibleLabelDate((lotBeforeExpiry?.[1] || "").trim(), { mode: "mfg" });
+  if (inferred && isValidIsoDate(inferred)) return inferred;
   return parsed && isValidIsoDate(parsed) ? parsed : "";
 }
 
@@ -11561,7 +12062,184 @@ function buildDeferredOcrResult() {
   };
 }
 
-function buildContinuousScanExtraction({ barcode, text = "" }) {
+function extractAdaptiveLabelFields(text) {
+  const rawText = String(text || "");
+  const lot = extractLotFromText(rawText);
+  const expiryDate = extractExpiryFromText(rawText);
+  const mfgDate = extractManufacturingDateFromText(rawText);
+  const quantity = extractPackQuantityFromText(rawText);
+  return {
+    lot,
+    expiryDate,
+    mfgDate,
+    quantity,
+    hasUsefulData: Boolean(lot || expiryDate || mfgDate || quantity)
+  };
+}
+
+function createContinuousScanOcrCanvas(video, { maxWidth = 1280 } = {}) {
+  return createContinuousScanOcrCanvasFromRegion(video, {
+    x: 0,
+    y: 0,
+    width: video?.videoWidth || 0,
+    height: video?.videoHeight || 0,
+    label: "completa"
+  }, { maxWidth });
+}
+
+function createContinuousScanOcrCanvasFromRegion(video, region, { maxWidth = 1280 } = {}) {
+  if (!video?.videoWidth || !video?.videoHeight) return null;
+  const sourceX = Math.max(0, Math.min(video.videoWidth - 1, Math.round(region.x || 0)));
+  const sourceY = Math.max(0, Math.min(video.videoHeight - 1, Math.round(region.y || 0)));
+  const sourceWidth = Math.max(1, Math.min(video.videoWidth - sourceX, Math.round(region.width || video.videoWidth)));
+  const sourceHeight = Math.max(1, Math.min(video.videoHeight - sourceY, Math.round(region.height || video.videoHeight)));
+  const scale = Math.min(2.2, Math.max(0.5, maxWidth / sourceWidth));
+  const canvas = document.createElement("canvas");
+  canvas.dataset.ocrRegion = region.label || "recorte";
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  try {
+    const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    for (let index = 0; index < image.data.length; index += 4) {
+      const gray = image.data[index] * 0.299 + image.data[index + 1] * 0.587 + image.data[index + 2] * 0.114;
+      const adjusted = Math.max(0, Math.min(255, (gray - 128) * 1.35 + 138));
+      image.data[index] = adjusted;
+      image.data[index + 1] = adjusted;
+      image.data[index + 2] = adjusted;
+      image.data[index + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+  } catch (error) {
+    console.warn("No se pudo preparar imagen para OCR", error);
+  }
+  return canvas;
+}
+
+function getBarcodeContextOcrRegions(video, barcode) {
+  const box = barcode?.source === "full" ? barcode.boundingBox : null;
+  if (!video?.videoWidth || !video?.videoHeight || !box?.width || !box?.height) return [];
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  const centerY = box.y + box.height / 2;
+  const tallBand = Math.max(box.height * 5.5, height * 0.26);
+  return [
+    {
+      label: "codigo-contexto",
+      x: width * 0.03,
+      y: Math.max(0, centerY - tallBand * 0.72),
+      width: width * 0.94,
+      height: Math.min(height, tallBand),
+      maxWidth: 1800
+    },
+    {
+      label: "codigo-arriba",
+      x: width * 0.03,
+      y: Math.max(0, box.y - tallBand * 0.95),
+      width: width * 0.94,
+      height: Math.min(height, tallBand * 0.82),
+      maxWidth: 1800
+    },
+    {
+      label: "codigo-abajo",
+      x: width * 0.03,
+      y: Math.max(0, box.y + box.height - tallBand * 0.18),
+      width: width * 0.94,
+      height: Math.min(height, tallBand * 0.75),
+      maxWidth: 1800
+    }
+  ];
+}
+
+function createContinuousScanOcrCanvases(video, barcode = null) {
+  if (!video?.videoWidth || !video?.videoHeight) return [];
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  const regions = [
+    ...getBarcodeContextOcrRegions(video, barcode),
+    { label: "completa", x: 0, y: 0, width, height, maxWidth: 1280 },
+    { label: "etiqueta-centro", x: width * 0.04, y: height * 0.16, width: width * 0.92, height: height * 0.62, maxWidth: 1500 },
+    { label: "etiqueta-inferior", x: width * 0.06, y: height * 0.38, width: width * 0.88, height: height * 0.36, maxWidth: 1500 },
+    { label: "etiqueta-superior", x: width * 0.06, y: height * 0.08, width: width * 0.88, height: height * 0.36, maxWidth: 1500 }
+  ];
+  return regions
+    .map((region) => createContinuousScanOcrCanvasFromRegion(video, region, { maxWidth: region.maxWidth }))
+    .filter(Boolean);
+}
+
+function mergeContinuousOcrResults(results) {
+  const usableResults = results.filter(Boolean);
+  const text = usableResults.map((result) => result.text || "").filter(Boolean).join("\n");
+  const fields = extractAdaptiveLabelFields(text);
+  const methods = [...new Set(usableResults.map((result) => result.method).filter(Boolean))];
+  const regions = usableResults.map((result) => result.region).filter(Boolean);
+  const notices = usableResults.map((result) => result.notice).filter(Boolean);
+  return {
+    text,
+    method: methods.join(" + ") || "no disponible",
+    status: usableResults.some((result) => result.status === "ok") ? "ok" : (usableResults[0]?.status || "unavailable"),
+    fields,
+    regions,
+    notice: fields.hasUsefulData ? "" : (notices[0] || "OCR sin datos utiles de etiqueta.")
+  };
+}
+
+async function runContinuousScanOcrFromCanvases(canvases = []) {
+  const results = [];
+  for (const canvas of canvases) {
+    const result = await runContinuousScanOcr(canvas);
+    result.region = canvas?.dataset?.ocrRegion || "";
+    results.push(result);
+    const merged = mergeContinuousOcrResults(results);
+    if (merged.fields.lot && merged.fields.expiryDate && merged.fields.expiryDate !== merged.fields.mfgDate) return merged;
+  }
+  return mergeContinuousOcrResults(results);
+}
+
+function shouldRunOcrForExtraction(extraction, { force = false } = {}) {
+  if (force) return detectContinuousOcrSupport();
+  if (!detectContinuousOcrSupport()) return false;
+  const fields = extraction?.fields || {};
+  return Boolean(
+    !fields.lote?.value ||
+    !fields.fechaVencimiento?.value ||
+    !fields.fechaElaboracion?.value ||
+    !fields.cantidadPorCaja?.value ||
+    extraction?.codeKind !== "GS1"
+  );
+}
+
+async function buildContinuousScanExtractionWithOcr({ barcode, video, forceOcr = false, onStatus = null } = {}) {
+  let ocr = buildDeferredOcrResult();
+  let extraction = buildContinuousScanExtraction({ barcode, text: "", ocr });
+  if (!shouldRunOcrForExtraction(extraction, { force: forceOcr })) return { extraction, ocr };
+
+  const ocrCanvases = createContinuousScanOcrCanvases(video, barcode);
+  if (!ocrCanvases.length) return { extraction, ocr };
+  if (typeof onStatus === "function") onStatus("Leyendo texto de etiqueta...");
+  ocr = await runContinuousScanOcrFromCanvases(ocrCanvases);
+  extraction = buildContinuousScanExtraction({ barcode, text: ocr.text || "", ocr });
+  return { extraction, ocr };
+}
+
+function captureVideoFrameDataUrl(video, { maxWidth = 960, quality = 0.72 } = {}) {
+  if (!video?.videoWidth || !video?.videoHeight) return "";
+  const scale = Math.min(1, maxWidth / video.videoWidth);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  const context = canvas.getContext("2d");
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  try {
+    return canvas.toDataURL("image/jpeg", quality);
+  } catch (error) {
+    console.warn("No se pudo capturar imagen de referencia", error);
+    return "";
+  }
+}
+
+function buildContinuousScanExtraction({ barcode, text = "", ocr = null }) {
   const barcodeRaw = String(barcode?.rawValue || barcode?.value || "").trim();
   const barcodeValue = normalizeScanCode(barcodeRaw);
   const barcodeFormat = barcode?.format || "";
@@ -11578,11 +12256,17 @@ function buildContinuousScanExtraction({ barcode, text = "" }) {
   const format = extractFormatFromText(text);
   const identity = extractProductIdentityFromText(lines, format);
   const name = productByCode?.nombre || identity.name;
-  const lot = gs1.fields.lot || extractLotFromText(text);
+  const ocrHasText = Boolean(String(text || "").trim());
+  const ocrSource = ocrHasText ? "ocr" : "futura OCR";
+  const ocrDetail = ocrHasText ? "texto de etiqueta" : "pendiente OCR";
+  const lotFromText = extractLotFromText(text);
+  const lot = gs1.fields.lot || lotFromText;
   const expiryFromGs1 = gs1.fields.expirationDate || gs1.fields.bestBeforeDate || "";
   const historicalExpiry = !expiryFromGs1 && productByCode && lot ? findHistoricalExpiryForLot(productByCode.id, lot) : "";
-  const fechaVencimiento = expiryFromGs1 || extractExpiryFromText(text) || historicalExpiry;
-  const fechaElaboracion = gs1.fields.productionDate || extractManufacturingDateFromText(text);
+  const expiryFromText = extractExpiryFromText(text);
+  const fechaVencimiento = expiryFromGs1 || expiryFromText || historicalExpiry;
+  const mfgFromText = extractManufacturingDateFromText(text);
+  const fechaElaboracion = gs1.fields.productionDate || mfgFromText;
   const quantityFromGs1 = gs1.fields.variableCount || gs1.fields.count || "";
   const packageQuantityFromLearnedLink = Number(productCodeLink?.packageQuantity || 0) > 0 ? Number(productCodeLink.packageQuantity) : null;
   const conversionFactorFromLearnedLink = Number(productCodeLink?.conversionFactor || 0) > 0 ? Number(productCodeLink.conversionFactor) : null;
@@ -11610,21 +12294,21 @@ function buildContinuousScanExtraction({ barcode, text = "" }) {
       codigoBarra: buildScanField(barcodeValue, barcodeConfidence, "barcode", barcodeEngine || barcodeFormat),
       tipoCodigo: buildScanField(codeKind, codeKind ? 0.95 : 0, gs1.isGs1 ? "gs1" : "barcode", barcodeFormat),
       gtin: buildScanField(gtin, gtin ? (gtinFromGs1 ? 0.99 : 0.94) : 0, gtinFromGs1 ? "gs1" : (gtin ? "barcode" : ""), gtinFromGs1 ? "(01)/(02)" : "checksum"),
-      nombre: buildScanField(name, productByCode ? 0.95 : (name ? 0.35 : 0), productByCode ? "barcode" : "futura OCR", productCodeLink ? "vinculo aprendido" : (productByCode ? "catalogo vinculado" : "pendiente OCR")),
+      nombre: buildScanField(name, productByCode ? 0.95 : (name ? 0.35 : 0), productByCode ? "barcode" : ocrSource, productCodeLink ? "vinculo aprendido" : (productByCode ? "catalogo vinculado" : ocrDetail)),
       productoVinculado: buildScanField(productLinked ? "si" : "no", barcodeValue ? 0.95 : 0, "barcode", productLinked ? (productCodeLink ? "vinculo aprendido" : "match por codigo") : "sin match"),
-      marca: buildScanField(identity.brand, identity.brand ? 0.35 : 0, "futura OCR", "pendiente OCR"),
-      formato: buildScanField(format, format ? 0.45 : 0, "futura OCR", "pendiente OCR"),
-      lote: buildScanField(lot, lot ? (gs1.fields.lot ? 0.98 : 0.5) : 0, gs1.fields.lot ? "gs1" : "futura OCR", gs1.fields.lot ? "(10)" : "pendiente OCR"),
-      fechaVencimiento: buildScanField(fechaVencimiento, fechaVencimiento ? (expiryFromGs1 ? 0.98 : historicalExpiry ? 0.55 : 0.5) : 0, expiryFromGs1 ? "gs1" : (historicalExpiry ? "barcode" : "futura OCR"), expiryFromGs1 ? "(17)/(15)" : (historicalExpiry ? "historico de lote" : "pendiente OCR")),
-      fechaElaboracion: buildScanField(fechaElaboracion, fechaElaboracion ? (gs1.fields.productionDate ? 0.98 : 0.5) : 0, gs1.fields.productionDate ? "gs1" : (fechaElaboracion ? "futura OCR" : ""), gs1.fields.productionDate ? "(11)" : (fechaElaboracion ? "pendiente OCR" : "")),
+      marca: buildScanField(identity.brand, identity.brand ? 0.35 : 0, ocrSource, ocrDetail),
+      formato: buildScanField(format, format ? 0.45 : 0, ocrSource, ocrDetail),
+      lote: buildScanField(lot, lot ? (gs1.fields.lot ? 0.98 : 0.62) : 0, gs1.fields.lot ? "gs1" : (lotFromText ? "ocr" : "futura OCR"), gs1.fields.lot ? "(10)" : (lotFromText ? "LOTE/L" : "pendiente OCR")),
+      fechaVencimiento: buildScanField(fechaVencimiento, fechaVencimiento ? (expiryFromGs1 ? 0.98 : historicalExpiry ? 0.55 : 0.68) : 0, expiryFromGs1 ? "gs1" : (historicalExpiry ? "barcode" : (expiryFromText ? "ocr" : "futura OCR")), expiryFromGs1 ? "(17)/(15)" : (historicalExpiry ? "historico de lote" : (expiryFromText ? "VENC/V" : "pendiente OCR"))),
+      fechaElaboracion: buildScanField(fechaElaboracion, fechaElaboracion ? (gs1.fields.productionDate ? 0.98 : 0.62) : 0, gs1.fields.productionDate ? "gs1" : (mfgFromText ? "ocr" : ""), gs1.fields.productionDate ? "(11)" : (mfgFromText ? "ELAB/E" : "")),
       cantidadDetectada: buildScanField(quantityFromGs1, quantityFromGs1 ? 0.95 : 0, quantityFromGs1 ? "gs1" : "", quantityFromGs1 ? "(30)/(37)" : ""),
       tipoEmpaque: buildScanField(productCodeLink?.packageType || "", productCodeLink?.packageType ? 0.95 : 0, productCodeLink?.packageType ? "barcode" : "", productCodeLink?.packageType ? "regla aprendida" : ""),
       cantidadEmpaque: buildScanField(packageQuantityFromLearnedLink ? String(packageQuantityFromLearnedLink) : "", packageQuantityFromLearnedLink ? 0.95 : 0, packageQuantityFromLearnedLink ? "barcode" : "", packageQuantityFromLearnedLink ? "regla aprendida" : ""),
       unidadEmpaque: buildScanField(productCodeLink?.packageUnit || "", productCodeLink?.packageUnit ? 0.95 : 0, productCodeLink?.packageUnit ? "barcode" : "", productCodeLink?.packageUnit ? "regla aprendida" : ""),
       unidadBase: buildScanField(productCodeLink?.baseUnit || productByCode?.unidad_default || "", productCodeLink?.baseUnit ? 0.95 : 0, productCodeLink?.baseUnit ? "barcode" : "", productCodeLink?.baseUnit ? "regla aprendida" : ""),
       factorConversion: buildScanField(conversionFactorFromLearnedLink ? String(conversionFactorFromLearnedLink) : "", conversionFactorFromLearnedLink ? 0.98 : 0, conversionFactorFromLearnedLink ? "barcode" : "", conversionFactorFromLearnedLink ? "regla aprendida" : ""),
-      cantidadPorCaja: buildScanField(cantidadPorCaja ? String(cantidadPorCaja) : "", cantidadPorCaja ? (packQuantityFromCatalog ? 0.86 : 0.45) : 0, cantidadPorCaja ? (packQuantityFromCatalog ? "barcode" : "futura OCR") : "", packageQuantityFromLearnedLink ? "regla aprendida" : (packQuantityFromCatalog ? "catalogo vinculado" : (packQuantityFromText ? "pendiente OCR" : ""))),
-      textoOcr: buildScanField(text || "", text ? 0.55 : 0, "futura OCR", "no ejecutado")
+      cantidadPorCaja: buildScanField(cantidadPorCaja ? String(cantidadPorCaja) : "", cantidadPorCaja ? (packQuantityFromCatalog ? 0.86 : 0.45) : 0, cantidadPorCaja ? (packQuantityFromCatalog ? "barcode" : (packQuantityFromText ? "ocr" : "futura OCR")) : "", packageQuantityFromLearnedLink ? "regla aprendida" : (packQuantityFromCatalog ? "catalogo vinculado" : (packQuantityFromText ? "texto de etiqueta" : ""))),
+      textoOcr: buildScanField(text || "", text ? 0.55 : 0, ocrHasText ? "ocr" : "futura OCR", ocrHasText ? (ocr?.method || "texto de etiqueta") : "no ejecutado")
     },
     sources: {
       barcode: barcodeSource,
@@ -11634,7 +12318,7 @@ function buildContinuousScanExtraction({ barcode, text = "" }) {
         fields: gs1.fields,
         aiFields: gs1.aiFields
       },
-      ocr: buildDeferredOcrResult(),
+      ocr: ocr || buildDeferredOcrResult(),
       productLink: productCodeLink ? {
         id: productCodeLink.id,
         productId: productCodeLink.productId,
@@ -11775,6 +12459,63 @@ function continuousScanExtractionToPosRow(extraction, ocr, reason) {
   };
 }
 
+function getPendingScanCaptureRule(capture = state.continuousScan.pendingCapture) {
+  const extraction = capture?.extraction;
+  const fields = extraction?.fields || {};
+  const product = extraction?.productByCode || null;
+  const link = extraction?.sources?.productLink || null;
+  const conversionFactor = Number(fields.factorConversion?.value || link?.conversionFactor || 0);
+  const packageQuantity = Number(fields.cantidadEmpaque?.value || link?.packageQuantity || 0);
+  return {
+    extraction,
+    product,
+    link,
+    conversionFactor: Number.isFinite(conversionFactor) && conversionFactor > 0 ? conversionFactor : 0,
+    packageQuantity: Number.isFinite(packageQuantity) && packageQuantity > 0 ? packageQuantity : 0,
+    packageType: fields.tipoEmpaque?.value || link?.packageType || "",
+    packageUnit: fields.unidadEmpaque?.value || link?.packageUnit || "",
+    baseUnit: fields.unidadBase?.value || link?.baseUnit || product?.unidad_default || "unidad"
+  };
+}
+
+function renderContinuousScanAcceptCard() {
+  if (!elements.scanAcceptCard) return;
+  const capture = state.continuousScan.pendingCapture;
+  if (!capture) {
+    elements.scanAcceptCard.hidden = true;
+    if (elements.acceptScanItemBtn) elements.acceptScanItemBtn.disabled = true;
+    return;
+  }
+
+  const { extraction, product, link, conversionFactor, packageQuantity, packageType, packageUnit, baseUnit } = getPendingScanCaptureRule(capture);
+  const fields = extraction?.fields || {};
+  const packageCount = readPositiveNumberInput(elements.scanPackageCountInput);
+  const total = packageCount && conversionFactor ? packageCount * conversionFactor : 0;
+  const canAccept = Boolean(product && link && conversionFactor && packageCount);
+  const code = fields.codigoBarra?.value || fields.gtin?.value || "-";
+  const lot = fields.lote?.value || "-";
+  const expiry = fields.fechaVencimiento?.value ? formatDisplayDate(fields.fechaVencimiento.value) : "-";
+
+  const rows = product && link
+    ? [
+      `<strong>${escapeHtml(product.nombre)}</strong>`,
+      `<span>Codigo ${escapeHtml(code)}</span>`,
+      `<span>${escapeHtml(packageType || "empaque")} contiene ${formatNumber(packageQuantity || conversionFactor)} ${escapeHtml(packageUnit || baseUnit)}</span>`,
+      `<span>Factor: ${formatNumber(conversionFactor)} ${escapeHtml(baseUnit)} por empaque</span>`,
+      `<span>Lote ${escapeHtml(lot)} - Vence ${escapeHtml(expiry)}</span>`,
+      packageCount ? `<b>Total pendiente: ${formatNumber(total)} ${escapeHtml(baseUnit)}</b>` : "<em>Ingresa cuantos empaques recibiste.</em>"
+    ]
+    : [
+      `<strong>Producto no vinculado</strong>`,
+      `<span>Codigo ${escapeHtml(code)}</span>`,
+      "<em>Este codigo debe aprenderse antes de ingresar automaticamente.</em>"
+    ];
+
+  elements.scanAcceptSummary.innerHTML = rows.join("");
+  elements.scanAcceptCard.hidden = false;
+  if (elements.acceptScanItemBtn) elements.acceptScanItemBtn.disabled = !canAccept;
+}
+
 function renderContinuousScanDetectedList() {
   const captures = state.continuousScan.captures;
   if (!elements.continuousScanDetectedList) return;
@@ -11807,7 +12548,18 @@ function renderContinuousScanDetectedList() {
       <span>${escapeHtml(label)} <b>${escapeHtml(field.value ? formatScanConfidence(field.confidence) : "sin dato")}</b></span>
     `).join("");
     const ocrText = fields.textoOcr.value || capture.ocr.notice || "OCR no disponible.";
-    const learnButton = capture.extraction.productLinked ? "" : `<button class="btn small" type="button" data-scan-learn-row="${escapeHtml(capture.scanId)}">Aprender producto</button>`;
+    const pending = state.continuousScan.pendingCapture?.scanId === capture.scanId;
+    const accepted = Boolean(capture.sessionItem);
+    const statusText = accepted
+      ? `Aceptado: ${formatNumber(capture.sessionItem.totalQuantity || 0)} ${capture.sessionItem.baseUnit || ""}`
+      : pending
+        ? "Pendiente de cantidad"
+        : capture.omitted
+          ? "Omitido"
+          : "Detectado";
+    const learnButton = capture.extraction.productLinked || !isAdmin()
+      ? ""
+      : `<button class="btn small" type="button" data-scan-learn-row="${escapeHtml(capture.scanId)}">Aprender producto</button>`;
     return `
       <article class="scan-detected-card">
         <header>
@@ -11815,10 +12567,10 @@ function renderContinuousScanDetectedList() {
             <strong>${index + 1}. ${escapeHtml(capture.row.nombre)}</strong>
             <small>${escapeHtml(capture.reasonLabel)} - ${escapeHtml(formatDateTime(capture.createdAt))}</small>
             <small>${escapeHtml(metaRows || "sin datos adicionales")}</small>
+            <small>${escapeHtml(statusText)}</small>
           </div>
           <div class="scan-card-actions">
             ${learnButton}
-            <button class="btn small" type="button" data-scan-edit-row="${escapeHtml(capture.scanId)}">Editar fila</button>
           </div>
         </header>
         <div class="scan-confidence-grid">${confidenceRows}</div>
@@ -11830,7 +12582,6 @@ function renderContinuousScanDetectedList() {
 
 async function captureContinuousScanFrame({ barcodes, metrics, reason }) {
   const scan = state.continuousScan;
-  const canvas = elements.continuousScanCanvas;
   const barcode = barcodes[0]
     ? {
       rawValue: barcodes[0].rawValue || "",
@@ -11839,10 +12590,13 @@ async function captureContinuousScanFrame({ barcodes, metrics, reason }) {
       confidence: barcodes[0].confidence || 1
     }
     : null;
-  const ocr = buildDeferredOcrResult(canvas);
-  const extraction = buildContinuousScanExtraction({ barcode, text: ocr.text });
+  const { extraction, ocr } = await buildContinuousScanExtractionWithOcr({
+    barcode,
+    video: elements.continuousScanVideo,
+    forceOcr: reason !== "codigo_barra",
+    onStatus: setContinuousScanStatus
+  });
   const row = continuousScanExtractionToPosRow(extraction, ocr, reason);
-  state.operatorSessionRows = [...state.operatorSessionRows, row];
   scan.lastCaptureAt = Date.now();
   scan.lastBarcode = normalizeScanCode(barcode?.rawValue || "");
   const barcodeKey = normalizeEquivalentScanCode(scan.lastBarcode);
@@ -11864,17 +12618,108 @@ async function captureContinuousScanFrame({ barcodes, metrics, reason }) {
   const capture = {
     scanId: row._scanId,
     createdAt: new Date().toISOString(),
+    reason,
     reasonLabel: reason === "codigo_barra" ? "Codigo de barra" : "Estabilidad visual",
     extraction,
     ocr,
     row
   };
+  scan.pendingCapture = capture;
   scan.captures = [capture, ...scan.captures].slice(0, 12);
-  renderPosSession("operator");
+  if (elements.scanPackageCountInput) elements.scanPackageCountInput.value = "";
   renderContinuousScanDetectedList();
+  renderContinuousScanAcceptCard();
   renderContinuousScanCapabilities();
   beepContinuousScan();
-  setContinuousScanStatus(`Captura agregada: ${row.nombre}. Sigue el siguiente producto.`);
+  const ocrNotice = ocr?.fields?.hasUsefulData ? " Datos de etiqueta precargados." : "";
+  setContinuousScanStatus(extraction.productLinked
+    ? `Producto reconocido: ${row.nombre}. Ingresa cantidad recibida.${ocrNotice}`
+    : `Codigo detectado sin producto aprendido.${ocrNotice} Omite o aprende este codigo desde modo admin.`);
+}
+
+async function acceptPendingContinuousScanItem() {
+  const capture = state.continuousScan.pendingCapture;
+  if (!capture) return;
+  const session = state.activeOperatorScanSession;
+  if (!session?.id) {
+    showToastError("No hay sesion de ingreso activa.");
+    return;
+  }
+  const { extraction, product, link, conversionFactor, packageQuantity, packageType, packageUnit, baseUnit } = getPendingScanCaptureRule(capture);
+  const packageCount = readPositiveNumberInput(elements.scanPackageCountInput);
+  if (!product || !link) {
+    showToastError("Producto no vinculado. Aprendelo antes de ingresar.");
+    return;
+  }
+  if (!conversionFactor) {
+    showToastError("Este codigo no tiene regla de conversion confirmada.");
+    return;
+  }
+  if (!packageCount) {
+    showToastError("Ingresa la cantidad recibida.");
+    return;
+  }
+
+  elements.acceptScanItemBtn.disabled = true;
+  elements.acceptScanItemBtn.textContent = "Guardando...";
+  try {
+    const fields = extraction.fields;
+    const totalQuantity = Number((packageCount * conversionFactor).toFixed(3));
+    const item = await scanSessionService.addItem(session.id, {
+      productId: product.id,
+      productCodeLinkId: link.id,
+      rawCode: fields.codigoBarra.value || fields.gtin.value || "",
+      normalizedCode: normalizeEquivalentScanCode(fields.gtin.value || fields.codigoBarra.value || ""),
+      productNameSnapshot: product.nombre,
+      packageType,
+      packageQuantity: packageQuantity || null,
+      packageUnit,
+      baseUnit,
+      conversionFactor,
+      packageCount,
+      totalQuantity,
+      lot: fields.lote.value || "",
+      expiryDate: fields.fechaVencimiento.value || "",
+      mfgDate: fields.fechaElaboracion.value || "",
+      confidence: Math.max(fields.codigoBarra.confidence || 0, fields.gtin.confidence || 0, fields.nombre.confidence || 0),
+      status: "pending",
+      notes: [
+        `Escaneo ${fields.codigoBarra.value || fields.gtin.value || ""}`.trim(),
+        fields.lote.value ? `Lote ${fields.lote.value}` : "",
+        fields.fechaVencimiento.value ? `Vence ${fields.fechaVencimiento.value}` : ""
+      ].filter(Boolean).join(" | "),
+      metadata: buildScanEvidenceSnapshot(extraction)
+    });
+    capture.sessionItem = item;
+    state.activeOperatorScanSession = {
+      ...session,
+      lastActivityAt: new Date().toISOString(),
+      items: [...(session.items || []), item]
+    };
+    state.continuousScan.pendingCapture = null;
+    if (elements.scanPackageCountInput) elements.scanPackageCountInput.value = "";
+    renderContinuousScanDetectedList();
+    renderContinuousScanAcceptCard();
+    renderContinuousScanCapabilities();
+    setContinuousScanStatus(`Item agregado a la sesion: ${product.nombre}. Sigue el siguiente producto.`);
+    showToastSuccess("Item agregado a sesion pendiente.");
+  } catch (error) {
+    showToastError(getSupabaseErrorMessage(error));
+  } finally {
+    elements.acceptScanItemBtn.textContent = "Aceptar item";
+    renderContinuousScanAcceptCard();
+  }
+}
+
+function skipPendingContinuousScanItem() {
+  const capture = state.continuousScan.pendingCapture;
+  if (!capture) return;
+  capture.omitted = true;
+  state.continuousScan.pendingCapture = null;
+  if (elements.scanPackageCountInput) elements.scanPackageCountInput.value = "";
+  renderContinuousScanDetectedList();
+  renderContinuousScanAcceptCard();
+  setContinuousScanStatus("Lectura omitida. Esperando el siguiente producto.");
 }
 
 function beepContinuousScan() {
@@ -12029,8 +12874,59 @@ function syncProductLearningAcceptState() {
   if (!elements.acceptProductLearningBtn) return;
   const hasExtraction = Boolean(state.productLearning.currentExtraction);
   const hasProduct = Boolean(state.productLearning.selectedProductId);
+  const codeValue = elements.productLearningCodeInput?.value.trim()
+    || state.productLearning.currentExtraction?.fields?.codigoBarra?.value
+    || state.productLearning.currentExtraction?.fields?.gtin?.value
+    || "";
   const packageRule = getProductLearningPackageRule();
-  elements.acceptProductLearningBtn.disabled = !(hasExtraction && hasProduct && packageRule.valid);
+  elements.acceptProductLearningBtn.disabled = !(hasExtraction && hasProduct && normalizeEquivalentScanCode(codeValue) && packageRule.valid);
+}
+
+function renderProductLearningImagePreview() {
+  if (!elements.productLearningImagePreview) return;
+  const imageDataUrl = state.productLearning.currentImageDataUrl;
+  elements.productLearningImagePreview.innerHTML = imageDataUrl
+    ? `<img src="${escapeHtml(imageDataUrl)}" alt="Captura de etiqueta">`
+    : '<div class="empty compact-empty">La captura de referencia aparecera al detectar la etiqueta.</div>';
+}
+
+function fillProductLearningEditableFields(extraction) {
+  const fields = extraction?.fields || {};
+  if (elements.productLearningCodeInput) {
+    elements.productLearningCodeInput.value = fields.codigoBarra?.value || fields.gtin?.value || "";
+  }
+  if (elements.productLearningLotInput) elements.productLearningLotInput.value = fields.lote?.value || "";
+  if (elements.productLearningExpiryInput) elements.productLearningExpiryInput.value = fields.fechaVencimiento?.value || "";
+  if (elements.productLearningMfgInput) elements.productLearningMfgInput.value = fields.fechaElaboracion?.value || "";
+  if (elements.productLearningDetectedQuantityInput) {
+    elements.productLearningDetectedQuantityInput.value = fields.cantidadPorCaja?.value || fields.cantidadDetectada?.value || "";
+  }
+  if (elements.productLearningNotesInput) elements.productLearningNotesInput.value = "";
+}
+
+function clearProductLearningEditableFields() {
+  [
+    elements.productLearningCodeInput,
+    elements.productLearningLotInput,
+    elements.productLearningExpiryInput,
+    elements.productLearningMfgInput,
+    elements.productLearningDetectedQuantityInput,
+    elements.productLearningNotesInput
+  ].forEach((input) => {
+    if (input) input.value = "";
+  });
+}
+
+function getProductLearningEditableFields() {
+  const quantity = readPositiveNumberInput(elements.productLearningDetectedQuantityInput);
+  return {
+    code: elements.productLearningCodeInput?.value.trim() || "",
+    lot: normalizeLotValue(elements.productLearningLotInput?.value || ""),
+    expiry: parseFlexibleLabelDate(elements.productLearningExpiryInput?.value || "", { mode: "expiry" }) || parseDateInput(elements.productLearningExpiryInput?.value || "") || "",
+    mfgDate: parseFlexibleLabelDate(elements.productLearningMfgInput?.value || "", { mode: "mfg" }) || parseDateInput(elements.productLearningMfgInput?.value || "") || "",
+    detectedQuantity: quantity || null,
+    notes: elements.productLearningNotesInput?.value.trim() || ""
+  };
 }
 
 function getProductLearningCodeKey(extraction) {
@@ -12053,6 +12949,7 @@ function renderProductLearningCapabilities() {
     ["Linterna", scan.torchSupported ? (scan.torchEnabled ? "activa" : "soportada") : "no disponible"],
     ["Barcode", scan.barcodeSupported ? "activo" : "no disponible"],
     ["ZXing", scan.zxingSupported ? "fallback activo" : "no disponible"],
+    ["OCR", detectContinuousOcrSupport() ? "adaptable" : "no disponible"],
     ["Codigo", extraction?.fields?.codigoBarra?.value || "-"],
     ["Vinculo", existingLink ? "aprendido" : (extraction ? "no vinculado" : "-")]
   ];
@@ -12188,12 +13085,15 @@ function resetProductLearningCurrent({ rememberCode = false } = {}) {
   }
   scan.currentExtraction = null;
   scan.currentOcr = null;
+  scan.currentImageDataUrl = "";
   scan.currentBarcodeKey = "";
   scan.candidateBarcodeKey = "";
   scan.candidateBarcodeTicks = 0;
   scan.selectedProductId = null;
   if (elements.productLearningSearch) elements.productLearningSearch.value = "";
+  clearProductLearningEditableFields();
   clearProductLearningPackageRule();
+  renderProductLearningImagePreview();
   renderProductLearningDetected();
   renderProductLearningResults();
   renderProductLearningCapabilities();
@@ -12211,6 +13111,7 @@ function resetProductLearningStateForSession() {
     processing: false,
     currentExtraction: null,
     currentOcr: null,
+    currentImageDataUrl: "",
     currentBarcodeKey: "",
     selectedProductId: null,
     lastCompletedCode: "",
@@ -12224,12 +13125,17 @@ function setProductLearningResult(extraction, ocr) {
   const scan = state.productLearning;
   scan.currentExtraction = extraction;
   scan.currentOcr = ocr;
+  if (!scan.currentImageDataUrl) {
+    scan.currentImageDataUrl = captureVideoFrameDataUrl(elements.productLearningVideo);
+  }
   scan.currentBarcodeKey = getProductLearningCodeKey(extraction);
   const existingLink = getExistingLearningLink(extraction);
   const linkedProduct = getProductFromCodeLink(existingLink);
   scan.selectedProductId = linkedProduct?.id || null;
   if (elements.productLearningSearch) elements.productLearningSearch.value = linkedProduct?.nombre || "";
+  fillProductLearningEditableFields(extraction);
   prepareProductLearningPackageRule({ preferExisting: true });
+  renderProductLearningImagePreview();
   renderProductLearningDetected();
   renderProductLearningResults();
   renderProductLearningCapabilities();
@@ -12352,7 +13258,10 @@ async function processProductLearningFrame() {
   if (!video?.videoWidth || !video?.videoHeight) return;
 
   let barcodes = await detectBarcodesWithBarcodeDetectorForScanner(video, scan);
-  if (!barcodes.length) barcodes = await detectBarcodesWithZxingForScanner(video, scan);
+  if (!hasGs1BarcodeCandidate(barcodes)) {
+    const zxingBarcodes = await detectBarcodesWithZxingForScanner(video, scan);
+    barcodes = rankBarcodeCandidates([...barcodes, ...zxingBarcodes]);
+  }
   const barcode = barcodes[0];
   if (!barcode?.rawValue) {
     scan.candidateBarcodeKey = "";
@@ -12372,8 +13281,11 @@ async function processProductLearningFrame() {
     return;
   }
 
-  const ocr = buildDeferredOcrResult();
-  const extraction = buildContinuousScanExtraction({ barcode, text: ocr.text });
+  const { extraction, ocr } = await buildContinuousScanExtractionWithOcr({
+    barcode,
+    video,
+    onStatus: setProductLearningStatus
+  });
   const extractionKey = getProductLearningCodeKey(extraction);
   if (!extractionKey) return;
   if (scan.lastCompletedCode === extractionKey && Date.now() - scan.lastCompletedAt < PRODUCT_LEARNING_REPEAT_GRACE_MS) {
@@ -12383,14 +13295,17 @@ async function processProductLearningFrame() {
 
   setProductLearningResult(extraction, ocr);
   beepContinuousScan();
-  setProductLearningStatus("Codigo detectado. Selecciona producto y acepta.");
+  setProductLearningStatus(ocr?.fields?.hasUsefulData
+    ? "Codigo detectado con datos de etiqueta. Revisa, selecciona producto y acepta."
+    : "Codigo detectado. Selecciona producto y acepta.");
 }
 
 function buildProductCodeLinkPayloadFromLearning(extraction, productId, packageRule) {
   const fields = extraction.fields;
   const barcode = extraction.sources?.barcode || {};
-  const codeRaw = barcode.rawValue || fields.codigoBarra.value || fields.gtin.value;
-  const codeNormalized = normalizeEquivalentScanCode(fields.gtin.value || fields.codigoBarra.value || codeRaw);
+  const editable = getProductLearningEditableFields();
+  const codeRaw = editable.code || barcode.rawValue || fields.codigoBarra.value || fields.gtin.value;
+  const codeNormalized = normalizeEquivalentScanCode(editable.code || fields.gtin.value || fields.codigoBarra.value || codeRaw);
   const confidence = Math.max(
     fields.codigoBarra.confidence || 0,
     fields.gtin.confidence || 0,
@@ -12398,25 +13313,39 @@ function buildProductCodeLinkPayloadFromLearning(extraction, productId, packageR
     fields.fechaVencimiento.confidence || 0,
     fields.cantidadPorCaja.confidence || 0
   );
-  const detectedQuantity = Number(fields.cantidadPorCaja.value || fields.cantidadDetectada.value || 0);
+  const detectedQuantity = editable.detectedQuantity ?? Number(fields.cantidadPorCaja.value || fields.cantidadDetectada.value || 0);
+  const conversionNotes = [
+    packageRule.conversionNotes,
+    editable.notes ? `Aprendizaje: ${editable.notes}` : ""
+  ].filter(Boolean).join(" | ");
   return {
     productId,
     codeRaw,
     codeNormalized,
     codeType: fields.tipoCodigo.value || extraction.codeKind || "simple",
-    gtin: fields.gtin.value || null,
+    gtin: normalizeGtin(editable.code) || fields.gtin.value || null,
     barcodeFormat: extraction.barcodeFormat || barcode.format || null,
-    gs1Payload: extraction.sources?.gs1 || {},
-    detectedLot: fields.lote.value || null,
-    detectedExpiry: fields.fechaVencimiento.value || null,
-    detectedMfgDate: fields.fechaElaboracion.value || null,
+    gs1Payload: {
+      ...(extraction.sources?.gs1 || {}),
+      manualEdits: {
+        lot: editable.lot || null,
+        expiry: editable.expiry || null,
+        mfgDate: editable.mfgDate || null,
+        detectedQuantity: editable.detectedQuantity || null
+      }
+    },
+    detectedLot: editable.lot || fields.lote.value || null,
+    detectedExpiry: editable.expiry || fields.fechaVencimiento.value || null,
+    detectedMfgDate: editable.mfgDate || fields.fechaElaboracion.value || null,
     detectedQuantity: detectedQuantity > 0 ? detectedQuantity : null,
     packageType: packageRule.packageType,
     packageQuantity: packageRule.packageQuantity,
     packageUnit: packageRule.packageUnit,
     baseUnit: packageRule.baseUnit,
     conversionFactor: packageRule.conversionFactor,
-    conversionNotes: packageRule.conversionNotes,
+    conversionNotes,
+    labelImageDataUrl: state.productLearning.currentImageDataUrl || "",
+    labelTextOcr: state.productLearning.currentOcr?.text || "",
     source: "camera_learning",
     confidence,
     createdBy: state.currentUser?.id || null,
@@ -12571,15 +13500,18 @@ async function fetchPendingEntries(scope = "operator") {
 
 async function loadOperatorPendingEntries() {
   state.pendingEntries = await fetchPendingEntries("operator");
+  state.operatorScanSessions = shouldUseLocalBackend() ? await scanSessionService.list("operator") : [];
   renderOperatorPendingEntries();
 }
 
 async function loadAdminPendingEntries() {
   state.pendingEntries = await fetchPendingEntries("admin");
+  state.operatorScanSessions = shouldUseLocalBackend() ? await scanSessionService.list("admin") : [];
 }
 
 function renderOperatorPendingEntries() {
-  if (!state.pendingEntries.length) {
+  const scanSessions = state.operatorScanSessions || [];
+  if (!state.pendingEntries.length && !scanSessions.length) {
     elements.operatorNotice.hidden = true;
     elements.operatorNotice.textContent = "";
     elements.operatorPendingList.innerHTML = '<div class="empty compact-empty">Aun no hay ingresos enviados.</div>';
@@ -12598,7 +13530,7 @@ function renderOperatorPendingEntries() {
     elements.operatorNotice.textContent = "";
   }
 
-  elements.operatorPendingList.innerHTML = state.pendingEntries
+  const manualHtml = state.pendingEntries
     .map((entry) => `
       <details class="operator-pending-card ${entry.estado}">
         <summary>
@@ -12624,6 +13556,32 @@ function renderOperatorPendingEntries() {
       </details>
     `)
     .join("");
+  const scanHtml = scanSessions
+    .map((session) => `
+      <details class="operator-pending-card ${escapeHtml(session.status)}">
+        <summary>
+          <div>
+            <strong>Escaneo: ${formatDateTime(session.submittedAt || session.createdAt)}</strong>
+            <span>${session.items.length} items - estado ${escapeHtml(session.status)}</span>
+            ${session.reviewedByEmail ? `<span>Revisado por: ${escapeHtml(session.reviewedByEmail)}</span>` : ""}
+            ${session.notes ? `<em>${escapeHtml(session.notes)}</em>` : ""}
+          </div>
+          <span class="pending-status ${escapeHtml(session.status)}">${escapeHtml(session.status)}</span>
+          <span class="btn small view-detail-chip">Ver detalle</span>
+        </summary>
+        <div class="operator-pending-detail">
+          ${session.items.map((item) => `
+            <article>
+              <strong>${escapeHtml(item.productNameSnapshot || "Producto escaneado")}</strong>
+              <span>${formatNumber(item.packageCount || 0)} ${escapeHtml(item.packageType || "empaque")} -> ${formatNumber(item.totalQuantity || 0)} ${escapeHtml(item.baseUnit || "")}</span>
+              <span>Lote: ${escapeHtml(item.lot || "-")} - vence ${item.expiryDate ? formatDisplayDate(item.expiryDate) : "pendiente"}</span>
+            </article>
+          `).join("")}
+        </div>
+      </details>
+    `)
+    .join("");
+  elements.operatorPendingList.innerHTML = [manualHtml, scanHtml].filter(Boolean).join("");
 }
 
 function renderAdminPendingEntries() {
@@ -12654,6 +13612,36 @@ function renderAdminPendingEntries() {
       </article>
     `)
     .join("");
+}
+
+function renderAdminScanSessions() {
+  if (!elements.scanSessionsAdminPanel) return;
+  const sessions = (state.operatorScanSessions || [])
+    .filter((session) => ["submitted", "approved", "rejected"].includes(session.status));
+  const pending = sessions.filter((session) => session.status === "submitted");
+  elements.scanSessionsAdminPanel.hidden = !sessions.length;
+  elements.scanSessionsCount.textContent = `${pending.length} pendientes`;
+  if (pending.length) {
+    elements.scanSessionsNotice.textContent = `Tienes ${pending.length} sesiones de escaneo por revisar.`;
+    elements.scanSessionsNotice.hidden = false;
+  } else {
+    elements.scanSessionsNotice.hidden = true;
+    elements.scanSessionsNotice.textContent = "";
+  }
+  if (!sessions.length) {
+    elements.scanSessionsList.innerHTML = '<div class="empty compact-empty">No hay sesiones de escaneo pendientes.</div>';
+    return;
+  }
+  elements.scanSessionsList.innerHTML = sessions.map((session) => `
+    <article class="pending-item">
+      <div>
+        <strong>${escapeHtml(session.operatorName || session.operatorEmail || "Operador")}</strong>
+        <span>${formatDateTime(session.submittedAt || session.createdAt)} - ${session.items.length} items</span>
+      </div>
+      <span class="pending-status ${escapeHtml(session.status)}">${escapeHtml(session.status)}</span>
+      <button class="btn small" type="button" data-review-scan-session="${escapeHtml(session.id)}">Ver / Revisar</button>
+    </article>
+  `).join("");
 }
 
 function openPendingReview(id) {
@@ -12717,6 +13705,165 @@ async function rejectCurrentPending() {
     rechazado_por_email: state.currentUser.email,
     rechazado_at: new Date().toISOString(),
     motivo_rechazo: reason
+  });
+}
+
+function renderScanSessionReviewItems(session) {
+  elements.scanSessionReviewItems.innerHTML = session.items.map((item, index) => {
+    const image = item.imagePath ? `<img class="scan-session-item-image" src="${escapeHtml(item.imagePath)}" alt="Etiqueta escaneada">` : "";
+    return `
+      <article class="scan-session-review-item" data-scan-session-item="${escapeHtml(item.id)}">
+        <header>
+          <div>
+            <strong>${index + 1}. ${escapeHtml(item.productNameSnapshot || "Producto escaneado")}</strong>
+            <small>${escapeHtml(item.rawCode || item.normalizedCode || "sin codigo")} - ${escapeHtml(item.packageType || "empaque")}</small>
+          </div>
+          <select data-scan-review-field="status">
+            <option value="pending" ${item.status === "pending" ? "selected" : ""}>Pendiente</option>
+            <option value="approved" ${item.status === "approved" ? "selected" : ""}>Aprobar item</option>
+            <option value="rejected" ${item.status === "rejected" ? "selected" : ""}>Rechazar item</option>
+            <option value="needs_review" ${item.status === "needs_review" ? "selected" : ""}>Revisar despues</option>
+          </select>
+        </header>
+        ${image}
+        <div class="scan-session-review-grid">
+          <label><span>Producto</span><input data-scan-review-field="productNameSnapshot" value="${escapeHtml(item.productNameSnapshot || "")}"></label>
+          <label><span>Empaques</span><input data-scan-review-field="packageCount" type="number" min="0" step="0.001" value="${escapeHtml(item.packageCount ?? "")}"></label>
+          <label><span>Total</span><input data-scan-review-field="totalQuantity" type="number" min="0" step="0.001" value="${escapeHtml(item.totalQuantity ?? "")}"></label>
+          <label><span>Unidad</span><input data-scan-review-field="baseUnit" value="${escapeHtml(item.baseUnit || "unidad")}"></label>
+          <label><span>Lote</span><input data-scan-review-field="lot" value="${escapeHtml(item.lot || "")}"></label>
+          <label><span>Vencimiento</span><input data-scan-review-field="expiryDate" type="date" value="${escapeHtml(item.expiryDate || "")}"></label>
+          <label><span>Elaboracion</span><input data-scan-review-field="mfgDate" type="date" value="${escapeHtml(item.mfgDate || "")}"></label>
+          <label><span>Observaciones</span><input data-scan-review-field="notes" value="${escapeHtml(item.notes || "")}"></label>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+async function openScanSessionReview(id) {
+  const session = await scanSessionService.get(id);
+  if (!session) return;
+  state.currentScanReview = session;
+  elements.scanSessionReviewTitle.textContent = "Ingreso por escaneo";
+  elements.scanSessionReviewMeta.textContent = `${session.operatorName || session.operatorEmail || "Operador"} - ${formatDateTime(session.submittedAt || session.createdAt)} - ${session.items.length} items`;
+  elements.scanSessionReviewErrorList.hidden = true;
+  elements.scanSessionReviewErrorList.innerHTML = "";
+  elements.scanSessionReviewNotes.value = session.notes || "";
+  renderScanSessionReviewItems(session);
+  elements.scanSessionReviewModal.hidden = false;
+}
+
+function closeScanSessionReviewModal() {
+  elements.scanSessionReviewModal.hidden = true;
+  state.currentScanReview = null;
+}
+
+function readScanSessionReviewRows() {
+  return [...elements.scanSessionReviewItems.querySelectorAll("[data-scan-session-item]")].map((card) => {
+    const id = card.dataset.scanSessionItem;
+    const original = state.currentScanReview?.items.find((item) => String(item.id) === String(id));
+    const read = (field) => card.querySelector(`[data-scan-review-field="${field}"]`)?.value || "";
+    const packageCount = Number(String(read("packageCount")).replace(",", "."));
+    const totalQuantity = Number(String(read("totalQuantity")).replace(",", "."));
+    return {
+      id,
+      original,
+      productNameSnapshot: read("productNameSnapshot").trim(),
+      packageCount: Number.isFinite(packageCount) ? packageCount : 0,
+      totalQuantity: Number.isFinite(totalQuantity) ? totalQuantity : 0,
+      baseUnit: read("baseUnit").trim() || original?.baseUnit || "unidad",
+      lot: normalizeLotValue(read("lot")),
+      expiryDate: parseDateInput(read("expiryDate")) || "",
+      mfgDate: parseDateInput(read("mfgDate")) || "",
+      status: read("status") || "pending",
+      notes: read("notes").trim()
+    };
+  });
+}
+
+function validateScanSessionReviewRows(rows) {
+  const errors = [];
+  rows.forEach((row, index) => {
+    if (row.status === "rejected") return;
+    if (!row.original?.productId) errors.push(`Fila ${index + 1}: producto sin vinculo.`);
+    if (!row.productNameSnapshot) errors.push(`Fila ${index + 1}: falta nombre de producto.`);
+    if (!row.totalQuantity || row.totalQuantity <= 0) errors.push(`Fila ${index + 1}: total invalido.`);
+    if (!UNIT_OPTIONS.includes(row.baseUnit)) errors.push(`Fila ${index + 1}: unidad invalida.`);
+    if (row.expiryDate && !isValidIsoDate(row.expiryDate)) errors.push(`Fila ${index + 1}: vencimiento invalido.`);
+  });
+  elements.scanSessionReviewErrorList.hidden = !errors.length;
+  elements.scanSessionReviewErrorList.innerHTML = errors.map((error) => `<div>${escapeHtml(error)}</div>`).join("");
+  return errors;
+}
+
+async function persistScanSessionReviewRows(rows) {
+  for (const row of rows) {
+    await scanSessionService.updateItem(row.id, {
+      product_name_snapshot: row.productNameSnapshot,
+      package_count: row.packageCount || null,
+      total_quantity: row.totalQuantity || null,
+      base_unit: row.baseUnit,
+      lot: row.lot || null,
+      expiry_date: row.expiryDate || null,
+      mfg_date: row.mfgDate || null,
+      status: row.status,
+      notes: row.notes || null
+    });
+  }
+}
+
+async function approveCurrentScanSession() {
+  requireAdminAction();
+  if (!state.currentScanReview) throw new Error("No hay sesion seleccionada.");
+  const rows = readScanSessionReviewRows();
+  const errors = validateScanSessionReviewRows(rows);
+  if (errors.length) throw new Error("Corrige las filas antes de aprobar.");
+  const approvable = rows.filter((row) => row.status !== "rejected" && row.status !== "needs_review");
+  if (!approvable.length) throw new Error("No hay items aprobables.");
+  await persistScanSessionReviewRows(rows.map((row) => ({
+    ...row,
+    status: row.status === "pending" ? "approved" : row.status
+  })));
+  for (const row of approvable) {
+    await createEntry({
+      productoId: row.original.productId,
+      nombre: row.productNameSnapshot,
+      cantidad: row.totalQuantity,
+      unidad: row.baseUnit,
+      fechaRecepcion: formatIsoDate(new Date()),
+      fechaVencimiento: row.expiryDate || null,
+      lote: row.lot || null,
+      critico: false,
+      observaciones: [
+        row.notes,
+        `Aprobado desde ingreso por escaneo ${state.currentScanReview.id}`,
+        row.original.rawCode ? `Codigo: ${row.original.rawCode}` : ""
+      ].filter(Boolean).join(" | ")
+    });
+  }
+  await scanSessionService.updateSession(state.currentScanReview.id, {
+    status: "approved",
+    reviewed_by: state.currentUser.id,
+    reviewed_by_email: state.currentUser.email,
+    reviewed_at: new Date().toISOString(),
+    notes: elements.scanSessionReviewNotes.value.trim() || null
+  });
+}
+
+async function rejectCurrentScanSession() {
+  requireAdminAction();
+  if (!state.currentScanReview) throw new Error("No hay sesion seleccionada.");
+  const reason = elements.scanSessionReviewNotes.value.trim();
+  if (!reason) throw new Error("Indica motivo de rechazo.");
+  const rows = readScanSessionReviewRows();
+  await persistScanSessionReviewRows(rows.map((row) => ({ ...row, status: "rejected" })));
+  await scanSessionService.updateSession(state.currentScanReview.id, {
+    status: "rejected",
+    reviewed_by: state.currentUser.id,
+    reviewed_by_email: state.currentUser.email,
+    reviewed_at: new Date().toISOString(),
+    notes: reason
   });
 }
 
@@ -13132,6 +14279,9 @@ elements.continuousScanModal.addEventListener("click", (event) => {
 });
 elements.pauseContinuousScanBtn.addEventListener("click", toggleContinuousScanPause);
 elements.finishContinuousScanBtn.addEventListener("click", finishContinuousScan);
+elements.scanPackageCountInput?.addEventListener("input", renderContinuousScanAcceptCard);
+elements.acceptScanItemBtn?.addEventListener("click", acceptPendingContinuousScanItem);
+elements.skipScanItemBtn?.addEventListener("click", skipPendingContinuousScanItem);
 elements.continuousScanDetectedList.addEventListener("click", (event) => {
   const learnButton = event.target.closest("[data-scan-learn-row]");
   if (learnButton) {
@@ -13162,7 +14312,13 @@ elements.productLearningResults.addEventListener("click", (event) => {
   elements.productLearningPackageUnit,
   elements.productLearningBaseUnit,
   elements.productLearningConversionFactor,
-  elements.productLearningConversionNotes
+  elements.productLearningConversionNotes,
+  elements.productLearningCodeInput,
+  elements.productLearningLotInput,
+  elements.productLearningExpiryInput,
+  elements.productLearningMfgInput,
+  elements.productLearningDetectedQuantityInput,
+  elements.productLearningNotesInput
 ].forEach((input) => {
   input?.addEventListener("input", syncProductLearningAcceptState);
   input?.addEventListener("change", syncProductLearningAcceptState);
@@ -13263,6 +14419,66 @@ elements.rejectPendingBtn.addEventListener("click", async () => {
   } finally {
     elements.rejectPendingBtn.disabled = false;
     elements.rejectPendingBtn.textContent = "Rechazar";
+  }
+});
+
+elements.reviewScanSessionsBtn?.addEventListener("click", async () => {
+  try {
+    await loadAdminPendingEntries();
+    renderAdminScanSessions();
+    elements.scanSessionsAdminPanel.hidden = false;
+    elements.scanSessionsAdminPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    showError("No se pudieron cargar sesiones de escaneo", error);
+  }
+});
+elements.scanSessionsList?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-review-scan-session]");
+  if (!button) return;
+  try {
+    await openScanSessionReview(button.dataset.reviewScanSession);
+  } catch (error) {
+    showError("No se pudo abrir la sesion de escaneo", error);
+  }
+});
+document.getElementById("closeScanSessionReviewModal")?.addEventListener("click", closeScanSessionReviewModal);
+document.getElementById("cancelScanSessionReview")?.addEventListener("click", closeScanSessionReviewModal);
+elements.scanSessionReviewModal?.addEventListener("click", (event) => {
+  if (event.target === elements.scanSessionReviewModal) closeScanSessionReviewModal();
+});
+elements.approveScanSessionBtn?.addEventListener("click", async () => {
+  elements.approveScanSessionBtn.disabled = true;
+  elements.approveScanSessionBtn.textContent = "Aprobando...";
+  try {
+    await approveCurrentScanSession();
+    closeScanSessionReviewModal();
+    await refreshInventory();
+    await loadAdminPendingEntries();
+    renderAdminPendingEntries();
+    renderAdminScanSessions();
+    showToastSuccess("Sesion de escaneo aprobada.");
+  } catch (error) {
+    showError("No se pudo aprobar sesion de escaneo", error);
+  } finally {
+    elements.approveScanSessionBtn.disabled = false;
+    elements.approveScanSessionBtn.textContent = "Aprobar sesion";
+  }
+});
+elements.rejectScanSessionBtn?.addEventListener("click", async () => {
+  elements.rejectScanSessionBtn.disabled = true;
+  elements.rejectScanSessionBtn.textContent = "Rechazando...";
+  try {
+    await rejectCurrentScanSession();
+    closeScanSessionReviewModal();
+    await loadAdminPendingEntries();
+    renderAdminPendingEntries();
+    renderAdminScanSessions();
+    showToastSuccess("Sesion de escaneo rechazada.");
+  } catch (error) {
+    showError("No se pudo rechazar sesion de escaneo", error);
+  } finally {
+    elements.rejectScanSessionBtn.disabled = false;
+    elements.rejectScanSessionBtn.textContent = "Rechazar sesion";
   }
 });
 

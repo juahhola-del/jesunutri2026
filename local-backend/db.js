@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { DatabaseSync } = require("node:sqlite");
-const { BACKUP_DIR, DATA_DIR, DB_PATH, LOCAL_ADMIN } = require("./config");
+const { BACKUP_DIR, DATA_DIR, DB_PATH, LABEL_IMAGES_DIR, LOCAL_ADMIN } = require("./config");
 
 const MIGRATIONS_DIR = path.join(__dirname, "migrations");
 const IMPORT_TABLES = [
@@ -27,7 +27,10 @@ const IMPORT_TABLES = [
   "clinical_daily_import_errors",
   "clinical_product_links",
   "clinical_demand_product_links",
-  "product_code_links"
+  "product_code_links",
+  "product_label_images",
+  "operator_scan_sessions",
+  "operator_scan_session_items"
 ];
 const BOOLEAN_COLUMNS = new Set([
   "activo",
@@ -42,7 +45,8 @@ const JSON_COLUMNS = new Set([
   "validations",
   "comparison",
   "snapshot_data",
-  "gs1_payload_json"
+  "gs1_payload_json",
+  "metadata_json"
 ]);
 const IMPORT_CONFLICT_KEYS = {
   usuarios_app: [["email"]],
@@ -68,6 +72,7 @@ function assertAllowedTable(table, write = false) {
 function ensureDirs() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  fs.mkdirSync(LABEL_IMAGES_DIR, { recursive: true });
 }
 
 function openDatabase() {
@@ -284,6 +289,8 @@ function getStatusFromDatabase(db) {
       tareas: safeCount(db, "daily_tasks"),
       ingresosPendientes: safeCount(db, "ingresos_pendientes"),
       productCodeLinks: safeCount(db, "product_code_links"),
+      productLabelImages: safeCount(db, "product_label_images"),
+      operatorScanSessions: safeCount(db, "operator_scan_sessions"),
       pacYears: safeCount(db, "clinical_pac_years"),
       demandasDiarias: safeCount(db, "clinical_daily_demands")
     }
@@ -637,6 +644,55 @@ function normalizeProductLinkCode(value) {
   return String(value || "").replace(/\s+/g, "").trim().toUpperCase();
 }
 
+function parseDataUrlImage(imageDataUrl) {
+  const match = String(imageDataUrl || "").match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/);
+  if (!match) return null;
+  const mimeType = match[1] === "image/jpg" ? "image/jpeg" : match[1];
+  const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+  const bytes = Buffer.from(match[2], "base64");
+  if (!bytes.length) return null;
+  return { mimeType, extension, bytes };
+}
+
+function saveProductLabelImage(db, {
+  productCodeLinkId,
+  productId,
+  imageDataUrl,
+  createdBy,
+  notes,
+  ocrText,
+  metadata
+} = {}) {
+  const parsed = parseDataUrlImage(imageDataUrl);
+  if (!parsed) return null;
+  fs.mkdirSync(LABEL_IMAGES_DIR, { recursive: true });
+  const id = randomId();
+  const hash = crypto.createHash("sha256").update(parsed.bytes).digest("hex");
+  const fileName = `${id}.${parsed.extension}`;
+  const absolutePath = path.join(LABEL_IMAGES_DIR, fileName);
+  fs.writeFileSync(absolutePath, parsed.bytes);
+  const imagePath = `/label-images/${fileName}`;
+  const capturedAt = now();
+  db.prepare(`
+    insert into product_label_images (
+      id, product_code_link_id, product_id, image_path, image_hash,
+      captured_at, created_by, notes, ocr_text, metadata_json
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    productCodeLinkId || null,
+    productId || null,
+    imagePath,
+    hash,
+    capturedAt,
+    createdBy || null,
+    notes || null,
+    ocrText || null,
+    normalizeImportValue("metadata_json", metadata || {})
+  );
+  return { id, image_path: imagePath, image_hash: hash, captured_at: capturedAt };
+}
+
 function mapProductCodeLink(row) {
   const parsed = deserializeRow(row);
   if (!parsed) return null;
@@ -710,10 +766,14 @@ function upsertProductCodeLink(payload = {}, userId = null) {
       base_unit: payload.base_unit || payload.baseUnit || null,
       conversion_factor: payload.conversion_factor ?? payload.conversionFactor ?? null,
       conversion_notes: payload.conversion_notes || payload.conversionNotes || null,
+      label_image_path: payload.label_image_path || payload.labelImagePath || null,
+      label_image_id: payload.label_image_id || payload.labelImageId || null,
+      label_text_ocr: payload.label_text_ocr || payload.labelTextOcr || null,
       source: payload.source || "camera_learning",
       confidence: Number(payload.confidence || 0),
       created_by: payload.created_by || payload.createdBy || userId || null
     };
+    const labelImageDataUrl = payload.label_image_data_url || payload.labelImageDataUrl || "";
 
     db.exec("BEGIN;");
     try {
@@ -740,6 +800,9 @@ function upsertProductCodeLink(payload = {}, userId = null) {
             base_unit = ?,
             conversion_factor = ?,
             conversion_notes = ?,
+            label_image_path = coalesce(?, label_image_path),
+            label_image_id = coalesce(?, label_image_id),
+            label_text_ocr = coalesce(?, label_text_ocr),
             source = ?,
             confidence = ?,
             created_by = coalesce(?, created_by),
@@ -764,6 +827,9 @@ function upsertProductCodeLink(payload = {}, userId = null) {
           normalizedPayload.base_unit,
           normalizedPayload.conversion_factor,
           normalizedPayload.conversion_notes,
+          normalizedPayload.label_image_path,
+          normalizedPayload.label_image_id,
+          normalizedPayload.label_text_ocr,
           normalizedPayload.source,
           normalizedPayload.confidence,
           normalizedPayload.created_by,
@@ -792,6 +858,9 @@ function upsertProductCodeLink(payload = {}, userId = null) {
             base_unit,
             conversion_factor,
             conversion_notes,
+            label_image_path,
+            label_image_id,
+            label_text_ocr,
             source,
             confidence,
             created_by,
@@ -800,7 +869,7 @@ function upsertProductCodeLink(payload = {}, userId = null) {
             last_seen_at,
             scan_count,
             is_active
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
         `).run(
           id,
           normalizedPayload.product_id,
@@ -820,6 +889,9 @@ function upsertProductCodeLink(payload = {}, userId = null) {
           normalizedPayload.base_unit,
           normalizedPayload.conversion_factor,
           normalizedPayload.conversion_notes,
+          normalizedPayload.label_image_path,
+          normalizedPayload.label_image_id,
+          normalizedPayload.label_text_ocr,
           normalizedPayload.source,
           normalizedPayload.confidence,
           normalizedPayload.created_by,
@@ -827,6 +899,26 @@ function upsertProductCodeLink(payload = {}, userId = null) {
           currentTime,
           currentTime
         );
+      }
+      if (labelImageDataUrl) {
+        const image = saveProductLabelImage(db, {
+          productCodeLinkId: id,
+          productId,
+          imageDataUrl: labelImageDataUrl,
+          createdBy: normalizedPayload.created_by,
+          notes: normalizedPayload.conversion_notes,
+          ocrText: normalizedPayload.label_text_ocr,
+          metadata: {
+            codeRaw: normalizedPayload.code_raw,
+            codeNormalized: normalizedPayload.code_normalized,
+            barcodeFormat: normalizedPayload.barcode_format,
+            codeType: normalizedPayload.code_type
+          }
+        });
+        if (image) {
+          db.prepare("update product_code_links set label_image_id = ?, label_image_path = ? where id = ?")
+            .run(image.id, image.image_path, id);
+        }
       }
       const saved = db.prepare("select * from product_code_links where id = ?").get(id);
       db.exec("COMMIT;");
@@ -841,6 +933,18 @@ function upsertProductCodeLink(payload = {}, userId = null) {
 }
 
 function findOrCreateProduct(db, payload = {}) {
+  const requestedProductId = payload.productoId || payload.producto_id || payload.productId || payload.product_id;
+  if (requestedProductId) {
+    const productById = db.prepare(`
+      select id, nombre, nombre_normalizado, unidad_default, stock_minimo, critico,
+             consumo_promedio_diario, favorito, activo
+      from productos_insumos
+      where id = ? and deleted_at is null
+      limit 1
+    `).get(requestedProductId);
+    if (productById) return productById;
+  }
+
   const normalizedName = payload.nombreNormalizado || payload.nombre_normalizado || normalizeName(payload.nombre);
   if (!payload.nombre || !normalizedName) throw new Error("El nombre del producto es obligatorio.");
 
