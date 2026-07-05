@@ -48,6 +48,7 @@ const LOCAL_QUERY_TABLES = new Set([
   "clinical_daily_import_errors",
   "clinical_product_links",
   "clinical_demand_product_links",
+  "product_code_links",
   "inventario_lotes_disponibles",
   "alertas_stock_minimo",
   "historial_movimientos_inventario"
@@ -237,6 +238,18 @@ const supabaseClient = createHybridSupabaseClient(remoteSupabaseClient);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BULK_COLUMNS = ["nombre", "cantidad", "unidad", "fecha_vencimiento", "lote", "critico", "observaciones"];
 const UNIT_OPTIONS = ["kg", "g", "lt", "ml", "unidad", "caja", "paquete"];
+const CONTINUOUS_SCAN_INTERVAL_MS = 420;
+const CONTINUOUS_SCAN_COOLDOWN_MS = 4500;
+const CONTINUOUS_SCAN_DUPLICATE_MS = 90000;
+const CONTINUOUS_SCAN_BARCODE_CLEAR_TICKS = 5;
+const CONTINUOUS_SCAN_BARCODE_GRACE_MS = 5000;
+const CONTINUOUS_SCAN_ZXING_INTERVAL_MS = 700;
+const CONTINUOUS_SCAN_BARCODE_STABLE_TICKS = 2;
+const CONTINUOUS_SCAN_STABLE_TICKS = 4;
+const CONTINUOUS_SCAN_MIN_SHARPNESS = 8;
+const PRODUCT_LEARNING_SCAN_INTERVAL_MS = 380;
+const PRODUCT_LEARNING_BARCODE_STABLE_TICKS = 2;
+const PRODUCT_LEARNING_REPEAT_GRACE_MS = 2200;
 const MONTHS = [
   { label: "Enero", className: "month-1", color: "#0066FF" },
   { label: "Febrero", className: "month-2", color: "#00D9FF" },
@@ -432,6 +445,7 @@ const state = {
   inventory: [],
   products: [],
   productCodes: {},
+  productCodeLinks: [],
   printedLabels: {},
   labelDraft: {},
   labelsView: "pending",
@@ -443,6 +457,57 @@ const state = {
   bulkEditingIndex: null,
   operatorSessionRows: [],
   operatorEditingIndex: null,
+  continuousScan: {
+    stream: null,
+    track: null,
+    running: false,
+    paused: false,
+    processing: false,
+    loopTimer: null,
+    barcodeDetector: null,
+    barcodeSupported: false,
+    zxingReader: null,
+    zxingSupported: false,
+    lastZxingAttemptAt: 0,
+    torchSupported: false,
+    torchEnabled: false,
+    ocrSupported: false,
+    lastFrameMetrics: null,
+    stableTicks: 0,
+    lastCaptureAt: 0,
+    lastBarcode: "",
+    lastBarcodeSeenAt: 0,
+    barcodeLockValue: "",
+    barcodeClearTicks: 0,
+    candidateBarcodeKey: "",
+    candidateBarcodeTicks: 0,
+    recentBarcodeCaptures: {},
+    lastSignature: "",
+    lastScanSummary: null,
+    captures: []
+  },
+  productLearning: {
+    stream: null,
+    track: null,
+    running: false,
+    processing: false,
+    loopTimer: null,
+    barcodeDetector: null,
+    barcodeSupported: false,
+    zxingReader: null,
+    zxingSupported: false,
+    lastZxingAttemptAt: 0,
+    torchSupported: false,
+    torchEnabled: false,
+    currentExtraction: null,
+    currentOcr: null,
+    currentBarcodeKey: "",
+    candidateBarcodeKey: "",
+    candidateBarcodeTicks: 0,
+    selectedProductId: null,
+    lastCompletedCode: "",
+    lastCompletedAt: 0
+  },
   lowStockProducts: [],
   deferredInstallPrompt: null,
   currentUser: null,
@@ -534,6 +599,36 @@ const elements = {
   operatorProductsList: document.getElementById("operatorProductsList"),
   operatorPendingList: document.getElementById("operatorPendingList"),
   sendPendingBtn: document.getElementById("sendPendingBtn"),
+  startContinuousScanBtn: document.getElementById("startContinuousScanBtn"),
+  learnProductsBtn: document.getElementById("learnProductsBtn"),
+  continuousScanModal: document.getElementById("continuousScanModal"),
+  continuousScanVideo: document.getElementById("continuousScanVideo"),
+  continuousScanCanvas: document.getElementById("continuousScanCanvas"),
+  continuousScanStatus: document.getElementById("continuousScanStatus"),
+  scanCapabilitiesStatus: document.getElementById("scanCapabilitiesStatus"),
+  continuousScanDetectedList: document.getElementById("continuousScanDetectedList"),
+  pauseContinuousScanBtn: document.getElementById("pauseContinuousScanBtn"),
+  finishContinuousScanBtn: document.getElementById("finishContinuousScanBtn"),
+  productLearningModal: document.getElementById("productLearningModal"),
+  productLearningVideo: document.getElementById("productLearningVideo"),
+  productLearningCanvas: document.getElementById("productLearningCanvas"),
+  productLearningStatus: document.getElementById("productLearningStatus"),
+  productLearningCapabilities: document.getElementById("productLearningCapabilities"),
+  productLearningDetected: document.getElementById("productLearningDetected"),
+  productLearningCurrentLink: document.getElementById("productLearningCurrentLink"),
+  productLearningSearch: document.getElementById("productLearningSearch"),
+  productLearningResults: document.getElementById("productLearningResults"),
+  productLearningPackageRule: document.getElementById("productLearningPackageRule"),
+  productLearningPackageType: document.getElementById("productLearningPackageType"),
+  productLearningPackageQuantity: document.getElementById("productLearningPackageQuantity"),
+  productLearningPackageUnit: document.getElementById("productLearningPackageUnit"),
+  productLearningBaseUnit: document.getElementById("productLearningBaseUnit"),
+  productLearningConversionFactor: document.getElementById("productLearningConversionFactor"),
+  productLearningConversionNotes: document.getElementById("productLearningConversionNotes"),
+  productLearningPackageHint: document.getElementById("productLearningPackageHint"),
+  productLearningSkipBtn: document.getElementById("productLearningSkipBtn"),
+  finishProductLearningBtn: document.getElementById("finishProductLearningBtn"),
+  acceptProductLearningBtn: document.getElementById("acceptProductLearningBtn"),
   pendingAdminPanel: document.getElementById("pendingAdminPanel"),
   adminPendingList: document.getElementById("adminPendingList"),
   pendingCount: document.getElementById("pendingCount"),
@@ -1616,6 +1711,18 @@ const dataProvider = {
     });
   },
 
+  async listLocalProductCodeLinks() {
+    return this.localRequest("/api/product-code-links", { timeoutMs: 7000 });
+  },
+
+  async upsertLocalProductCodeLink(link) {
+    return this.localRequest("/api/product-code-links", {
+      method: "POST",
+      body: { link, userId: state.currentUser?.id || null },
+      timeoutMs: 10000
+    });
+  },
+
   async createLocalEntry(payload) {
     return this.localRequest("/api/inventory/entries", {
       method: "POST",
@@ -1765,7 +1872,11 @@ async function startAuthenticatedApp(session) {
   showOperatorApp();
   setupOperatorEntryTable();
   try {
-    await withTimeout(loadProductsFromSupabase(), 12000, "No se pudo cargar catalogo de productos.");
+    if (shouldUseLocalBackend()) {
+      await withTimeout(loadInventoryFromLocal(), 12000, "No se pudo cargar catalogo local de productos.");
+    } else {
+      await withTimeout(loadProductsFromSupabase(), 12000, "No se pudo cargar catalogo de productos.");
+    }
     await withTimeout(loadOperatorPendingEntries(), 12000, "No se pudieron cargar tus ingresos enviados.");
   } catch (error) {
     elements.operatorBulkErrorList.hidden = false;
@@ -1880,6 +1991,9 @@ function updateProductCodesFromClinicalRows(rows = state.clinicalSupply.pacRows)
   state.clinicalSupply.productLinks
     .filter((link) => normalizeClinicalSourceType(link.sourceType || "pac") === "pac" && !link.ignored)
     .forEach((link) => setProductCode(link.productoId, link.sourceCode || link.pacCodigo));
+  state.productCodeLinks
+    .filter((link) => link.isActive !== false)
+    .forEach((link) => setProductCode(link.productId, link.gtin || link.codeNormalized || link.codeRaw));
   state.products = state.products.map((product) => ({
     ...product,
     codigoProducto: getProductCode(product.id)
@@ -1894,6 +2008,18 @@ function renderProductLabel(name, productId, fallbackCode = "") {
   const code = getProductCode(productId) || String(fallbackCode || "").trim();
   const suffix = code ? ` <span class="product-code">${escapeHtml(code)}</span>` : "";
   return `<strong>${escapeHtml(name || "Producto")}${suffix}</strong>`;
+}
+
+async function loadProductCodeLinks({ silent = true } = {}) {
+  try {
+    state.productCodeLinks = await productCodeLinkService.list();
+    updateProductCodesFromClinicalRows();
+  } catch (error) {
+    state.productCodeLinks = [];
+    updateProductCodesFromClinicalRows();
+    if (!silent) showToastError("No se pudieron cargar codigos aprendidos.");
+    console.warn("No se pudieron cargar codigos aprendidos", error);
+  }
 }
 
 function mapSupabaseLot(row) {
@@ -1944,6 +2070,7 @@ async function loadProductsFromSupabase() {
     favorito: Boolean(product.favorito),
     nombre_normalizado: product.nombre_normalizado || normalize(product.nombre)
   }));
+  await loadProductCodeLinks();
   renderProductSuggestions();
 }
 
@@ -2002,6 +2129,7 @@ async function loadInventoryFromLocal() {
     activo: product.activo !== false && product.activo !== 0,
     nombre_normalizado: product.nombre_normalizado || normalize(product.nombre)
   }));
+  await loadProductCodeLinks();
   state.inventory = (snapshot.inventory || []).map(mapSupabaseLot);
   state.lowStockProducts = snapshot.lowStock || [];
   state.movements = (snapshot.movements || []).map(mapMovementRow);
@@ -2054,6 +2182,94 @@ const inventoryService = {
   async updateProduct(productId, fields) {
     if (shouldUseLocalBackend()) return dataProvider.updateLocalProduct(productId, fields);
     return null;
+  }
+};
+
+function safeParseJson(value, fallback = null) {
+  if (value == null || value === "") return fallback;
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function mapProductCodeLinkFromDb(row = {}) {
+  const gs1Payload = safeParseJson(row.gs1_payload_json ?? row.gs1PayloadJson ?? row.gs1Payload, {});
+  return {
+    id: row.id,
+    productId: row.product_id ?? row.productId,
+    codeRaw: row.code_raw ?? row.codeRaw ?? "",
+    codeNormalized: row.code_normalized ?? row.codeNormalized ?? "",
+    codeType: row.code_type ?? row.codeType ?? "",
+    gtin: row.gtin ?? "",
+    barcodeFormat: row.barcode_format ?? row.barcodeFormat ?? "",
+    gs1Payload,
+    detectedLot: row.detected_lot ?? row.detectedLot ?? "",
+    detectedExpiry: row.detected_expiry ?? row.detectedExpiry ?? "",
+    detectedMfgDate: row.detected_mfg_date ?? row.detectedMfgDate ?? "",
+    detectedQuantity: row.detected_quantity ?? row.detectedQuantity ?? null,
+    packageType: row.package_type ?? row.packageType ?? "",
+    packageQuantity: row.package_quantity ?? row.packageQuantity ?? null,
+    packageUnit: row.package_unit ?? row.packageUnit ?? "",
+    baseUnit: row.base_unit ?? row.baseUnit ?? "",
+    conversionFactor: row.conversion_factor ?? row.conversionFactor ?? null,
+    conversionNotes: row.conversion_notes ?? row.conversionNotes ?? "",
+    source: row.source ?? "",
+    confidence: Number(row.confidence || 0),
+    createdBy: row.created_by ?? row.createdBy ?? "",
+    createdAt: row.created_at ?? row.createdAt ?? "",
+    updatedAt: row.updated_at ?? row.updatedAt ?? "",
+    lastSeenAt: row.last_seen_at ?? row.lastSeenAt ?? "",
+    scanCount: Number(row.scan_count ?? row.scanCount ?? 0),
+    isActive: row.is_active !== false && row.is_active !== 0
+  };
+}
+
+function productCodeLinkToDbPayload(link = {}) {
+  return {
+    id: link.id,
+    product_id: link.productId,
+    code_raw: link.codeRaw,
+    code_normalized: link.codeNormalized,
+    code_type: link.codeType,
+    gtin: link.gtin || null,
+    barcode_format: link.barcodeFormat || null,
+    gs1_payload_json: link.gs1Payload || {},
+    detected_lot: link.detectedLot || null,
+    detected_expiry: link.detectedExpiry || null,
+    detected_mfg_date: link.detectedMfgDate || null,
+    detected_quantity: link.detectedQuantity ?? null,
+    package_type: link.packageType || null,
+    package_quantity: link.packageQuantity ?? null,
+    package_unit: link.packageUnit || null,
+    base_unit: link.baseUnit || null,
+    conversion_factor: link.conversionFactor ?? null,
+    conversion_notes: link.conversionNotes || null,
+    source: link.source || "camera_learning",
+    confidence: link.confidence || 0,
+    created_by: link.createdBy || state.currentUser?.id || null,
+    is_active: link.isActive === false ? 0 : 1
+  };
+}
+
+const productCodeLinkService = {
+  async list() {
+    if (shouldUseLocalBackend()) {
+      const result = await dataProvider.listLocalProductCodeLinks();
+      return (result.links || []).map(mapProductCodeLinkFromDb);
+    }
+    return [];
+  },
+
+  async upsert(link) {
+    const payload = productCodeLinkToDbPayload(link);
+    if (shouldUseLocalBackend()) {
+      const result = await dataProvider.upsertLocalProductCodeLink(payload);
+      return mapProductCodeLinkFromDb(result.link);
+    }
+    throw new Error("Aprender productos requiere backend local activo. No se sincroniza con Supabase.");
   }
 };
 
@@ -2286,8 +2502,10 @@ function loadFallbackInventory(error) {
     .filter((item) => item.cantidad < item.stockMinimo)
     .map((item) => ({ producto_id: item.productoId, nombre: item.nombre, stock_actual: item.cantidad, stock_minimo: item.stockMinimo }));
   state.movements = [];
+  state.productCodeLinks = [];
   state.usingFallback = true;
   state.backend.active = "sin_fuente";
+  updateProductCodesFromClinicalRows();
   rememberBackendError(error);
   renderProductSuggestions();
   elements.inventorySourceText.textContent = "Backend local y Supabase no respondieron. Mostrando datos mock de respaldo.";
@@ -8944,21 +9162,28 @@ function renderPosSession(kind) {
   const ctx = getPosContext(kind);
   const rows = ctx.rows;
   ctx.count.textContent = `Productos ingresados (${rows.length})`;
-  ctx.chips.innerHTML = rows.slice(0, 4).map((row) => `<span>${escapeHtml(row.nombre)} ${formatNumber(row.cantidad)} ${escapeHtml(row.unidad)}</span>`).join("");
+  ctx.chips.innerHTML = rows.slice(0, 4).map((row) => {
+    const quantityText = Number(row.cantidad) > 0 ? `${formatNumber(row.cantidad)} ${escapeHtml(row.unidad)}` : "cantidad pendiente";
+    return `<span>${escapeHtml(row.nombre)} ${quantityText}</span>`;
+  }).join("");
   ctx.list.innerHTML = rows.length
-    ? rows.map((row, index) => `
-      <article class="pos-added-item" data-pos-item="${kind}" data-index="${index}">
-        <div>
-          <strong>${escapeHtml(row.nombre)}</strong>
-          <span>${formatNumber(row.cantidad)} ${escapeHtml(row.unidad)} - vence ${formatDisplayDate(row.fechaVencimiento)}</span>
-          <span>Lote: ${escapeHtml(row.lote || "-")} ${row.critico ? "- CRITICO" : ""}</span>
-        </div>
-        <div class="row-actions">
-          <button class="btn small" type="button" data-pos-edit="${kind}" data-index="${index}">Editar</button>
-          <button class="btn small danger-btn" type="button" data-pos-delete="${kind}" data-index="${index}">Eliminar</button>
-        </div>
-      </article>
-    `).join("")
+    ? rows.map((row, index) => {
+      const quantityText = Number(row.cantidad) > 0 ? `${formatNumber(row.cantidad)} ${escapeHtml(row.unidad)}` : `Cantidad pendiente (${escapeHtml(row.unidad || "unidad")})`;
+      const pendingClass = Number(row.cantidad) > 0 ? "" : " needs-review";
+      return `
+        <article class="pos-added-item${pendingClass}" data-pos-item="${kind}" data-index="${index}">
+          <div>
+            <strong>${escapeHtml(row.nombre)}</strong>
+            <span>${quantityText} - vence ${formatDisplayDate(row.fechaVencimiento)}</span>
+            <span>Lote: ${escapeHtml(row.lote || "-")} ${row.critico ? "- CRITICO" : ""}</span>
+          </div>
+          <div class="row-actions">
+            <button class="btn small" type="button" data-pos-edit="${kind}" data-index="${index}">Editar</button>
+            <button class="btn small danger-btn" type="button" data-pos-delete="${kind}" data-index="${index}">Eliminar</button>
+          </div>
+        </article>
+      `;
+    }).join("")
     : '<div class="empty compact-empty">Aun no hay productos agregados.</div>';
   ctx.addButton.textContent = state[ctx.editingKey] === null ? "Agregar producto" : "Guardar edición";
 }
@@ -10402,6 +10627,1855 @@ function setupOperatorEntryTable() {
   resetPosSession("operator");
 }
 
+function setContinuousScanStatus(message) {
+  if (elements.continuousScanStatus) elements.continuousScanStatus.textContent = message;
+}
+
+function normalizeScanCode(value) {
+  return String(value || "").trim().replace(/\s+/g, "").toUpperCase();
+}
+
+function normalizeGtin(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function normalizeEquivalentScanCode(value) {
+  return normalizeGtin(value) || normalizeScanCode(value);
+}
+
+function isValidGtin(value) {
+  const digits = normalizeGtin(value);
+  if (![8, 12, 13, 14].includes(digits.length)) return false;
+  const numbers = digits.split("").map(Number);
+  const check = numbers.pop();
+  const sum = numbers.reverse().reduce((total, digit, index) => total + digit * (index % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === check;
+}
+
+const GS1_GROUP_SEPARATOR = String.fromCharCode(29);
+const GS1_AI_DEFINITIONS = [
+  { ai: "00", key: "sscc", label: "SSCC", length: 18, type: "fixed" },
+  { ai: "01", key: "gtin", label: "GTIN", length: 14, type: "fixed" },
+  { ai: "02", key: "contentGtin", label: "GTIN contenido", length: 14, type: "fixed" },
+  { ai: "10", key: "lot", label: "Lote", maxLength: 20, type: "variable" },
+  { ai: "11", key: "productionDate", label: "Elaboracion", length: 6, type: "fixed", dataType: "date" },
+  { ai: "13", key: "packagingDate", label: "Envasado", length: 6, type: "fixed", dataType: "date" },
+  { ai: "15", key: "bestBeforeDate", label: "Consumir preferentemente", length: 6, type: "fixed", dataType: "date" },
+  { ai: "17", key: "expirationDate", label: "Vencimiento", length: 6, type: "fixed", dataType: "date" },
+  { ai: "21", key: "serial", label: "Serie", maxLength: 20, type: "variable" },
+  { ai: "30", key: "variableCount", label: "Cantidad variable", maxLength: 8, type: "variable", dataType: "number" },
+  { ai: "37", key: "count", label: "Cantidad", maxLength: 8, type: "variable", dataType: "number" }
+];
+
+for (let decimal = 0; decimal <= 9; decimal += 1) {
+  GS1_AI_DEFINITIONS.push({ ai: `310${decimal}`, key: "netWeightKg", label: "Peso neto kg", length: 6, type: "fixed", dataType: "decimal", decimals: decimal });
+}
+
+const GS1_AI_BY_CODE = Object.fromEntries(GS1_AI_DEFINITIONS.map((definition) => [definition.ai, definition]));
+const GS1_AI_CODES_BY_LENGTH = [...new Set(GS1_AI_DEFINITIONS.map((definition) => definition.ai.length))].sort((a, b) => b - a);
+
+function normalizeGs1RawValue(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^\](C1|d2|e0|Q3)/i, "")
+    .replace(/\\u001d/gi, GS1_GROUP_SEPARATOR)
+    .replace(/\u00f1/g, GS1_GROUP_SEPARATOR);
+}
+
+function parseGs1Date(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!/^\d{6}$/.test(digits)) return "";
+  const year = 2000 + Number(digits.slice(0, 2));
+  const month = Number(digits.slice(2, 4));
+  let day = Number(digits.slice(4, 6));
+  if (month < 1 || month > 12) return "";
+  if (day === 0) day = new Date(year, month, 0).getDate();
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) return "";
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function formatGs1Value(definition, value) {
+  const clean = String(value || "").trim();
+  if (definition?.dataType === "date") return parseGs1Date(clean);
+  if (definition?.dataType === "number") return clean.replace(/\D/g, "");
+  if (definition?.dataType === "decimal") {
+    const digits = clean.replace(/\D/g, "");
+    if (!digits) return "";
+    return String(Number(digits) / (10 ** Number(definition.decimals || 0)));
+  }
+  return clean;
+}
+
+function findGs1AiAt(text, index) {
+  for (const length of GS1_AI_CODES_BY_LENGTH) {
+    const ai = text.slice(index, index + length);
+    if (GS1_AI_BY_CODE[ai]) return GS1_AI_BY_CODE[ai];
+  }
+  return null;
+}
+
+function findNextGs1AiPosition(text, start, maxEnd) {
+  for (let index = start; index < maxEnd; index += 1) {
+    if (text[index] === GS1_GROUP_SEPARATOR) return index;
+    const definition = findGs1AiAt(text, index);
+    if (!definition) continue;
+    const remaining = text.length - index - definition.ai.length;
+    const plausible = definition.type === "fixed"
+      ? remaining >= definition.length
+      : remaining >= 1;
+    if (plausible) return index;
+  }
+  return -1;
+}
+
+function parseGs1WithParentheses(rawValue) {
+  const text = normalizeGs1RawValue(rawValue);
+  const markerPattern = /[(\[](\d{2,4})[)\]]/g;
+  const markers = [];
+  let match;
+  while ((match = markerPattern.exec(text))) {
+    if (GS1_AI_BY_CODE[match[1]]) markers.push({ ai: match[1], start: match.index, end: markerPattern.lastIndex });
+  }
+  if (!markers.length) return [];
+  return markers.map((marker, index) => {
+    const nextStart = markers[index + 1]?.start ?? text.length;
+    return {
+      ai: marker.ai,
+      rawValue: text.slice(marker.end, nextStart).replaceAll(GS1_GROUP_SEPARATOR, "").trim()
+    };
+  });
+}
+
+function parseGs1Raw(rawValue) {
+  let text = normalizeGs1RawValue(rawValue).replace(/[()]/g, "");
+  if (!text) return [];
+  if (!text.includes(GS1_GROUP_SEPARATOR) && isValidGtin(text)) return [];
+  const fields = [];
+  let index = 0;
+  while (index < text.length) {
+    if (text[index] === GS1_GROUP_SEPARATOR) {
+      index += 1;
+      continue;
+    }
+    const definition = findGs1AiAt(text, index);
+    if (!definition) break;
+    const valueStart = index + definition.ai.length;
+    let valueEnd = valueStart;
+    if (definition.type === "fixed") {
+      if (text.length - valueStart < definition.length) break;
+      valueEnd = valueStart + definition.length;
+    } else {
+      const maxEnd = Math.min(text.length, valueStart + definition.maxLength);
+      const nextAi = findNextGs1AiPosition(text, valueStart + 1, maxEnd);
+      valueEnd = nextAi >= 0 ? nextAi : maxEnd;
+    }
+    const rawFieldValue = text.slice(valueStart, valueEnd).replaceAll(GS1_GROUP_SEPARATOR, "").trim();
+    if (rawFieldValue) fields.push({ ai: definition.ai, rawValue: rawFieldValue });
+    index = valueEnd;
+  }
+  return fields;
+}
+
+function parseGs1(rawValue) {
+  const normalized = normalizeGs1RawValue(rawValue);
+  const parsedFields = normalized.includes("(") || normalized.includes("[")
+    ? parseGs1WithParentheses(normalized)
+    : parseGs1Raw(normalized);
+  const fields = {};
+  const aiFields = [];
+
+  parsedFields.forEach((field) => {
+    const definition = GS1_AI_BY_CODE[field.ai];
+    if (!definition) return;
+    const value = formatGs1Value(definition, field.rawValue);
+    if (!value) return;
+    fields[definition.key] = value;
+    aiFields.push({
+      ai: field.ai,
+      label: definition.label,
+      key: definition.key,
+      rawValue: field.rawValue,
+      value
+    });
+  });
+
+  const hasGs1Identity = Boolean(fields.gtin || fields.contentGtin || fields.lot || fields.expirationDate || fields.productionDate || fields.variableCount || fields.count || fields.sscc);
+  return {
+    isGs1: hasGs1Identity && aiFields.length > 0,
+    rawValue: normalized,
+    fields,
+    aiFields
+  };
+}
+
+function getProductFromCodeLink(link) {
+  if (!link?.productId) return null;
+  return state.products.find((product) => String(product.id) === String(link.productId)) || null;
+}
+
+function findProductCodeLinkByScanCode(code, gtin = "") {
+  const candidates = [
+    gtin,
+    code,
+    normalizeGs1RawValue(code)
+  ].map(normalizeEquivalentScanCode).filter(Boolean);
+  if (!candidates.length) return null;
+  const candidateSet = new Set(candidates);
+  return state.productCodeLinks.find((link) => {
+    if (link.isActive === false) return false;
+    const linkCodes = [
+      link.codeNormalized,
+      link.gtin,
+      link.codeRaw
+    ].map(normalizeEquivalentScanCode).filter(Boolean);
+    return linkCodes.some((linkCode) => candidateSet.has(linkCode));
+  }) || null;
+}
+
+function findLegacyProductByScanCode(code) {
+  const clean = normalizeScanCode(code);
+  const cleanDigits = normalizeGtin(code);
+  if (!clean && !cleanDigits) return null;
+  const match = Object.entries(state.productCodes).find(([, productCode]) => {
+    const productClean = normalizeScanCode(productCode);
+    const productDigits = normalizeGtin(productCode);
+    return (clean && productClean === clean) || (cleanDigits && productDigits === cleanDigits);
+  });
+  if (!match) return null;
+  return state.products.find((product) => String(product.id) === String(match[0])) || null;
+}
+
+function findProductByScanCode(code, gtin = "") {
+  const linked = findProductCodeLinkByScanCode(code, gtin);
+  if (linked) return getProductFromCodeLink(linked);
+  return findLegacyProductByScanCode(gtin || code);
+}
+
+function getBarcodeDetectorFormats() {
+  return ["aztec", "code_128", "code_39", "code_93", "codabar", "data_matrix", "ean_13", "ean_8", "itf", "pdf417", "qr_code", "upc_a", "upc_e"];
+}
+
+async function createBarcodeDetectorInstance() {
+  if (!("BarcodeDetector" in window)) return;
+  const supported = await window.BarcodeDetector.getSupportedFormats?.();
+  const wanted = getBarcodeDetectorFormats();
+  const formats = Array.isArray(supported) && supported.length ? wanted.filter((format) => supported.includes(format)) : wanted;
+  return formats.length
+    ? new window.BarcodeDetector({ formats })
+    : new window.BarcodeDetector();
+}
+
+function getZxingFormats() {
+  const formats = window.ZXingBrowser?.BarcodeFormat;
+  if (!formats) return [];
+  return [
+    formats.EAN_13,
+    formats.UPC_A,
+    formats.ITF,
+    formats.CODE_128,
+    formats.DATA_MATRIX,
+    formats.QR_CODE,
+    formats.EAN_8,
+    formats.UPC_E,
+    formats.CODE_39,
+    formats.CODE_93
+  ].filter((format) => format !== undefined && format !== null);
+}
+
+function formatZxingBarcodeFormat(format) {
+  const formats = window.ZXingBrowser?.BarcodeFormat;
+  if (!formats) return String(format || "unknown").toLowerCase();
+  const label = formats[format] || String(format || "unknown");
+  return label.toLowerCase();
+}
+
+function createZxingReaderInstance() {
+  const Reader = window.ZXingBrowser?.BrowserMultiFormatReader;
+  if (!Reader) return null;
+  const reader = new Reader(new Map());
+  const formats = getZxingFormats();
+  if (formats.length) reader.possibleFormats = formats;
+  return reader;
+}
+
+async function setupContinuousBarcodeDetector() {
+  const scan = state.continuousScan;
+  scan.barcodeDetector = null;
+  scan.barcodeSupported = false;
+  try {
+    scan.barcodeDetector = await createBarcodeDetectorInstance();
+    scan.barcodeSupported = Boolean(scan.barcodeDetector);
+  } catch (error) {
+    console.warn("BarcodeDetector no disponible", error);
+    scan.barcodeDetector = null;
+    scan.barcodeSupported = false;
+  }
+}
+
+function setupContinuousZxingReader() {
+  const scan = state.continuousScan;
+  scan.zxingReader = null;
+  scan.zxingSupported = false;
+
+  try {
+    scan.zxingReader = createZxingReaderInstance();
+    scan.zxingSupported = Boolean(scan.zxingReader);
+  } catch (error) {
+    console.warn("ZXing no disponible", error);
+    scan.zxingReader = null;
+    scan.zxingSupported = false;
+  }
+}
+
+function detectContinuousOcrSupport() {
+  return false;
+}
+
+function renderContinuousScanCapabilities() {
+  const scan = state.continuousScan;
+  if (!elements.scanCapabilitiesStatus) return;
+  const rows = [
+    ["Camara", scan.stream ? "activa" : "pendiente"],
+    ["Linterna", scan.torchSupported ? (scan.torchEnabled ? "activa" : "soportada") : "no disponible"],
+    ["Barcode", scan.barcodeSupported ? "activo" : "no disponible"],
+    ["ZXing", scan.zxingSupported ? "fallback activo" : "no disponible"],
+    ["Capturas", String(scan.captures.length)],
+    ["Ultimo codigo", scan.lastScanSummary?.code || "-"],
+    ["Motor", scan.lastScanSummary?.engine || "-"],
+    ["Tipo", scan.lastScanSummary?.kind || "-"],
+    ["Producto", scan.lastScanSummary?.linked ? "vinculado" : (scan.lastScanSummary?.code ? "no vinculado" : "-")],
+    ["Modo", scan.paused ? "pausado" : (scan.running ? "continuo" : "detenido")]
+  ];
+  elements.scanCapabilitiesStatus.innerHTML = rows.map(([label, value]) => `
+    <span>${escapeHtml(label)} <b>${escapeHtml(value)}</b></span>
+  `).join("");
+}
+
+function resetContinuousScanStateForSession() {
+  Object.assign(state.continuousScan, {
+    barcodeDetector: null,
+    barcodeSupported: false,
+    zxingReader: null,
+    zxingSupported: false,
+    lastZxingAttemptAt: 0,
+    torchSupported: false,
+    torchEnabled: false,
+    ocrSupported: false,
+    paused: false,
+    processing: false,
+    lastFrameMetrics: null,
+    stableTicks: 0,
+    lastCaptureAt: 0,
+    lastBarcode: "",
+    lastBarcodeSeenAt: 0,
+    barcodeLockValue: "",
+    barcodeClearTicks: 0,
+    candidateBarcodeKey: "",
+    candidateBarcodeTicks: 0,
+    recentBarcodeCaptures: {},
+    lastSignature: "",
+    lastScanSummary: null,
+    captures: []
+  });
+  elements.pauseContinuousScanBtn.textContent = "Pausar escaneo";
+  renderContinuousScanDetectedList();
+  renderContinuousScanCapabilities();
+}
+
+async function tryEnableScannerTorch(scan) {
+  scan.torchSupported = false;
+  scan.torchEnabled = false;
+  const track = scan.track;
+  if (!track?.getCapabilities || !track.applyConstraints) return;
+  const capabilities = track.getCapabilities();
+  scan.torchSupported = Boolean(capabilities?.torch);
+  if (!scan.torchSupported) return;
+
+  try {
+    await track.applyConstraints({ advanced: [{ torch: true }] });
+    scan.torchEnabled = true;
+  } catch (error) {
+    console.warn("No se pudo activar torch", error);
+    scan.torchEnabled = false;
+  }
+}
+
+async function tryEnableContinuousScanTorch() {
+  await tryEnableScannerTorch(state.continuousScan);
+}
+
+async function waitForVideoReady(video) {
+  if (video.readyState >= 2 && video.videoWidth) return;
+  await new Promise((resolve) => {
+    const timer = window.setTimeout(resolve, 1600);
+    video.onloadedmetadata = () => {
+      window.clearTimeout(timer);
+      resolve();
+    };
+  });
+}
+
+async function playContinuousScanVideo(video) {
+  if (!video) return "sin video";
+  try {
+    const playPromise = video.play();
+    if (!playPromise?.then) return "iniciado";
+    return await Promise.race([
+      playPromise.then(() => "iniciado"),
+      new Promise((resolve) => window.setTimeout(() => resolve("esperando frames"), 1800))
+    ]);
+  } catch (error) {
+    console.warn("No se pudo iniciar vista previa de camara", error);
+    return "vista previa no disponible";
+  }
+}
+
+async function startContinuousScanner() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Este navegador no permite usar la camara desde la PWA.");
+  }
+
+  const scan = state.continuousScan;
+  setContinuousScanStatus("Solicitando permiso de camara...");
+  renderContinuousScanCapabilities();
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      facingMode: { ideal: "environment" },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    }
+  });
+
+  scan.stream = stream;
+  scan.track = stream.getVideoTracks()[0] || null;
+  elements.continuousScanVideo.srcObject = stream;
+  await waitForVideoReady(elements.continuousScanVideo);
+  const videoStatus = await playContinuousScanVideo(elements.continuousScanVideo);
+
+  await tryEnableContinuousScanTorch();
+  await setupContinuousBarcodeDetector();
+  setupContinuousZxingReader();
+  scan.ocrSupported = detectContinuousOcrSupport();
+  scan.running = true;
+  scan.paused = false;
+  renderContinuousScanCapabilities();
+
+  const warnings = [];
+  if (!scan.torchSupported) warnings.push("linterna no soportada por este navegador");
+  if (!scan.barcodeSupported && !scan.zxingSupported) warnings.push("lector de codigos no disponible");
+  if (!scan.ocrSupported) warnings.push("OCR reservado para etapa posterior");
+  const cameraStatus = elements.continuousScanVideo.videoWidth ? "Camara activa" : `Camara autorizada; ${videoStatus}`;
+  setContinuousScanStatus(warnings.length ? `${cameraStatus}; ${warnings.join(", ")}.` : `${cameraStatus}, escaneo continuo esperando producto.`);
+  continuousScanLoop();
+}
+
+async function openContinuousScanModal() {
+  clearError();
+  resetContinuousScanStateForSession();
+  elements.continuousScanModal.hidden = false;
+  try {
+    await startContinuousScanner();
+  } catch (error) {
+    setContinuousScanStatus(getSupabaseErrorMessage(error));
+    renderContinuousScanCapabilities();
+    showToastError("No se pudo iniciar la camara.");
+  }
+}
+
+function stopContinuousScanner() {
+  const scan = state.continuousScan;
+  if (scan.loopTimer) window.clearTimeout(scan.loopTimer);
+  scan.loopTimer = null;
+  scan.running = false;
+  scan.paused = false;
+  scan.processing = false;
+  if (scan.stream) {
+    scan.stream.getTracks().forEach((track) => track.stop());
+  }
+  scan.stream = null;
+  scan.track = null;
+  scan.torchEnabled = false;
+  elements.continuousScanVideo.srcObject = null;
+  elements.pauseContinuousScanBtn.textContent = "Pausar escaneo";
+  renderContinuousScanCapabilities();
+}
+
+function closeContinuousScanModal() {
+  stopContinuousScanner();
+  elements.continuousScanModal.hidden = true;
+}
+
+function finishContinuousScan() {
+  const count = state.continuousScan.captures.length;
+  closeContinuousScanModal();
+  if (count > 0) showToastSuccess(`${count} captura${count === 1 ? "" : "s"} agregada${count === 1 ? "" : "s"} para revision.`);
+}
+
+function toggleContinuousScanPause() {
+  const scan = state.continuousScan;
+  if (!scan.running) return;
+  scan.paused = !scan.paused;
+  elements.pauseContinuousScanBtn.textContent = scan.paused ? "Reanudar escaneo" : "Pausar escaneo";
+  setContinuousScanStatus(scan.paused ? "Escaneo pausado. La camara sigue abierta." : "Escaneo continuo reanudado.");
+  renderContinuousScanCapabilities();
+}
+
+function getFrameMetrics(canvas, context, previousMetrics) {
+  const width = canvas.width;
+  const height = canvas.height;
+  const image = context.getImageData(0, 0, width, height).data;
+  const samples = [];
+  const bucketCols = 4;
+  const bucketRows = 4;
+  const buckets = Array.from({ length: bucketCols * bucketRows }, () => ({ total: 0, count: 0 }));
+  let edgeTotal = 0;
+  let edgeCount = 0;
+  const step = 8;
+
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const offset = (y * width + x) * 4;
+      const luminance = Math.round((image[offset] + image[offset + 1] + image[offset + 2]) / 3);
+      samples.push(luminance);
+      const bucketX = Math.min(bucketCols - 1, Math.floor(x / width * bucketCols));
+      const bucketY = Math.min(bucketRows - 1, Math.floor(y / height * bucketRows));
+      const bucket = buckets[bucketY * bucketCols + bucketX];
+      bucket.total += luminance;
+      bucket.count += 1;
+
+      if (x + step < width) {
+        const nextOffset = (y * width + x + step) * 4;
+        const nextLum = Math.round((image[nextOffset] + image[nextOffset + 1] + image[nextOffset + 2]) / 3);
+        edgeTotal += Math.abs(luminance - nextLum);
+        edgeCount += 1;
+      }
+      if (y + step < height) {
+        const belowOffset = ((y + step) * width + x) * 4;
+        const belowLum = Math.round((image[belowOffset] + image[belowOffset + 1] + image[belowOffset + 2]) / 3);
+        edgeTotal += Math.abs(luminance - belowLum);
+        edgeCount += 1;
+      }
+    }
+  }
+
+  const motion = previousMetrics?.samples?.length === samples.length
+    ? samples.reduce((total, value, index) => total + Math.abs(value - previousMetrics.samples[index]), 0) / samples.length
+    : 999;
+  const sharpness = edgeCount ? edgeTotal / edgeCount : 0;
+  const signature = buckets
+    .map((bucket) => Math.max(0, Math.min(15, Math.round((bucket.count ? bucket.total / bucket.count : 0) / 16))).toString(16))
+    .join("");
+
+  return { samples, motion, sharpness, signature };
+}
+
+function getSignatureDistance(a, b) {
+  if (!a || !b || a.length !== b.length) return 99;
+  let total = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    total += Math.abs(parseInt(a[index], 16) - parseInt(b[index], 16));
+  }
+  return total / a.length;
+}
+
+function normalizeBarcodeDetectorResults(results = []) {
+  return (results || [])
+    .map((barcode) => ({
+      rawValue: barcode.rawValue || "",
+      format: barcode.format || "unknown",
+      engine: "BarcodeDetector",
+      confidence: 1
+    }))
+    .filter((barcode) => barcode.rawValue);
+}
+
+function normalizeZxingResult(result) {
+  if (!result) return null;
+  const rawValue = result.getText?.() || result.text || String(result || "");
+  if (!rawValue) return null;
+  const rawFormat = result.getBarcodeFormat?.() ?? result.format ?? "";
+  return {
+    rawValue,
+    format: formatZxingBarcodeFormat(rawFormat),
+    engine: "ZXing",
+    confidence: 0.92
+  };
+}
+
+function createContinuousScanRoiCanvases(video) {
+  if (!video?.videoWidth || !video?.videoHeight) return [];
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  const definitions = [
+    { x: 0, y: Math.round(height * 0.25), width, height: Math.round(height * 0.55) },
+    { x: 0, y: Math.round(height * 0.15), width, height: Math.round(height * 0.45) },
+    { x: 0, y: Math.round(height * 0.45), width, height: Math.round(height * 0.40) }
+  ];
+  return definitions.map((definition) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = definition.width;
+    canvas.height = definition.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(
+      video,
+      definition.x,
+      definition.y,
+      definition.width,
+      definition.height,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+    return canvas;
+  });
+}
+
+async function detectBarcodesWithBarcodeDetectorForScanner(video, scan) {
+  if (!scan?.barcodeDetector) return [];
+  try {
+    const detected = normalizeBarcodeDetectorResults(await scan.barcodeDetector.detect(video));
+    if (detected.length) return detected;
+  } catch (error) {
+    console.warn("BarcodeDetector fallo en frame", error);
+  }
+
+  const roiCanvases = createContinuousScanRoiCanvases(video);
+  for (const roiCanvas of roiCanvases) {
+    try {
+      const detected = normalizeBarcodeDetectorResults(await scan.barcodeDetector.detect(roiCanvas));
+      if (detected.length) return detected;
+    } catch (error) {
+      console.warn("BarcodeDetector fallo en recorte", error);
+    }
+  }
+  return [];
+}
+
+async function detectBarcodesWithBarcodeDetector(video) {
+  return detectBarcodesWithBarcodeDetectorForScanner(video, state.continuousScan);
+}
+
+async function detectBarcodesWithZxingForScanner(video, scan) {
+  if (!scan?.zxingReader) return [];
+  const now = Date.now();
+  if (now - scan.lastZxingAttemptAt < CONTINUOUS_SCAN_ZXING_INTERVAL_MS) return [];
+  scan.lastZxingAttemptAt = now;
+  try {
+    const result = scan.zxingReader.decode(video);
+    const normalized = normalizeZxingResult(result);
+    return normalized ? [normalized] : [];
+  } catch (error) {
+    const message = String(error?.message || error || "");
+    if (!/not.?found|no multi format readers|could not find|No barcode/i.test(message)) {
+      console.warn("ZXing fallo en frame", error);
+    }
+  }
+  const roiCanvases = createContinuousScanRoiCanvases(video);
+  for (const roiCanvas of roiCanvases) {
+    try {
+      const result = scan.zxingReader.decodeFromCanvas(roiCanvas);
+      const normalized = normalizeZxingResult(result);
+      if (normalized) return [normalized];
+    } catch (error) {
+      const message = String(error?.message || error || "");
+      if (!/not.?found|no multi format readers|could not find|No barcode/i.test(message)) {
+        console.warn("ZXing fallo en recorte", error);
+      }
+    }
+  }
+  return [];
+}
+
+async function detectBarcodesWithZxing(video) {
+  return detectBarcodesWithZxingForScanner(video, state.continuousScan);
+}
+
+function canCaptureContinuousScan(barcodeValue, signature) {
+  const scan = state.continuousScan;
+  const now = Date.now();
+  if (now - scan.lastCaptureAt < CONTINUOUS_SCAN_COOLDOWN_MS) return false;
+  if (barcodeValue) {
+    const barcodeKey = normalizeEquivalentScanCode(barcodeValue);
+    if (scan.barcodeLockValue && scan.barcodeClearTicks < CONTINUOUS_SCAN_BARCODE_CLEAR_TICKS) return false;
+    if (barcodeKey && scan.recentBarcodeCaptures[barcodeKey] && now - scan.recentBarcodeCaptures[barcodeKey] < CONTINUOUS_SCAN_DUPLICATE_MS) return false;
+    return true;
+  }
+  if (scan.barcodeLockValue || now - scan.lastBarcodeSeenAt < CONTINUOUS_SCAN_BARCODE_GRACE_MS) return false;
+  if (!barcodeValue && getSignatureDistance(signature, scan.lastSignature) < 1.2) return false;
+  return true;
+}
+
+function updateScanBarcodeCandidate(scan, barcodeValue, requiredTicks = CONTINUOUS_SCAN_BARCODE_STABLE_TICKS) {
+  const key = normalizeEquivalentScanCode(barcodeValue);
+  if (!key) {
+    scan.candidateBarcodeKey = "";
+    scan.candidateBarcodeTicks = 0;
+    return { key: "", ticks: 0, stable: false };
+  }
+  if (scan.candidateBarcodeKey === key) {
+    scan.candidateBarcodeTicks += 1;
+  } else {
+    scan.candidateBarcodeKey = key;
+    scan.candidateBarcodeTicks = 1;
+  }
+  return {
+    key,
+    ticks: scan.candidateBarcodeTicks,
+    stable: scan.candidateBarcodeTicks >= requiredTicks
+  };
+}
+
+async function continuousScanLoop() {
+  const scan = state.continuousScan;
+  if (!scan.running) return;
+  if (!scan.paused && !scan.processing) {
+    scan.processing = true;
+    try {
+      await processContinuousScanFrame();
+    } catch (error) {
+      console.warn("Error en escaneo continuo", error);
+    } finally {
+      scan.processing = false;
+    }
+  }
+  scan.loopTimer = window.setTimeout(continuousScanLoop, CONTINUOUS_SCAN_INTERVAL_MS);
+}
+
+async function processContinuousScanFrame() {
+  const scan = state.continuousScan;
+  const video = elements.continuousScanVideo;
+  if (!video.videoWidth || !video.videoHeight) return;
+
+  const canvas = elements.continuousScanCanvas;
+  const ratio = video.videoHeight / video.videoWidth;
+  canvas.width = 360;
+  canvas.height = Math.max(220, Math.round(canvas.width * ratio));
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  let barcodes = await detectBarcodesWithBarcodeDetector(video);
+  if (!barcodes.length) {
+    barcodes = await detectBarcodesWithZxing(video);
+  }
+
+  const metrics = getFrameMetrics(canvas, context, scan.lastFrameMetrics);
+  const stable = metrics.motion < 5.5 && metrics.sharpness >= CONTINUOUS_SCAN_MIN_SHARPNESS;
+  scan.stableTicks = stable ? scan.stableTicks + 1 : 0;
+  scan.lastFrameMetrics = metrics;
+
+  const barcodeValue = normalizeScanCode(barcodes[0]?.rawValue || "");
+  if (barcodeValue) {
+    scan.lastBarcodeSeenAt = Date.now();
+    scan.barcodeClearTicks = 0;
+  } else if (scan.barcodeLockValue) {
+    scan.barcodeClearTicks += 1;
+    if (scan.barcodeClearTicks >= CONTINUOUS_SCAN_BARCODE_CLEAR_TICKS) {
+      scan.barcodeLockValue = "";
+    }
+  }
+  const barcodeCandidate = updateScanBarcodeCandidate(scan, barcodeValue);
+  const readyByBarcode = Boolean(barcodeValue) && barcodeCandidate.stable;
+  const readyByStability = scan.ocrSupported && scan.stableTicks >= CONTINUOUS_SCAN_STABLE_TICKS;
+  const statusParts = [];
+  if (barcodeValue) statusParts.push(`codigo ${barcodeValue}`);
+  if (barcodeValue && !barcodeCandidate.stable) {
+    statusParts.push(`lectura ${barcodeCandidate.ticks}/${CONTINUOUS_SCAN_BARCODE_STABLE_TICKS}`);
+  }
+  statusParts.push(`estabilidad ${Math.min(scan.stableTicks, CONTINUOUS_SCAN_STABLE_TICKS)}/${CONTINUOUS_SCAN_STABLE_TICKS}`);
+  statusParts.push(`foco ${Math.round(metrics.sharpness)}`);
+  setContinuousScanStatus(`Buscando producto: ${statusParts.join(" - ")}.`);
+
+  if ((readyByBarcode || readyByStability) && canCaptureContinuousScan(barcodeValue, metrics.signature)) {
+    await captureContinuousScanFrame({
+      barcodes,
+      metrics,
+      reason: readyByBarcode ? "codigo_barra" : "estabilidad_visual"
+    });
+  }
+}
+
+async function runContinuousScanOcr(canvas) {
+  if (window.TextDetector) {
+    try {
+      const detector = new window.TextDetector();
+      const rows = await detector.detect(canvas);
+      const text = rows.map((row) => row.rawValue || row.text || "").filter(Boolean).join("\n");
+      return { text, method: "TextDetector", notice: text ? "" : "OCR nativo sin texto legible." };
+    } catch (error) {
+      console.warn("TextDetector no pudo leer OCR", error);
+    }
+  }
+
+  if (window.Tesseract?.recognize) {
+    try {
+      const result = await window.Tesseract.recognize(canvas, "spa+eng");
+      return { text: result?.data?.text || "", method: "Tesseract.js", notice: "" };
+    } catch (error) {
+      console.warn("Tesseract.js no pudo leer OCR", error);
+      return { text: "", method: "Tesseract.js", notice: "OCR fallo en esta captura." };
+    }
+  }
+
+  return { text: "", method: "no disponible", notice: "OCR no disponible sin motor local o externo." };
+}
+
+function getOcrLines(text) {
+  const seen = new Set();
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => {
+      if (line.length < 3) return false;
+      const key = normalize(line);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function isLikelyNoiseScanLine(line) {
+  const clean = normalize(line);
+  return /^(lote|lot|batch|vence|venc|vto|exp|cad|elab|fabricado|gtin|ean|codigo|cod|barra|fecha|registro|reg|servicio)$/.test(clean)
+    || /^(www\.|http|tel|rut|r\.s\.)/.test(clean);
+}
+
+function extractFormatFromText(text) {
+  const match = String(text || "").match(/(\d+(?:[,.]\d+)?)\s*(kg|g|gr|gramos|lt|l|litro|litros|ml|cc|un|u|unidad|unidades)\b/i);
+  if (!match) return "";
+  const value = match[1].replace(",", ".");
+  const unitMap = { gr: "g", gramos: "g", l: "lt", litro: "lt", litros: "lt", un: "unidad", u: "unidad", unidades: "unidad" };
+  const unit = unitMap[match[2].toLowerCase()] || match[2].toLowerCase();
+  return `${value} ${unit}`;
+}
+
+function unitFromPresentation(value) {
+  const clean = normalize(value);
+  if (/\bkg\b/.test(clean)) return "kg";
+  if (/\b(g|gr|gramos)\b/.test(clean)) return "g";
+  if (/\b(lt|l|litro|litros)\b/.test(clean)) return "lt";
+  if (/\b(ml|cc)\b/.test(clean)) return "ml";
+  if (/\b(caja)\b/.test(clean)) return "caja";
+  if (/\b(paquete)\b/.test(clean)) return "paquete";
+  return "";
+}
+
+function extractLotFromText(text) {
+  const match = String(text || "").match(/\b(?:lote|lot|batch|lt|l)\s*[:#.-]?\s*([A-Z0-9][A-Z0-9-]{2,24})\b/i);
+  return match ? normalizeLotValue(match[1]) : "";
+}
+
+function parseMonthYearExpiry(value) {
+  const clean = normalize(value).replace(/[.]/g, "");
+  const match = clean.match(/\b(ene|enero|feb|febrero|mar|marzo|abr|abril|may|mayo|jun|junio|jul|julio|ago|agosto|sep|sept|setiembre|septiembre|oct|octubre|nov|noviembre|dic|diciembre)\s+(\d{2,4})\b/);
+  if (!match) return "";
+  const monthIndex = CLINICAL_MONTH_NAME_ALIASES[match[1]];
+  if (monthIndex == null) return "";
+  const year = match[2].length === 2 ? 2000 + Number(match[2]) : Number(match[2]);
+  const lastDay = new Date(year, monthIndex + 1, 0).getDate();
+  return `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+}
+
+function extractExpiryFromText(text) {
+  const raw = String(text || "");
+  const labeled = raw.match(/\b(?:consumir antes de|vence|vencimiento|venc|vto|cad|caduca|exp|expiry|fecha vencimiento|f\.?\s*vencimiento|v)\b[^\dA-Z]{0,20}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{6,8}|[A-Z]{3,10}\s+\d{2,4})/i);
+  const generic = raw.match(/\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b/);
+  const value = (labeled?.[1] || generic?.[1] || "").trim();
+  const parsed = parseMonthYearExpiry(value) || parseDateInput(value);
+  return parsed && isValidIsoDate(parsed) ? parsed : "";
+}
+
+function extractManufacturingDateFromText(text) {
+  const raw = String(text || "");
+  const labeled = raw.match(/\b(?:elaboracion|elab|fabricacion|fab|fecha elaboracion|f\.?\s*elaboracion|e)\b[^\d]{0,18}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{6,8})/i);
+  const parsed = parseDateInput((labeled?.[1] || "").trim());
+  return parsed && isValidIsoDate(parsed) ? parsed : "";
+}
+
+function extractPackQuantityFromText(text) {
+  const raw = String(text || "");
+  const patterns = [
+    /\b(\d{1,4})\s*(?:x|X)\s*\d+(?:[,.]\d+)?\s*(?:kg|g|gr|gramos|lt|l|ml|cc|b|bolsas?|un|u|und|unidades)\b/i,
+    /\b(\d{1,4})\s*(?:unid|un|u|und|unidades)\.?\s*(?:de)?\s*\d+(?:[,.]\d+)?\s*(?:kg|g|gr|gramos|lt|l|ml|cc)\b/i,
+    /\b(?:caja|manga|pack|paquete|display)\s*(?:x|por|de)\s*(\d{1,4})\s*(?:un|u|und|unidades)?\b/i,
+    /\b(\d{1,4})\s*(?:x|X)\s*\d+(?:[,.]\d+)?\b/i
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
+function extractGtinFromScanText(text, barcodeValue) {
+  const barcodeDigits = normalizeGtin(barcodeValue);
+  if (isValidGtin(barcodeDigits)) return barcodeDigits;
+  const explicit = String(text || "").match(/\b(?:gtin|ean|upc)\s*[:#-]?\s*(\d{8,14})\b/i);
+  if (explicit && isValidGtin(explicit[1])) return explicit[1];
+  const any = String(text || "").match(/\b(\d{8}|\d{12,14})\b/g) || [];
+  return any.find(isValidGtin) || "";
+}
+
+function extractProductIdentityFromText(lines, format) {
+  const candidates = lines.filter((line) => !isLikelyNoiseScanLine(line) && line !== format && !extractExpiryFromText(line) && !extractLotFromText(line));
+  const brand = candidates.find((line) => /^[A-Z0-9 &.'-]{3,28}$/.test(line) && /[A-Z]{2}/.test(line)) || "";
+  const name = candidates.find((line) => line !== brand && /[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(line)) || brand || "";
+  return { brand, name };
+}
+
+function buildScanField(value, confidence, source = "", detail = "") {
+  return { value: value || "", confidence, source, detail };
+}
+
+function findProductPackQuantity(productId) {
+  if (!productId) return null;
+  const lots = state.inventory
+    .filter((item) => String(item.productoId) === String(productId) && Number(item.cantidadPorCaja) > 0)
+    .sort((a, b) => String(b.fechaRecepcion || "").localeCompare(String(a.fechaRecepcion || "")));
+  return lots.length ? Number(lots[0].cantidadPorCaja) : null;
+}
+
+function findHistoricalExpiryForLot(productId, lot) {
+  const cleanLot = normalizeLotValue(lot);
+  if (!productId || !cleanLot) return "";
+  const match = state.inventory
+    .filter((item) =>
+      String(item.productoId) === String(productId) &&
+      normalizeLotValue(item.lote) === cleanLot &&
+      isValidIsoDate(item.fechaVencimiento)
+    )
+    .sort((a, b) => String(b.fechaRecepcion || "").localeCompare(String(a.fechaRecepcion || "")))[0];
+  return match?.fechaVencimiento || "";
+}
+
+function buildDeferredOcrResult() {
+  return {
+    text: "",
+    method: "pendiente",
+    status: "preparado_etapa_posterior",
+    fields: {},
+    notice: "OCR preparado para etapa posterior; no ejecutado en esta version."
+  };
+}
+
+function buildContinuousScanExtraction({ barcode, text = "" }) {
+  const barcodeRaw = String(barcode?.rawValue || barcode?.value || "").trim();
+  const barcodeValue = normalizeScanCode(barcodeRaw);
+  const barcodeFormat = barcode?.format || "";
+  const barcodeEngine = barcode?.engine || (barcodeValue ? "BarcodeDetector" : "");
+  const barcodeConfidence = barcode?.confidence ?? (barcodeValue ? 1 : 0);
+  const gs1 = parseGs1(barcodeRaw || barcodeValue);
+  const gtinFromGs1 = gs1.fields.gtin || gs1.fields.contentGtin || "";
+  const gtinFromBarcode = extractGtinFromScanText(text, barcodeValue);
+  const gtin = gtinFromGs1 || gtinFromBarcode;
+  const lookupCode = gtin || barcodeValue;
+  const productCodeLink = findProductCodeLinkByScanCode(barcodeRaw || barcodeValue, gtin);
+  const productByCode = productCodeLink ? getProductFromCodeLink(productCodeLink) : findLegacyProductByScanCode(lookupCode);
+  const lines = getOcrLines(text);
+  const format = extractFormatFromText(text);
+  const identity = extractProductIdentityFromText(lines, format);
+  const name = productByCode?.nombre || identity.name;
+  const lot = gs1.fields.lot || extractLotFromText(text);
+  const expiryFromGs1 = gs1.fields.expirationDate || gs1.fields.bestBeforeDate || "";
+  const historicalExpiry = !expiryFromGs1 && productByCode && lot ? findHistoricalExpiryForLot(productByCode.id, lot) : "";
+  const fechaVencimiento = expiryFromGs1 || extractExpiryFromText(text) || historicalExpiry;
+  const fechaElaboracion = gs1.fields.productionDate || extractManufacturingDateFromText(text);
+  const quantityFromGs1 = gs1.fields.variableCount || gs1.fields.count || "";
+  const packageQuantityFromLearnedLink = Number(productCodeLink?.packageQuantity || 0) > 0 ? Number(productCodeLink.packageQuantity) : null;
+  const conversionFactorFromLearnedLink = Number(productCodeLink?.conversionFactor || 0) > 0 ? Number(productCodeLink.conversionFactor) : null;
+  const packQuantityFromCatalog = packageQuantityFromLearnedLink || findProductPackQuantity(productByCode?.id);
+  const packQuantityFromText = extractPackQuantityFromText(text);
+  const cantidadPorCaja = packQuantityFromCatalog || packQuantityFromText || "";
+  const codeKind = gs1.isGs1 ? "GS1" : (barcodeValue ? "simple" : "");
+  const productLinked = Boolean(productByCode);
+  const warnings = [];
+  if (barcodeValue && !productLinked) warnings.push("producto no vinculado");
+
+  const barcodeSource = barcodeValue
+    ? {
+      detected: true,
+      rawValue: barcodeRaw,
+      normalizedValue: barcodeValue,
+      format: barcodeFormat || "desconocido",
+      engine: barcodeEngine || "desconocido",
+      confidence: barcodeConfidence
+    }
+    : { detected: false };
+
+  return {
+    fields: {
+      codigoBarra: buildScanField(barcodeValue, barcodeConfidence, "barcode", barcodeEngine || barcodeFormat),
+      tipoCodigo: buildScanField(codeKind, codeKind ? 0.95 : 0, gs1.isGs1 ? "gs1" : "barcode", barcodeFormat),
+      gtin: buildScanField(gtin, gtin ? (gtinFromGs1 ? 0.99 : 0.94) : 0, gtinFromGs1 ? "gs1" : (gtin ? "barcode" : ""), gtinFromGs1 ? "(01)/(02)" : "checksum"),
+      nombre: buildScanField(name, productByCode ? 0.95 : (name ? 0.35 : 0), productByCode ? "barcode" : "futura OCR", productCodeLink ? "vinculo aprendido" : (productByCode ? "catalogo vinculado" : "pendiente OCR")),
+      productoVinculado: buildScanField(productLinked ? "si" : "no", barcodeValue ? 0.95 : 0, "barcode", productLinked ? (productCodeLink ? "vinculo aprendido" : "match por codigo") : "sin match"),
+      marca: buildScanField(identity.brand, identity.brand ? 0.35 : 0, "futura OCR", "pendiente OCR"),
+      formato: buildScanField(format, format ? 0.45 : 0, "futura OCR", "pendiente OCR"),
+      lote: buildScanField(lot, lot ? (gs1.fields.lot ? 0.98 : 0.5) : 0, gs1.fields.lot ? "gs1" : "futura OCR", gs1.fields.lot ? "(10)" : "pendiente OCR"),
+      fechaVencimiento: buildScanField(fechaVencimiento, fechaVencimiento ? (expiryFromGs1 ? 0.98 : historicalExpiry ? 0.55 : 0.5) : 0, expiryFromGs1 ? "gs1" : (historicalExpiry ? "barcode" : "futura OCR"), expiryFromGs1 ? "(17)/(15)" : (historicalExpiry ? "historico de lote" : "pendiente OCR")),
+      fechaElaboracion: buildScanField(fechaElaboracion, fechaElaboracion ? (gs1.fields.productionDate ? 0.98 : 0.5) : 0, gs1.fields.productionDate ? "gs1" : (fechaElaboracion ? "futura OCR" : ""), gs1.fields.productionDate ? "(11)" : (fechaElaboracion ? "pendiente OCR" : "")),
+      cantidadDetectada: buildScanField(quantityFromGs1, quantityFromGs1 ? 0.95 : 0, quantityFromGs1 ? "gs1" : "", quantityFromGs1 ? "(30)/(37)" : ""),
+      tipoEmpaque: buildScanField(productCodeLink?.packageType || "", productCodeLink?.packageType ? 0.95 : 0, productCodeLink?.packageType ? "barcode" : "", productCodeLink?.packageType ? "regla aprendida" : ""),
+      cantidadEmpaque: buildScanField(packageQuantityFromLearnedLink ? String(packageQuantityFromLearnedLink) : "", packageQuantityFromLearnedLink ? 0.95 : 0, packageQuantityFromLearnedLink ? "barcode" : "", packageQuantityFromLearnedLink ? "regla aprendida" : ""),
+      unidadEmpaque: buildScanField(productCodeLink?.packageUnit || "", productCodeLink?.packageUnit ? 0.95 : 0, productCodeLink?.packageUnit ? "barcode" : "", productCodeLink?.packageUnit ? "regla aprendida" : ""),
+      unidadBase: buildScanField(productCodeLink?.baseUnit || productByCode?.unidad_default || "", productCodeLink?.baseUnit ? 0.95 : 0, productCodeLink?.baseUnit ? "barcode" : "", productCodeLink?.baseUnit ? "regla aprendida" : ""),
+      factorConversion: buildScanField(conversionFactorFromLearnedLink ? String(conversionFactorFromLearnedLink) : "", conversionFactorFromLearnedLink ? 0.98 : 0, conversionFactorFromLearnedLink ? "barcode" : "", conversionFactorFromLearnedLink ? "regla aprendida" : ""),
+      cantidadPorCaja: buildScanField(cantidadPorCaja ? String(cantidadPorCaja) : "", cantidadPorCaja ? (packQuantityFromCatalog ? 0.86 : 0.45) : 0, cantidadPorCaja ? (packQuantityFromCatalog ? "barcode" : "futura OCR") : "", packageQuantityFromLearnedLink ? "regla aprendida" : (packQuantityFromCatalog ? "catalogo vinculado" : (packQuantityFromText ? "pendiente OCR" : ""))),
+      textoOcr: buildScanField(text || "", text ? 0.55 : 0, "futura OCR", "no ejecutado")
+    },
+    sources: {
+      barcode: barcodeSource,
+      gs1: {
+        isGs1: gs1.isGs1,
+        rawValue: gs1.rawValue,
+        fields: gs1.fields,
+        aiFields: gs1.aiFields
+      },
+      ocr: buildDeferredOcrResult(),
+      productLink: productCodeLink ? {
+        id: productCodeLink.id,
+        productId: productCodeLink.productId,
+        codeNormalized: productCodeLink.codeNormalized,
+        scanCount: productCodeLink.scanCount,
+        packageType: productCodeLink.packageType || "",
+        packageQuantity: productCodeLink.packageQuantity || null,
+        packageUnit: productCodeLink.packageUnit || "",
+        baseUnit: productCodeLink.baseUnit || "",
+        conversionFactor: productCodeLink.conversionFactor || null,
+        conversionNotes: productCodeLink.conversionNotes || "",
+        source: productCodeLink.source
+      } : null
+    },
+    warnings,
+    productByCode,
+    productLinked,
+    codeKind,
+    barcodeFormat,
+    barcodeEngine
+  };
+}
+
+function formatScanConfidence(confidence) {
+  return confidence ? `${Math.round(confidence * 100)}%` : "0%";
+}
+
+function formatScanFieldSource(field) {
+  return [field.source, field.detail].filter(Boolean).join(" / ") || "sin fuente";
+}
+
+function buildScanEvidenceSnapshot(extraction) {
+  const fields = extraction.fields;
+  return {
+    codigo_detectado: fields.codigoBarra.value || null,
+    tipo_codigo: fields.tipoCodigo.value || null,
+    motor: extraction.barcodeEngine || extraction.sources?.barcode?.engine || null,
+    formato: extraction.barcodeFormat || extraction.sources?.barcode?.format || null,
+    producto_sugerido: fields.nombre.value || null,
+    producto_vinculado: extraction.productLinked,
+    gtin: fields.gtin.value || null,
+    lote: fields.lote.value || null,
+    vencimiento: fields.fechaVencimiento.value || null,
+    elaboracion: fields.fechaElaboracion.value || null,
+    cantidad_detectada: fields.cantidadDetectada.value || null,
+    tipo_empaque: fields.tipoEmpaque.value || null,
+    cantidad_empaque: fields.cantidadEmpaque.value || null,
+    unidad_empaque: fields.unidadEmpaque.value || null,
+    unidad_base: fields.unidadBase.value || null,
+    factor_conversion: fields.factorConversion.value || null,
+    cantidad_caja_manga: fields.cantidadPorCaja.value || null,
+    fuentes: Object.fromEntries(Object.entries(fields).map(([key, field]) => [
+      key,
+      { fuente: field.source || null, detalle: field.detail || null, confianza: field.confidence || 0 }
+    ])),
+    vinculo_aprendido: extraction.sources?.productLink || null,
+    gs1: extraction.sources?.gs1 || {},
+    ocr: extraction.sources?.ocr || {}
+  };
+}
+
+function buildContinuousScanObservation(extraction, ocr, reason) {
+  const fields = extraction.fields;
+  const evidence = JSON.stringify(buildScanEvidenceSnapshot(extraction), null, 2);
+  const rows = [
+    "Escaneo automatico - pendiente de revision",
+    `Motivo captura: ${reason === "codigo_barra" ? "codigo de barra" : "estabilidad visual"}`,
+    fields.codigoBarra.value ? `Codigo detectado: ${fields.codigoBarra.value} (${formatScanFieldSource(fields.codigoBarra)}, confianza ${formatScanConfidence(fields.codigoBarra.confidence)})` : "",
+    fields.tipoCodigo.value ? `Tipo: ${fields.tipoCodigo.value} (${formatScanFieldSource(fields.tipoCodigo)})` : "",
+    fields.productoVinculado.value ? `Producto: ${fields.productoVinculado.value === "si" ? "vinculado" : "no vinculado"}` : "",
+    extraction.warnings?.length ? `Avisos: ${extraction.warnings.join(", ")}` : "",
+    fields.gtin.value ? `GTIN: ${fields.gtin.value} (${formatScanFieldSource(fields.gtin)}, confianza ${formatScanConfidence(fields.gtin.confidence)})` : "",
+    fields.marca.value ? `Marca sugerida: ${fields.marca.value} (confianza ${formatScanConfidence(fields.marca.confidence)})` : "",
+    fields.formato.value ? `Formato: ${fields.formato.value} (confianza ${formatScanConfidence(fields.formato.confidence)})` : "",
+    fields.lote.value ? `Lote detectado: ${fields.lote.value} (${formatScanFieldSource(fields.lote)}, confianza ${formatScanConfidence(fields.lote.confidence)})` : "",
+    fields.fechaVencimiento.value ? `Vencimiento detectado: ${formatDisplayDate(fields.fechaVencimiento.value)} (${formatScanFieldSource(fields.fechaVencimiento)}, confianza ${formatScanConfidence(fields.fechaVencimiento.confidence)})` : "",
+    fields.fechaElaboracion.value ? `Elaboracion detectada: ${formatDisplayDate(fields.fechaElaboracion.value)} (${formatScanFieldSource(fields.fechaElaboracion)}, confianza ${formatScanConfidence(fields.fechaElaboracion.confidence)})` : "",
+    fields.cantidadDetectada.value ? `Cantidad GS1: ${fields.cantidadDetectada.value} (${formatScanFieldSource(fields.cantidadDetectada)}, confianza ${formatScanConfidence(fields.cantidadDetectada.confidence)})` : "",
+    fields.factorConversion.value ? `Regla empaque: ${fields.tipoEmpaque.value || "empaque"} contiene ${fields.cantidadEmpaque.value || "-"} ${fields.unidadEmpaque.value || "-"}; movimiento sugerido ${fields.factorConversion.value} ${fields.unidadBase.value || ""}` : "",
+    fields.cantidadPorCaja.value ? `Cantidad caja/manga: ${fields.cantidadPorCaja.value} (${formatScanFieldSource(fields.cantidadPorCaja)}, confianza ${formatScanConfidence(fields.cantidadPorCaja.confidence)})` : "",
+    !fields.factorConversion.value && extraction.productLinked ? "Cantidad pendiente: codigo vinculado sin regla de conversion confirmada." : "",
+    ocr.notice ? `OCR: ${ocr.notice}` : "",
+    fields.textoOcr.value ? `Texto completo OCR:\n${fields.textoOcr.value.slice(0, 1400)}` : "Texto completo OCR: no disponible",
+    `Datos estructurados:\n${evidence}`
+  ];
+  return rows.filter(Boolean).join("\n");
+}
+
+function getScanQuantitySuggestion(extraction) {
+  const fields = extraction.fields;
+  const linkedRuleQuantity = Number(fields.factorConversion.value || 0);
+  if (linkedRuleQuantity > 0) {
+    return {
+      quantity: linkedRuleQuantity,
+      unit: fields.unidadBase.value || extraction.productByCode?.unidad_default || "unidad",
+      source: "regla_empaque"
+    };
+  }
+  const gs1Quantity = Number(fields.cantidadDetectada.value || 0);
+  if (gs1Quantity > 0) {
+    return {
+      quantity: gs1Quantity,
+      unit: extraction.productByCode?.unidad_default || unitFromPresentation(fields.formato.value) || "unidad",
+      source: "gs1"
+    };
+  }
+  return {
+    quantity: 0,
+    unit: fields.unidadBase.value || extraction.productByCode?.unidad_default || unitFromPresentation(fields.formato.value) || "unidad",
+    source: "pendiente"
+  };
+}
+
+function continuousScanExtractionToPosRow(extraction, ocr, reason) {
+  const fields = extraction.fields;
+  const product = extraction.productByCode;
+  const fallbackName = fields.codigoBarra.value
+    ? `Codigo ${fields.codigoBarra.value}`
+    : `Producto escaneado ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })}`;
+  const quantitySuggestion = getScanQuantitySuggestion(extraction);
+  const unit = quantitySuggestion.unit || product?.unidad_default || unitFromPresentation(fields.formato.value) || "unidad";
+  const scanId = `scan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  return {
+    _scanId: scanId,
+    _scanResult: extraction,
+    nombre: fields.nombre.value || fallbackName,
+    nombreNormalizado: normalize(fields.nombre.value || fallbackName),
+    cantidad: quantitySuggestion.quantity,
+    _quantitySource: quantitySuggestion.source,
+    _quantityNeedsReview: quantitySuggestion.quantity <= 0,
+    unidad: UNIT_OPTIONS.includes(unit) ? unit : "unidad",
+    fechaRecepcion: elements.operatorReceiptDate.value || formatIsoDate(new Date()),
+    fechaVencimiento: fields.fechaVencimiento.value || null,
+    critico: false,
+    lote: fields.lote.value || null,
+    observaciones: buildContinuousScanObservation(extraction, ocr, reason)
+  };
+}
+
+function renderContinuousScanDetectedList() {
+  const captures = state.continuousScan.captures;
+  if (!elements.continuousScanDetectedList) return;
+  if (!captures.length) {
+    elements.continuousScanDetectedList.innerHTML = '<div class="empty compact-empty">Aun no hay capturas en esta sesion.</div>';
+    return;
+  }
+
+  elements.continuousScanDetectedList.innerHTML = captures.map((capture, index) => {
+    const fields = capture.extraction.fields;
+    const metaRows = [
+      fields.codigoBarra.value ? `Codigo ${fields.codigoBarra.value}` : "",
+      fields.tipoCodigo.value ? fields.tipoCodigo.value : "",
+      capture.extraction.barcodeEngine || "",
+      fields.productoVinculado.value === "no" ? "producto no vinculado" : ""
+    ].filter(Boolean).join(" - ");
+    const confidenceRows = [
+      ["Codigo", fields.codigoBarra],
+      ["Motor", buildScanField(capture.extraction.barcodeEngine || "-", 1, "barcode")],
+      ["Tipo", fields.tipoCodigo],
+      ["Nombre", fields.nombre],
+      ["Lote", fields.lote],
+      ["Vence", fields.fechaVencimiento],
+      ["Elab.", fields.fechaElaboracion],
+      ["Cant.", fields.cantidadDetectada],
+      ["Empaque", fields.tipoEmpaque],
+      ["Factor", fields.factorConversion],
+      ["GTIN", fields.gtin]
+    ].map(([label, field]) => `
+      <span>${escapeHtml(label)} <b>${escapeHtml(field.value ? formatScanConfidence(field.confidence) : "sin dato")}</b></span>
+    `).join("");
+    const ocrText = fields.textoOcr.value || capture.ocr.notice || "OCR no disponible.";
+    const learnButton = capture.extraction.productLinked ? "" : `<button class="btn small" type="button" data-scan-learn-row="${escapeHtml(capture.scanId)}">Aprender producto</button>`;
+    return `
+      <article class="scan-detected-card">
+        <header>
+          <div>
+            <strong>${index + 1}. ${escapeHtml(capture.row.nombre)}</strong>
+            <small>${escapeHtml(capture.reasonLabel)} - ${escapeHtml(formatDateTime(capture.createdAt))}</small>
+            <small>${escapeHtml(metaRows || "sin datos adicionales")}</small>
+          </div>
+          <div class="scan-card-actions">
+            ${learnButton}
+            <button class="btn small" type="button" data-scan-edit-row="${escapeHtml(capture.scanId)}">Editar fila</button>
+          </div>
+        </header>
+        <div class="scan-confidence-grid">${confidenceRows}</div>
+        <div class="scan-ocr-snippet">${escapeHtml(ocrText)}</div>
+      </article>
+    `;
+  }).join("");
+}
+
+async function captureContinuousScanFrame({ barcodes, metrics, reason }) {
+  const scan = state.continuousScan;
+  const canvas = elements.continuousScanCanvas;
+  const barcode = barcodes[0]
+    ? {
+      rawValue: barcodes[0].rawValue || "",
+      format: barcodes[0].format || "",
+      engine: barcodes[0].engine || "",
+      confidence: barcodes[0].confidence || 1
+    }
+    : null;
+  const ocr = buildDeferredOcrResult(canvas);
+  const extraction = buildContinuousScanExtraction({ barcode, text: ocr.text });
+  const row = continuousScanExtractionToPosRow(extraction, ocr, reason);
+  state.operatorSessionRows = [...state.operatorSessionRows, row];
+  scan.lastCaptureAt = Date.now();
+  scan.lastBarcode = normalizeScanCode(barcode?.rawValue || "");
+  const barcodeKey = normalizeEquivalentScanCode(scan.lastBarcode);
+  if (barcodeKey) {
+    scan.barcodeLockValue = barcodeKey;
+    scan.barcodeClearTicks = 0;
+    scan.recentBarcodeCaptures[barcodeKey] = scan.lastCaptureAt;
+  }
+  scan.candidateBarcodeKey = "";
+  scan.candidateBarcodeTicks = 0;
+  scan.lastSignature = metrics.signature;
+  scan.stableTicks = 0;
+  scan.lastScanSummary = {
+    code: extraction.fields.codigoBarra.value || "-",
+    engine: extraction.barcodeEngine || "-",
+    kind: extraction.codeKind || "-",
+    linked: extraction.productLinked
+  };
+  const capture = {
+    scanId: row._scanId,
+    createdAt: new Date().toISOString(),
+    reasonLabel: reason === "codigo_barra" ? "Codigo de barra" : "Estabilidad visual",
+    extraction,
+    ocr,
+    row
+  };
+  scan.captures = [capture, ...scan.captures].slice(0, 12);
+  renderPosSession("operator");
+  renderContinuousScanDetectedList();
+  renderContinuousScanCapabilities();
+  beepContinuousScan();
+  setContinuousScanStatus(`Captura agregada: ${row.nombre}. Sigue el siguiente producto.`);
+}
+
+function beepContinuousScan() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.13);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.14);
+    window.setTimeout(() => context.close(), 240);
+  } catch (error) {
+    console.warn("No se pudo emitir beep", error);
+  }
+}
+
+function setProductLearningStatus(message) {
+  if (elements.productLearningStatus) elements.productLearningStatus.textContent = message;
+}
+
+function getSelectedLearningProduct() {
+  return state.products.find((product) => String(product.id) === String(state.productLearning.selectedProductId)) || null;
+}
+
+function getProductBaseUnit(productId) {
+  const product = state.products.find((item) => String(item.id) === String(productId));
+  return product?.unidad_default || "unidad";
+}
+
+function readPositiveNumberInput(input) {
+  const value = Number(String(input?.value || "").replace(",", "."));
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function getPackageUnitLabel(unit) {
+  const labels = {
+    unidad: "unidad",
+    kg: "kg",
+    g: "g",
+    lt: "litro",
+    ml: "ml",
+    caja: "caja",
+    manga: "manga",
+    pack: "pack",
+    paquete: "paquete"
+  };
+  return labels[unit] || unit || "-";
+}
+
+function getDetectedPackageQuantityHint(extraction = state.productLearning.currentExtraction) {
+  const fields = extraction?.fields || {};
+  const detected = Number(fields.cantidadPorCaja?.value || fields.cantidadDetectada?.value || 0);
+  return Number.isFinite(detected) && detected > 0 ? detected : null;
+}
+
+function clearProductLearningPackageRule() {
+  [
+    elements.productLearningPackageType,
+    elements.productLearningPackageQuantity,
+    elements.productLearningPackageUnit,
+    elements.productLearningBaseUnit,
+    elements.productLearningConversionFactor,
+    elements.productLearningConversionNotes
+  ].forEach((input) => {
+    if (input) input.value = "";
+  });
+  syncProductLearningAcceptState();
+}
+
+function fillProductLearningPackageRuleFromLink(link) {
+  if (!link) return false;
+  if (!link.packageType && !link.packageQuantity && !link.packageUnit && !link.baseUnit && !link.conversionFactor) return false;
+  if (elements.productLearningPackageType) elements.productLearningPackageType.value = link.packageType || "";
+  if (elements.productLearningPackageQuantity) elements.productLearningPackageQuantity.value = link.packageQuantity ? String(link.packageQuantity) : "";
+  if (elements.productLearningPackageUnit) elements.productLearningPackageUnit.value = link.packageUnit || "";
+  if (elements.productLearningBaseUnit) elements.productLearningBaseUnit.value = link.baseUnit || getProductBaseUnit(link.productId);
+  if (elements.productLearningConversionFactor) elements.productLearningConversionFactor.value = link.conversionFactor ? String(link.conversionFactor) : "";
+  if (elements.productLearningConversionNotes) elements.productLearningConversionNotes.value = link.conversionNotes || "";
+  syncProductLearningAcceptState();
+  return true;
+}
+
+function prepareProductLearningPackageRule({ preferExisting = true } = {}) {
+  const extraction = state.productLearning.currentExtraction;
+  const product = getSelectedLearningProduct();
+  const existingLink = preferExisting ? getExistingLearningLink(extraction) : null;
+  if (existingLink && String(existingLink.productId) === String(product?.id) && fillProductLearningPackageRuleFromLink(existingLink)) {
+    if (elements.productLearningPackageHint) {
+      elements.productLearningPackageHint.textContent = `Regla actual: ${existingLink.packageType || "empaque"} equivale a ${formatNumber(existingLink.conversionFactor || 0)} ${getPackageUnitLabel(existingLink.baseUnit)}.`;
+    }
+    return;
+  }
+
+  if (!product) {
+    clearProductLearningPackageRule();
+    if (elements.productLearningPackageHint) {
+      elements.productLearningPackageHint.textContent = "Selecciona producto y confirma la cantidad real que representa este codigo.";
+    }
+    return;
+  }
+
+  clearProductLearningPackageRule();
+  if (elements.productLearningBaseUnit) elements.productLearningBaseUnit.value = getProductBaseUnit(product.id);
+  const detectedQuantity = getDetectedPackageQuantityHint(extraction);
+  if (elements.productLearningPackageQuantity) elements.productLearningPackageQuantity.placeholder = detectedQuantity ? `Detectado: ${detectedQuantity}` : "Ej. 12";
+  if (elements.productLearningConversionFactor) elements.productLearningConversionFactor.placeholder = "Confirmar cantidad";
+  if (elements.productLearningPackageHint) {
+    elements.productLearningPackageHint.textContent = detectedQuantity
+      ? `Se detecto ${formatNumber(detectedQuantity)} como posible contenido. Confirma el factor real antes de guardar.`
+      : "Confirma manualmente cuanto representa este codigo en la unidad base del producto.";
+  }
+  syncProductLearningAcceptState();
+}
+
+function getProductLearningPackageRule({ throwOnInvalid = false } = {}) {
+  const product = getSelectedLearningProduct();
+  const packageType = elements.productLearningPackageType?.value || "";
+  const packageQuantity = readPositiveNumberInput(elements.productLearningPackageQuantity);
+  const packageUnit = elements.productLearningPackageUnit?.value || "";
+  const baseUnit = elements.productLearningBaseUnit?.value || product?.unidad_default || "";
+  const conversionFactor = readPositiveNumberInput(elements.productLearningConversionFactor);
+  const conversionNotes = elements.productLearningConversionNotes?.value.trim() || "";
+  const errors = [];
+  if (!packageType) errors.push("tipo de empaque");
+  if (!packageQuantity) errors.push("cantidad contenida");
+  if (!packageUnit) errors.push("unidad de contenido");
+  if (!baseUnit) errors.push("unidad base");
+  if (!conversionFactor) errors.push("factor de conversion");
+  if (errors.length && throwOnInvalid) {
+    throw new Error(`Completa regla de empaque: ${errors.join(", ")}.`);
+  }
+  return {
+    valid: errors.length === 0,
+    packageType,
+    packageQuantity: packageQuantity || null,
+    packageUnit,
+    baseUnit,
+    conversionFactor: conversionFactor || null,
+    conversionNotes
+  };
+}
+
+function syncProductLearningAcceptState() {
+  if (!elements.acceptProductLearningBtn) return;
+  const hasExtraction = Boolean(state.productLearning.currentExtraction);
+  const hasProduct = Boolean(state.productLearning.selectedProductId);
+  const packageRule = getProductLearningPackageRule();
+  elements.acceptProductLearningBtn.disabled = !(hasExtraction && hasProduct && packageRule.valid);
+}
+
+function getProductLearningCodeKey(extraction) {
+  if (!extraction) return "";
+  return normalizeEquivalentScanCode(extraction.fields?.gtin?.value || extraction.fields?.codigoBarra?.value || "");
+}
+
+function getExistingLearningLink(extraction = state.productLearning.currentExtraction) {
+  if (!extraction) return null;
+  return findProductCodeLinkByScanCode(extraction.fields?.codigoBarra?.value || "", extraction.fields?.gtin?.value || "");
+}
+
+function renderProductLearningCapabilities() {
+  const scan = state.productLearning;
+  if (!elements.productLearningCapabilities) return;
+  const extraction = scan.currentExtraction;
+  const existingLink = getExistingLearningLink(extraction);
+  const rows = [
+    ["Camara", scan.stream ? "activa" : "pendiente"],
+    ["Linterna", scan.torchSupported ? (scan.torchEnabled ? "activa" : "soportada") : "no disponible"],
+    ["Barcode", scan.barcodeSupported ? "activo" : "no disponible"],
+    ["ZXing", scan.zxingSupported ? "fallback activo" : "no disponible"],
+    ["Codigo", extraction?.fields?.codigoBarra?.value || "-"],
+    ["Vinculo", existingLink ? "aprendido" : (extraction ? "no vinculado" : "-")]
+  ];
+  elements.productLearningCapabilities.innerHTML = rows.map(([label, value]) => `
+    <span>${escapeHtml(label)} <b>${escapeHtml(value)}</b></span>
+  `).join("");
+}
+
+function renderProductLearningDetected() {
+  const extraction = state.productLearning.currentExtraction;
+  if (!elements.productLearningDetected) return;
+  if (!extraction) {
+    elements.productLearningDetected.innerHTML = '<div class="empty compact-empty">Apunta la camara a una etiqueta o codigo.</div>';
+    if (elements.productLearningCurrentLink) elements.productLearningCurrentLink.hidden = true;
+    syncProductLearningAcceptState();
+    return;
+  }
+
+  const fields = extraction.fields;
+  const metaRows = [
+    ["Codigo", fields.codigoBarra.value || "-"],
+    ["Tipo", fields.tipoCodigo.value || "-"],
+    ["Motor", extraction.barcodeEngine || "-"],
+    ["GTIN", fields.gtin.value || "-"],
+    ["Lote", fields.lote.value || "-"],
+    ["Vence", fields.fechaVencimiento.value ? formatDisplayDate(fields.fechaVencimiento.value) : "-"],
+    ["Elab.", fields.fechaElaboracion.value ? formatDisplayDate(fields.fechaElaboracion.value) : "-"],
+    ["Cant.", fields.cantidadPorCaja.value || fields.cantidadDetectada.value || "-"],
+    ["Empaque", fields.tipoEmpaque.value || "-"],
+    ["Factor", fields.factorConversion.value || "-"]
+  ].map(([label, value]) => `<span>${escapeHtml(label)}<b>${escapeHtml(value)}</b></span>`).join("");
+  elements.productLearningDetected.innerHTML = `
+    <div>
+      <strong>${escapeHtml(fields.codigoBarra.value || fields.gtin.value || "Lectura detectada")}</strong>
+      <small>${escapeHtml(fields.productoVinculado.value === "si" ? "Producto ya vinculado" : "Selecciona el producto correcto del inventario")}</small>
+    </div>
+    <div class="learning-meta-grid">${metaRows}</div>
+  `;
+
+  const existingLink = getExistingLearningLink(extraction);
+  if (elements.productLearningCurrentLink) {
+    const linkedProduct = getProductFromCodeLink(existingLink);
+    elements.productLearningCurrentLink.hidden = !existingLink;
+    elements.productLearningCurrentLink.innerHTML = existingLink
+      ? `Actualmente vinculado a <b>${escapeHtml(linkedProduct?.nombre || "producto no encontrado")}</b>. Puedes confirmarlo o elegir otro producto.`
+      : "";
+  }
+  syncProductLearningAcceptState();
+}
+
+function getProductLearningSearchText(product) {
+  const productId = product?.id;
+  const lots = state.inventory.filter((item) => String(item.productoId) === String(productId));
+  return normalize([
+    product?.nombre,
+    product?.nombre_normalizado,
+    product?.codigoProducto,
+    getProductCode(productId),
+    product?.unidad_default,
+    lots.map((lot) => `${lot.nombre} ${lot.observaciones || ""} ${lot.lote || ""} ${lot.cantidadPorCaja || ""}`).join(" ")
+  ].filter(Boolean).join(" "));
+}
+
+function searchProductsForLearning(query) {
+  const clean = normalize(query || "");
+  const selectedId = state.productLearning.selectedProductId;
+  const existingProductId = getExistingLearningLink()?.productId;
+  if (!clean) {
+    const seedId = selectedId || existingProductId;
+    const seeded = seedId ? state.products.find((product) => String(product.id) === String(seedId)) : null;
+    return seeded ? [seeded] : [];
+  }
+  const terms = clean.split(" ").filter(Boolean);
+  return state.products
+    .map((product) => {
+      const text = getProductLearningSearchText(product);
+      let score = 0;
+      if (text.includes(clean)) score += 20;
+      terms.forEach((term) => {
+        if (text.includes(term)) score += 4;
+      });
+      if (String(product.id) === String(selectedId)) score += 30;
+      if (String(product.id) === String(existingProductId)) score += 12;
+      return { product, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || String(a.product.nombre).localeCompare(String(b.product.nombre)))
+    .slice(0, 10)
+    .map((item) => item.product);
+}
+
+function renderProductLearningResults() {
+  if (!elements.productLearningResults) return;
+  const extraction = state.productLearning.currentExtraction;
+  if (!extraction) {
+    elements.productLearningResults.innerHTML = '<div class="empty compact-empty">Primero detecta un codigo.</div>';
+    return;
+  }
+  const query = elements.productLearningSearch?.value || "";
+  const products = searchProductsForLearning(query);
+  if (!products.length) {
+    elements.productLearningResults.innerHTML = '<div class="empty compact-empty">Busca y selecciona un producto existente.</div>';
+    return;
+  }
+  elements.productLearningResults.innerHTML = products.map((product) => {
+    const selected = String(product.id) === String(state.productLearning.selectedProductId);
+    const packQuantity = findProductPackQuantity(product.id);
+    const meta = [getProductCode(product.id), product.unidad_default, packQuantity ? `caja/manga ${packQuantity}` : ""].filter(Boolean).join(" - ");
+    return `
+      <button class="learning-product-option ${selected ? "selected" : ""}" type="button" data-learning-product-id="${escapeHtml(product.id)}">
+        <strong>${escapeHtml(product.nombre)}</strong>
+        <small>${escapeHtml(meta || "Producto del inventario")}</small>
+      </button>
+    `;
+  }).join("");
+}
+
+function selectProductForLearning(productId) {
+  const product = state.products.find((item) => String(item.id) === String(productId));
+  if (!product) return;
+  state.productLearning.selectedProductId = product.id;
+  if (elements.productLearningSearch) elements.productLearningSearch.value = product.nombre;
+  prepareProductLearningPackageRule({ preferExisting: true });
+  renderProductLearningDetected();
+  renderProductLearningResults();
+}
+
+function resetProductLearningCurrent({ rememberCode = false } = {}) {
+  const scan = state.productLearning;
+  if (rememberCode && scan.currentExtraction) {
+    scan.lastCompletedCode = getProductLearningCodeKey(scan.currentExtraction);
+    scan.lastCompletedAt = Date.now();
+  }
+  scan.currentExtraction = null;
+  scan.currentOcr = null;
+  scan.currentBarcodeKey = "";
+  scan.candidateBarcodeKey = "";
+  scan.candidateBarcodeTicks = 0;
+  scan.selectedProductId = null;
+  if (elements.productLearningSearch) elements.productLearningSearch.value = "";
+  clearProductLearningPackageRule();
+  renderProductLearningDetected();
+  renderProductLearningResults();
+  renderProductLearningCapabilities();
+}
+
+function resetProductLearningStateForSession() {
+  Object.assign(state.productLearning, {
+    barcodeDetector: null,
+    barcodeSupported: false,
+    zxingReader: null,
+    zxingSupported: false,
+    lastZxingAttemptAt: 0,
+    torchSupported: false,
+    torchEnabled: false,
+    processing: false,
+    currentExtraction: null,
+    currentOcr: null,
+    currentBarcodeKey: "",
+    selectedProductId: null,
+    lastCompletedCode: "",
+    lastCompletedAt: 0
+  });
+  resetProductLearningCurrent();
+  setProductLearningStatus("Esperando camara...");
+}
+
+function setProductLearningResult(extraction, ocr) {
+  const scan = state.productLearning;
+  scan.currentExtraction = extraction;
+  scan.currentOcr = ocr;
+  scan.currentBarcodeKey = getProductLearningCodeKey(extraction);
+  const existingLink = getExistingLearningLink(extraction);
+  const linkedProduct = getProductFromCodeLink(existingLink);
+  scan.selectedProductId = linkedProduct?.id || null;
+  if (elements.productLearningSearch) elements.productLearningSearch.value = linkedProduct?.nombre || "";
+  prepareProductLearningPackageRule({ preferExisting: true });
+  renderProductLearningDetected();
+  renderProductLearningResults();
+  renderProductLearningCapabilities();
+}
+
+async function startProductLearningScanner() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Este navegador no permite usar la camara desde la PWA.");
+  }
+
+  const scan = state.productLearning;
+  setProductLearningStatus("Solicitando permiso de camara...");
+  renderProductLearningCapabilities();
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      facingMode: { ideal: "environment" },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    }
+  });
+
+  scan.stream = stream;
+  scan.track = stream.getVideoTracks()[0] || null;
+  elements.productLearningVideo.srcObject = stream;
+  await waitForVideoReady(elements.productLearningVideo);
+  const videoStatus = await playContinuousScanVideo(elements.productLearningVideo);
+
+  await tryEnableScannerTorch(scan);
+  try {
+    scan.barcodeDetector = await createBarcodeDetectorInstance();
+    scan.barcodeSupported = Boolean(scan.barcodeDetector);
+  } catch (error) {
+    console.warn("BarcodeDetector no disponible para aprendizaje", error);
+    scan.barcodeDetector = null;
+    scan.barcodeSupported = false;
+  }
+  try {
+    scan.zxingReader = createZxingReaderInstance();
+    scan.zxingSupported = Boolean(scan.zxingReader);
+  } catch (error) {
+    console.warn("ZXing no disponible para aprendizaje", error);
+    scan.zxingReader = null;
+    scan.zxingSupported = false;
+  }
+
+  scan.running = true;
+  renderProductLearningCapabilities();
+  const warnings = [];
+  if (!scan.torchSupported) warnings.push("linterna no soportada");
+  if (!scan.barcodeSupported && !scan.zxingSupported) warnings.push("lector de codigos no disponible");
+  const cameraStatus = elements.productLearningVideo.videoWidth ? "Camara activa" : `Camara autorizada; ${videoStatus}`;
+  setProductLearningStatus(warnings.length ? `${cameraStatus}; ${warnings.join(", ")}.` : `${cameraStatus}. Esperando etiqueta.`);
+  productLearningLoop();
+}
+
+async function openProductLearningModal({ initialExtraction = null, initialOcr = null } = {}) {
+  clearError();
+  resetProductLearningStateForSession();
+  elements.productLearningModal.hidden = false;
+  try {
+    await loadProductCodeLinks();
+    await startProductLearningScanner();
+    if (initialExtraction) {
+      setProductLearningResult(initialExtraction, initialOcr || buildDeferredOcrResult());
+      setProductLearningStatus("Lectura cargada. Selecciona producto y acepta.");
+    }
+  } catch (error) {
+    setProductLearningStatus(getSupabaseErrorMessage(error));
+    renderProductLearningCapabilities();
+    showToastError("No se pudo iniciar aprendizaje por camara.");
+    if (initialExtraction) setProductLearningResult(initialExtraction, initialOcr || buildDeferredOcrResult());
+  }
+}
+
+function stopProductLearningScanner() {
+  const scan = state.productLearning;
+  if (scan.loopTimer) window.clearTimeout(scan.loopTimer);
+  scan.loopTimer = null;
+  scan.running = false;
+  scan.processing = false;
+  if (scan.stream) scan.stream.getTracks().forEach((track) => track.stop());
+  scan.stream = null;
+  scan.track = null;
+  scan.torchEnabled = false;
+  if (elements.productLearningVideo) elements.productLearningVideo.srcObject = null;
+  renderProductLearningCapabilities();
+}
+
+function closeProductLearningModal() {
+  stopProductLearningScanner();
+  elements.productLearningModal.hidden = true;
+}
+
+function finishProductLearning() {
+  closeProductLearningModal();
+  showToastSuccess("Aprendizaje finalizado.");
+}
+
+async function productLearningLoop() {
+  const scan = state.productLearning;
+  if (!scan.running) return;
+  if (!scan.currentExtraction && !scan.processing) {
+    scan.processing = true;
+    try {
+      await processProductLearningFrame();
+    } catch (error) {
+      console.warn("Error en aprendizaje de productos", error);
+    } finally {
+      scan.processing = false;
+    }
+  }
+  scan.loopTimer = window.setTimeout(productLearningLoop, PRODUCT_LEARNING_SCAN_INTERVAL_MS);
+}
+
+async function processProductLearningFrame() {
+  const scan = state.productLearning;
+  const video = elements.productLearningVideo;
+  if (!video?.videoWidth || !video?.videoHeight) return;
+
+  let barcodes = await detectBarcodesWithBarcodeDetectorForScanner(video, scan);
+  if (!barcodes.length) barcodes = await detectBarcodesWithZxingForScanner(video, scan);
+  const barcode = barcodes[0];
+  if (!barcode?.rawValue) {
+    scan.candidateBarcodeKey = "";
+    scan.candidateBarcodeTicks = 0;
+    setProductLearningStatus("Buscando etiqueta o codigo...");
+    return;
+  }
+
+  const rawKey = normalizeEquivalentScanCode(barcode.rawValue);
+  const barcodeCandidate = updateScanBarcodeCandidate(scan, barcode.rawValue, PRODUCT_LEARNING_BARCODE_STABLE_TICKS);
+  if (!barcodeCandidate.stable) {
+    setProductLearningStatus(`Confirmando codigo ${barcode.rawValue} (${barcodeCandidate.ticks}/${PRODUCT_LEARNING_BARCODE_STABLE_TICKS})...`);
+    return;
+  }
+  if (rawKey && scan.lastCompletedCode === rawKey && Date.now() - scan.lastCompletedAt < PRODUCT_LEARNING_REPEAT_GRACE_MS) {
+    setProductLearningStatus("Producto aprendido. Retira o cambia la etiqueta para continuar.");
+    return;
+  }
+
+  const ocr = buildDeferredOcrResult();
+  const extraction = buildContinuousScanExtraction({ barcode, text: ocr.text });
+  const extractionKey = getProductLearningCodeKey(extraction);
+  if (!extractionKey) return;
+  if (scan.lastCompletedCode === extractionKey && Date.now() - scan.lastCompletedAt < PRODUCT_LEARNING_REPEAT_GRACE_MS) {
+    setProductLearningStatus("Producto aprendido. Retira o cambia la etiqueta para continuar.");
+    return;
+  }
+
+  setProductLearningResult(extraction, ocr);
+  beepContinuousScan();
+  setProductLearningStatus("Codigo detectado. Selecciona producto y acepta.");
+}
+
+function buildProductCodeLinkPayloadFromLearning(extraction, productId, packageRule) {
+  const fields = extraction.fields;
+  const barcode = extraction.sources?.barcode || {};
+  const codeRaw = barcode.rawValue || fields.codigoBarra.value || fields.gtin.value;
+  const codeNormalized = normalizeEquivalentScanCode(fields.gtin.value || fields.codigoBarra.value || codeRaw);
+  const confidence = Math.max(
+    fields.codigoBarra.confidence || 0,
+    fields.gtin.confidence || 0,
+    fields.lote.confidence || 0,
+    fields.fechaVencimiento.confidence || 0,
+    fields.cantidadPorCaja.confidence || 0
+  );
+  const detectedQuantity = Number(fields.cantidadPorCaja.value || fields.cantidadDetectada.value || 0);
+  return {
+    productId,
+    codeRaw,
+    codeNormalized,
+    codeType: fields.tipoCodigo.value || extraction.codeKind || "simple",
+    gtin: fields.gtin.value || null,
+    barcodeFormat: extraction.barcodeFormat || barcode.format || null,
+    gs1Payload: extraction.sources?.gs1 || {},
+    detectedLot: fields.lote.value || null,
+    detectedExpiry: fields.fechaVencimiento.value || null,
+    detectedMfgDate: fields.fechaElaboracion.value || null,
+    detectedQuantity: detectedQuantity > 0 ? detectedQuantity : null,
+    packageType: packageRule.packageType,
+    packageQuantity: packageRule.packageQuantity,
+    packageUnit: packageRule.packageUnit,
+    baseUnit: packageRule.baseUnit,
+    conversionFactor: packageRule.conversionFactor,
+    conversionNotes: packageRule.conversionNotes,
+    source: "camera_learning",
+    confidence,
+    createdBy: state.currentUser?.id || null,
+    isActive: true
+  };
+}
+
+async function acceptProductLearning() {
+  const scan = state.productLearning;
+  if (!scan.currentExtraction) {
+    showToastError("Primero detecta un codigo.");
+    return;
+  }
+  if (!scan.selectedProductId) {
+    showToastError("Selecciona un producto.");
+    return;
+  }
+  let packageRule;
+  try {
+    packageRule = getProductLearningPackageRule({ throwOnInvalid: true });
+  } catch (error) {
+    showToastError(error.message);
+    return;
+  }
+
+  elements.acceptProductLearningBtn.disabled = true;
+  elements.acceptProductLearningBtn.textContent = "Guardando...";
+  try {
+    const payload = buildProductCodeLinkPayloadFromLearning(scan.currentExtraction, scan.selectedProductId, packageRule);
+    const saved = await productCodeLinkService.upsert(payload);
+    state.productCodeLinks = [
+      saved,
+      ...state.productCodeLinks.filter((link) =>
+        String(link.id) !== String(saved.id) &&
+        normalizeEquivalentScanCode(link.codeNormalized) !== normalizeEquivalentScanCode(saved.codeNormalized)
+      )
+    ];
+    updateProductCodesFromClinicalRows();
+    renderProductSuggestions();
+    showToastSuccess("Producto aprendido");
+    resetProductLearningCurrent({ rememberCode: true });
+    setProductLearningStatus("Producto aprendido. Esperando el siguiente.");
+  } catch (error) {
+    showError("No se pudo guardar el producto aprendido", error);
+  } finally {
+    elements.acceptProductLearningBtn.textContent = "Aceptar y continuar";
+    syncProductLearningAcceptState();
+  }
+}
+
+function skipProductLearning() {
+  if (!state.productLearning.currentExtraction) {
+    setProductLearningStatus("Buscando etiqueta o codigo...");
+    return;
+  }
+  resetProductLearningCurrent({ rememberCode: true });
+  setProductLearningStatus("Lectura omitida. Esperando el siguiente producto.");
+}
+
 function getPendingRows(tableBody) {
   return [...tableBody.querySelectorAll("tr")].map((tr) => {
     const row = {};
@@ -10462,6 +12536,12 @@ async function createPendingEntryFromOperator() {
   const receiptDate = elements.operatorReceiptDate.value || formatIsoDate(new Date());
   const validRows = state.operatorSessionRows;
   if (!validRows.length) throw new Error("Agrega al menos un producto.");
+  const quantityPending = validRows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => !Number(row.cantidad) || Number(row.cantidad) <= 0);
+  if (quantityPending.length) {
+    throw new Error(`Edita cantidad antes de enviar: ${quantityPending.map(({ row, index }) => `fila ${index + 1} ${row.nombre}`).join("; ")}.`);
+  }
 
   const entry = {
     creado_por: state.currentUser.id,
@@ -11045,6 +13125,51 @@ elements.operatorProductForm.addEventListener("submit", (event) => {
 document.getElementById("operatorCancelEntry").addEventListener("click", () => {
   resetPosSession("operator");
 });
+elements.startContinuousScanBtn.addEventListener("click", openContinuousScanModal);
+document.getElementById("closeContinuousScanModal").addEventListener("click", closeContinuousScanModal);
+elements.continuousScanModal.addEventListener("click", (event) => {
+  if (event.target === elements.continuousScanModal) closeContinuousScanModal();
+});
+elements.pauseContinuousScanBtn.addEventListener("click", toggleContinuousScanPause);
+elements.finishContinuousScanBtn.addEventListener("click", finishContinuousScan);
+elements.continuousScanDetectedList.addEventListener("click", (event) => {
+  const learnButton = event.target.closest("[data-scan-learn-row]");
+  if (learnButton) {
+    const capture = state.continuousScan.captures.find((item) => item.scanId === learnButton.dataset.scanLearnRow);
+    closeContinuousScanModal();
+    if (capture) openProductLearningModal({ initialExtraction: capture.extraction, initialOcr: capture.ocr });
+    return;
+  }
+  const editButton = event.target.closest("[data-scan-edit-row]");
+  if (!editButton) return;
+  const index = state.operatorSessionRows.findIndex((row) => row._scanId === editButton.dataset.scanEditRow);
+  closeContinuousScanModal();
+  if (index >= 0) editPosRow("operator", index);
+});
+elements.learnProductsBtn?.addEventListener("click", () => openProductLearningModal());
+document.getElementById("closeProductLearningModal").addEventListener("click", closeProductLearningModal);
+elements.productLearningModal.addEventListener("click", (event) => {
+  if (event.target === elements.productLearningModal) closeProductLearningModal();
+});
+elements.productLearningSearch.addEventListener("input", renderProductLearningResults);
+elements.productLearningResults.addEventListener("click", (event) => {
+  const productButton = event.target.closest("[data-learning-product-id]");
+  if (productButton) selectProductForLearning(productButton.dataset.learningProductId);
+});
+[
+  elements.productLearningPackageType,
+  elements.productLearningPackageQuantity,
+  elements.productLearningPackageUnit,
+  elements.productLearningBaseUnit,
+  elements.productLearningConversionFactor,
+  elements.productLearningConversionNotes
+].forEach((input) => {
+  input?.addEventListener("input", syncProductLearningAcceptState);
+  input?.addEventListener("change", syncProductLearningAcceptState);
+});
+elements.productLearningSkipBtn.addEventListener("click", skipProductLearning);
+elements.finishProductLearningBtn.addEventListener("click", finishProductLearning);
+elements.acceptProductLearningBtn.addEventListener("click", acceptProductLearning);
 elements.sendPendingBtn.addEventListener("click", async () => {
   elements.sendPendingBtn.disabled = true;
   elements.sendPendingBtn.textContent = "Enviando...";

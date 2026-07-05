@@ -1,9 +1,10 @@
-const CACHE_NAME = "jesunutri-pwa-v21";
+const CACHE_NAME = "jesunutri-pwa-v25";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./script.js",
+  "./vendor/zxing-browser.min.js",
   "./logo.png",
   "./icon-192.png",
   "./icon-512.png",

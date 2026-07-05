@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Jesunutri">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=15">
+    <link rel="stylesheet" href="styles.css?v=22">
   </head>
   <body>
     <section class="app-splash" id="appSplash">
@@ -58,8 +58,11 @@
               <h2>Ingreso pendiente</h2>
               <p>Registra productos para que Jesu revise y apruebe.</p>
             </div>
-            <div class="receipt-display pos-receipt">Recepcion: <strong id="operatorReceiptDisplay"></strong></div>
-            <input id="operatorReceiptDate" type="date" hidden>
+            <div class="operator-scan-actions">
+              <button class="btn scan-entry-btn" type="button" id="startContinuousScanBtn">Escanear productos</button>
+              <div class="receipt-display pos-receipt">Recepcion: <strong id="operatorReceiptDisplay"></strong></div>
+              <input id="operatorReceiptDate" type="date" hidden>
+            </div>
           </div>
 
           <div class="bulk-error-list" id="operatorBulkErrorList" hidden></div>
@@ -155,6 +158,7 @@
         <div class="actions header-actions">
           <button class="btn primary action-tile" type="button" id="bulkEntryBtn">Ingreso masivo</button>
           <button class="btn use-stock-btn action-tile" type="button" id="useStockBtn">Stock consumido</button>
+          <button class="btn action-tile learn-products-btn" type="button" id="learnProductsBtn">Aprender productos</button>
           <button class="btn action-tile" type="button" id="labelsBtn">Etiquetas</button>
           <button class="btn action-tile daily-task-tile" type="button" id="dailyTasksBtn">Tareas del dia</button>
           <button class="btn action-tile" type="button" id="adjustStockBtn">Ajuste inventario</button>
@@ -1113,6 +1117,134 @@
       </section>
     </div>
 
+    <div class="modal-backdrop scan-modal-backdrop" id="continuousScanModal" hidden>
+      <section class="modal continuous-scan-modal" role="dialog" aria-modal="true" aria-labelledby="continuousScanTitle">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Camara</p>
+            <h2 id="continuousScanTitle">Escanear productos</h2>
+            <p class="modal-copy">Los resultados quedan en revision, no modifican inventario.</p>
+          </div>
+          <button class="icon-btn" type="button" id="closeContinuousScanModal" aria-label="Cerrar">x</button>
+        </div>
+
+        <div class="scan-layout">
+          <div class="scan-camera-shell">
+            <video id="continuousScanVideo" autoplay muted playsinline></video>
+            <canvas id="continuousScanCanvas" hidden></canvas>
+            <div class="scan-frame" aria-hidden="true"></div>
+            <div class="scan-live-status" id="continuousScanStatus">Esperando camara...</div>
+          </div>
+          <aside class="scan-side-panel">
+            <div class="scan-capability-list" id="scanCapabilitiesStatus"></div>
+            <div class="scan-detected-list" id="continuousScanDetectedList">
+              <div class="empty compact-empty">Aun no hay capturas en esta sesion.</div>
+            </div>
+          </aside>
+        </div>
+
+        <div class="form-actions scan-actions">
+          <button class="btn" type="button" id="pauseContinuousScanBtn">Pausar escaneo</button>
+          <button class="btn primary" type="button" id="finishContinuousScanBtn">Finalizar</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop scan-modal-backdrop" id="productLearningModal" hidden>
+      <section class="modal continuous-scan-modal product-learning-modal" role="dialog" aria-modal="true" aria-labelledby="productLearningTitle">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Camara</p>
+            <h2 id="productLearningTitle">Aprender productos</h2>
+            <p class="modal-copy">Guarda relaciones codigo-producto. No modifica inventario.</p>
+          </div>
+          <button class="icon-btn" type="button" id="closeProductLearningModal" aria-label="Cerrar">x</button>
+        </div>
+
+        <div class="scan-layout">
+          <div class="scan-camera-shell">
+            <video id="productLearningVideo" autoplay muted playsinline></video>
+            <canvas id="productLearningCanvas" hidden></canvas>
+            <div class="scan-frame" aria-hidden="true"></div>
+            <div class="scan-live-status" id="productLearningStatus">Esperando camara...</div>
+          </div>
+          <aside class="scan-side-panel product-learning-panel">
+            <div class="scan-capability-list" id="productLearningCapabilities"></div>
+            <article class="learning-detected-card" id="productLearningDetected">
+              <div class="empty compact-empty">Apunta la camara a una etiqueta o codigo.</div>
+            </article>
+            <div class="learning-current-link" id="productLearningCurrentLink" hidden></div>
+            <label class="learning-product-search">
+              <span>Producto del inventario</span>
+              <input id="productLearningSearch" type="search" placeholder="Buscar por nombre, codigo o formato">
+            </label>
+            <div class="learning-product-results" id="productLearningResults"></div>
+            <section class="learning-package-rule" id="productLearningPackageRule">
+              <div class="learning-rule-grid">
+                <label>
+                  <span>Tipo de empaque</span>
+                  <select id="productLearningPackageType">
+                    <option value="">Seleccionar</option>
+                    <option value="unidad">Unidad</option>
+                    <option value="caja">Caja</option>
+                    <option value="manga">Manga</option>
+                    <option value="pack">Pack</option>
+                    <option value="otro">Otro</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Cantidad contenida</span>
+                  <input id="productLearningPackageQuantity" type="number" min="0" step="0.001" inputmode="decimal" placeholder="Ej. 12">
+                </label>
+                <label>
+                  <span>Unidad de contenido</span>
+                  <select id="productLearningPackageUnit">
+                    <option value="">Seleccionar</option>
+                    <option value="unidad">Unidad</option>
+                    <option value="kg">kg</option>
+                    <option value="g">g</option>
+                    <option value="lt">Litro</option>
+                    <option value="ml">ml</option>
+                    <option value="caja">Caja</option>
+                    <option value="manga">Manga</option>
+                    <option value="pack">Pack</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Unidad base</span>
+                  <select id="productLearningBaseUnit">
+                    <option value="">Seleccionar</option>
+                    <option value="unidad">Unidad</option>
+                    <option value="kg">kg</option>
+                    <option value="g">g</option>
+                    <option value="lt">Litro</option>
+                    <option value="ml">ml</option>
+                    <option value="caja">Caja</option>
+                    <option value="paquete">Paquete</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Factor hacia unidad base</span>
+                  <input id="productLearningConversionFactor" type="number" min="0" step="0.001" inputmode="decimal" placeholder="Ej. 24">
+                </label>
+                <label class="learning-rule-notes">
+                  <span>Nota</span>
+                  <textarea id="productLearningConversionNotes" rows="2" placeholder="Ej. caja 12 litros"></textarea>
+                </label>
+              </div>
+              <p class="learning-package-hint" id="productLearningPackageHint">Selecciona producto y confirma la cantidad real que representa este codigo.</p>
+            </section>
+          </aside>
+        </div>
+
+        <div class="form-actions scan-actions">
+          <button class="btn" type="button" id="productLearningSkipBtn">Omitir</button>
+          <button class="btn" type="button" id="finishProductLearningBtn">Finalizar</button>
+          <button class="btn primary" type="button" id="acceptProductLearningBtn" disabled>Aceptar y continuar</button>
+        </div>
+      </section>
+    </div>
+
     <div class="modal-backdrop" id="bulkModal" hidden>
       <section class="modal bulk-modal" role="dialog" aria-modal="true" aria-labelledby="bulkModalTitle">
         <div class="modal-header">
@@ -1632,7 +1764,8 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="script.js?v=15"></script>
+    <script src="vendor/zxing-browser.min.js?v=22"></script>
+    <script src="script.js?v=22"></script>
   </body>
 </html>
 

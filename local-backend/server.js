@@ -9,15 +9,18 @@ const {
   deleteInventoryLot,
   ensureLocalAdminIfNoUsers,
   getInventorySnapshot,
+  getProductCodeLinkByCode,
   getStatus,
   importRowsIntoTable,
   insertMovements,
   installDatabase,
   listDailyTasks,
   listPendingEntries,
+  listProductCodeLinks,
   queryLocalTable,
   removeLocalAdminSeedIfPresent,
   saveDailyTask,
+  upsertProductCodeLink,
   updateDailyTask,
   updateInventoryEntry,
   updateLot,
@@ -262,6 +265,37 @@ app.patch("/api/tasks/:taskId", (req, res) => {
   try {
     const task = updateDailyTask(req.params.taskId, req.body?.task || req.body || {});
     res.json({ ok: true, task });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.get("/api/product-code-links", (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      links: listProductCodeLinks({ activeOnly: req.query.active !== "false" })
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.get("/api/product-code-links/:codeNormalized", (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      link: getProductCodeLinkByCode(req.params.codeNormalized)
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post("/api/product-code-links", (req, res) => {
+  try {
+    const link = upsertProductCodeLink(req.body?.link || req.body || {}, req.body?.userId || null);
+    res.json({ ok: true, link });
   } catch (error) {
     sendError(res, error);
   }

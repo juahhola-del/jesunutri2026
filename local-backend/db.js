@@ -26,7 +26,8 @@ const IMPORT_TABLES = [
   "clinical_daily_supply_items",
   "clinical_daily_import_errors",
   "clinical_product_links",
-  "clinical_demand_product_links"
+  "clinical_demand_product_links",
+  "product_code_links"
 ];
 const BOOLEAN_COLUMNS = new Set([
   "activo",
@@ -34,12 +35,14 @@ const BOOLEAN_COLUMNS = new Set([
   "favorito",
   "alerta_vencimiento_revisada",
   "desviacion_fifo",
-  "ignored"
+  "ignored",
+  "is_active"
 ]);
 const JSON_COLUMNS = new Set([
   "validations",
   "comparison",
-  "snapshot_data"
+  "snapshot_data",
+  "gs1_payload_json"
 ]);
 const IMPORT_CONFLICT_KEYS = {
   usuarios_app: [["email"]],
@@ -47,7 +50,8 @@ const IMPORT_CONFLICT_KEYS = {
   clinical_pac_years: [["year", "created_by"]],
   clinical_monthly_orders: [["year", "month", "created_by"]],
   clinical_product_links: [["source_type", "normalized_code", "normalized_name", "source_category", "created_by"]],
-  clinical_demand_product_links: [["detected_name", "detected_type", "created_by"]]
+  clinical_demand_product_links: [["detected_name", "detected_type", "created_by"]],
+  product_code_links: [["code_normalized"], ["product_id", "code_normalized"]]
 };
 const SELECT_ONLY_TABLES = new Set([
   "inventario_lotes_disponibles",
@@ -279,6 +283,7 @@ function getStatusFromDatabase(db) {
       movimientos: safeCount(db, "movimientos_inventario"),
       tareas: safeCount(db, "daily_tasks"),
       ingresosPendientes: safeCount(db, "ingresos_pendientes"),
+      productCodeLinks: safeCount(db, "product_code_links"),
       pacYears: safeCount(db, "clinical_pac_years"),
       demandasDiarias: safeCount(db, "clinical_daily_demands")
     }
@@ -623,6 +628,213 @@ function queryLocalTable(table, options = {}) {
     if (options.single) data = rows[0] || null;
     if (options.maybeSingle) data = rows[0] || null;
     return { data, count: Array.isArray(rows) ? rows.length : data ? 1 : 0 };
+  } finally {
+    db.close();
+  }
+}
+
+function normalizeProductLinkCode(value) {
+  return String(value || "").replace(/\s+/g, "").trim().toUpperCase();
+}
+
+function mapProductCodeLink(row) {
+  const parsed = deserializeRow(row);
+  if (!parsed) return null;
+  return {
+    ...parsed,
+    detected_quantity: parsed.detected_quantity == null ? null : Number(parsed.detected_quantity),
+    package_quantity: parsed.package_quantity == null ? null : Number(parsed.package_quantity),
+    conversion_factor: parsed.conversion_factor == null ? null : Number(parsed.conversion_factor),
+    confidence: Number(parsed.confidence || 0),
+    scan_count: Number(parsed.scan_count || 0),
+    is_active: Number(parsed.is_active) === 1
+  };
+}
+
+function listProductCodeLinks({ activeOnly = true } = {}) {
+  const db = openExistingDatabase();
+  try {
+    const rows = activeOnly
+      ? db.prepare("select * from product_code_links where is_active = 1 order by updated_at desc").all()
+      : db.prepare("select * from product_code_links order by updated_at desc").all();
+    return rows.map(mapProductCodeLink);
+  } finally {
+    db.close();
+  }
+}
+
+function getProductCodeLinkByCode(codeNormalized) {
+  const normalized = normalizeProductLinkCode(codeNormalized);
+  if (!normalized) return null;
+  const db = openExistingDatabase();
+  try {
+    const row = db.prepare("select * from product_code_links where code_normalized = ? limit 1").get(normalized);
+    return mapProductCodeLink(row);
+  } finally {
+    db.close();
+  }
+}
+
+function upsertProductCodeLink(payload = {}, userId = null) {
+  const productId = payload.product_id || payload.productId;
+  const codeRaw = String(payload.code_raw || payload.codeRaw || payload.gtin || "").trim();
+  const codeNormalized = normalizeProductLinkCode(payload.code_normalized || payload.codeNormalized || payload.gtin || codeRaw);
+  if (!productId) throw new Error("Selecciona un producto para aprender el codigo.");
+  if (!codeNormalized) throw new Error("No hay codigo detectado para aprender.");
+
+  const db = openExistingDatabase();
+  try {
+    const product = db.prepare("select id from productos_insumos where id = ? and deleted_at is null limit 1").get(productId);
+    if (!product) throw new Error("Producto de inventario no encontrado.");
+
+    const currentTime = now();
+    const gs1Payload = payload.gs1_payload_json ?? payload.gs1PayloadJson ?? payload.gs1Payload ?? null;
+    const gs1PayloadJson = typeof gs1Payload === "string"
+      ? gs1Payload
+      : normalizeImportValue("gs1_payload_json", gs1Payload);
+    const normalizedPayload = {
+      product_id: productId,
+      code_raw: codeRaw || codeNormalized,
+      code_normalized: codeNormalized,
+      code_type: payload.code_type || payload.codeType || null,
+      gtin: payload.gtin || null,
+      barcode_format: payload.barcode_format || payload.barcodeFormat || null,
+      gs1_payload_json: gs1PayloadJson,
+      detected_lot: payload.detected_lot || payload.detectedLot || null,
+      detected_expiry: payload.detected_expiry || payload.detectedExpiry || null,
+      detected_mfg_date: payload.detected_mfg_date || payload.detectedMfgDate || null,
+      detected_quantity: payload.detected_quantity ?? payload.detectedQuantity ?? null,
+      package_type: payload.package_type || payload.packageType || null,
+      package_quantity: payload.package_quantity ?? payload.packageQuantity ?? null,
+      package_unit: payload.package_unit || payload.packageUnit || null,
+      base_unit: payload.base_unit || payload.baseUnit || null,
+      conversion_factor: payload.conversion_factor ?? payload.conversionFactor ?? null,
+      conversion_notes: payload.conversion_notes || payload.conversionNotes || null,
+      source: payload.source || "camera_learning",
+      confidence: Number(payload.confidence || 0),
+      created_by: payload.created_by || payload.createdBy || userId || null
+    };
+
+    db.exec("BEGIN;");
+    try {
+      const existing = db.prepare("select * from product_code_links where code_normalized = ? limit 1")
+        .get(codeNormalized);
+      let id;
+      if (existing) {
+        id = existing.id;
+        db.prepare(`
+          update product_code_links set
+            product_id = ?,
+            code_raw = ?,
+            code_type = ?,
+            gtin = ?,
+            barcode_format = ?,
+            gs1_payload_json = ?,
+            detected_lot = ?,
+            detected_expiry = ?,
+            detected_mfg_date = ?,
+            detected_quantity = ?,
+            package_type = ?,
+            package_quantity = ?,
+            package_unit = ?,
+            base_unit = ?,
+            conversion_factor = ?,
+            conversion_notes = ?,
+            source = ?,
+            confidence = ?,
+            created_by = coalesce(?, created_by),
+            last_seen_at = ?,
+            scan_count = coalesce(scan_count, 0) + 1,
+            is_active = 1
+          where id = ?
+        `).run(
+          normalizedPayload.product_id,
+          normalizedPayload.code_raw,
+          normalizedPayload.code_type,
+          normalizedPayload.gtin,
+          normalizedPayload.barcode_format,
+          normalizedPayload.gs1_payload_json,
+          normalizedPayload.detected_lot,
+          normalizedPayload.detected_expiry,
+          normalizedPayload.detected_mfg_date,
+          normalizedPayload.detected_quantity,
+          normalizedPayload.package_type,
+          normalizedPayload.package_quantity,
+          normalizedPayload.package_unit,
+          normalizedPayload.base_unit,
+          normalizedPayload.conversion_factor,
+          normalizedPayload.conversion_notes,
+          normalizedPayload.source,
+          normalizedPayload.confidence,
+          normalizedPayload.created_by,
+          currentTime,
+          id
+        );
+      } else {
+        id = payload.id || randomId();
+        db.prepare(`
+          insert into product_code_links (
+            id,
+            product_id,
+            code_raw,
+            code_normalized,
+            code_type,
+            gtin,
+            barcode_format,
+            gs1_payload_json,
+            detected_lot,
+            detected_expiry,
+            detected_mfg_date,
+            detected_quantity,
+            package_type,
+            package_quantity,
+            package_unit,
+            base_unit,
+            conversion_factor,
+            conversion_notes,
+            source,
+            confidence,
+            created_by,
+            created_at,
+            updated_at,
+            last_seen_at,
+            scan_count,
+            is_active
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+        `).run(
+          id,
+          normalizedPayload.product_id,
+          normalizedPayload.code_raw,
+          normalizedPayload.code_normalized,
+          normalizedPayload.code_type,
+          normalizedPayload.gtin,
+          normalizedPayload.barcode_format,
+          normalizedPayload.gs1_payload_json,
+          normalizedPayload.detected_lot,
+          normalizedPayload.detected_expiry,
+          normalizedPayload.detected_mfg_date,
+          normalizedPayload.detected_quantity,
+          normalizedPayload.package_type,
+          normalizedPayload.package_quantity,
+          normalizedPayload.package_unit,
+          normalizedPayload.base_unit,
+          normalizedPayload.conversion_factor,
+          normalizedPayload.conversion_notes,
+          normalizedPayload.source,
+          normalizedPayload.confidence,
+          normalizedPayload.created_by,
+          currentTime,
+          currentTime,
+          currentTime
+        );
+      }
+      const saved = db.prepare("select * from product_code_links where id = ?").get(id);
+      db.exec("COMMIT;");
+      return mapProductCodeLink(saved);
+    } catch (error) {
+      db.exec("ROLLBACK;");
+      throw error;
+    }
   } finally {
     db.close();
   }
@@ -1216,6 +1428,7 @@ module.exports = {
   deleteInventoryLot,
   findOrCreateProduct,
   getInventorySnapshot,
+  getProductCodeLinkByCode,
   getStatus,
   ensureLocalAdminIfNoUsers,
   importRowsIntoTable,
@@ -1223,9 +1436,11 @@ module.exports = {
   installDatabase,
   listDailyTasks,
   listPendingEntries,
+  listProductCodeLinks,
   queryLocalTable,
   saveDailyTask,
   removeLocalAdminSeedIfPresent,
+  upsertProductCodeLink,
   updateDailyTask,
   updateInventoryEntry,
   updateLot,
