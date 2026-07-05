@@ -174,11 +174,11 @@
             <div>
               <p class="eyebrow">Backend local</p>
               <h2>Modo local</h2>
-              <p>Prioridad operativa en este dispositivo. Supabase queda como respaldo.</p>
+              <p id="localBackendDescription">Prepara este dispositivo para trabajar sin depender de internet.</p>
             </div>
             <span class="backend-mode-pill desconocido" id="localModePill">Sin fuente activa</span>
           </div>
-          <div class="backend-status-grid">
+          <div class="backend-status-grid" id="backendStatusGrid" hidden>
             <article>
               <span>Backend local</span>
               <strong id="backendLocalStatus">pendiente</strong>
@@ -206,9 +206,9 @@
           </div>
           <div class="backend-actions">
             <button class="btn primary" type="button" id="prepareLocalModeBtn">Preparar modo local</button>
-            <button class="btn" type="button" id="importSupabaseBtn">Importar desde Supabase</button>
-            <button class="btn" type="button" id="refreshBackendStatusBtn">Revisar estado</button>
-            <button class="btn" type="button" id="localBackupBtn">Backup local</button>
+            <button class="btn" type="button" id="importSupabaseBtn" hidden>Importar datos existentes</button>
+            <button class="btn" type="button" id="refreshBackendStatusBtn" hidden>Revisar estado</button>
+            <button class="btn" type="button" id="localBackupBtn" hidden>Backup local</button>
           </div>
           <div class="backend-error-list" id="backendErrorList">
             <div class="backend-ok">Sin errores recientes.</div>

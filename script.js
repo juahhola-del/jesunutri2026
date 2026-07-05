@@ -4,6 +4,7 @@ const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmb2J3cmN4dnF5Z21mdnZjY2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMzY0MTQsImV4cCI6MjA5NTgxMjQxNH0.hgGBTlCDtz3gbBTxnwmikVEtM6FFzRI1pL5BzgRFTPI";
 const LOCAL_BACKEND_URL = window.localStorage.getItem("jesunutri_local_backend_url") || "http://127.0.0.1:8787";
 const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
+const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -455,9 +456,11 @@ const state = {
       migrationVersion: null,
       latestMigration: null,
       databasePath: "",
+      counts: {},
       lastChecked: null,
       error: ""
     },
+    initialImportComplete: false,
     supabase: {
       connected: false,
       lastChecked: null,
@@ -621,11 +624,13 @@ const elements = {
   installAppBtn: document.getElementById("installAppBtn"),
   installHint: document.getElementById("installHint"),
   localBackendPanel: document.getElementById("localBackendPanel"),
+  localBackendDescription: document.getElementById("localBackendDescription"),
   localModePill: document.getElementById("localModePill"),
   prepareLocalModeBtn: document.getElementById("prepareLocalModeBtn"),
   importSupabaseBtn: document.getElementById("importSupabaseBtn"),
   refreshBackendStatusBtn: document.getElementById("refreshBackendStatusBtn"),
   localBackupBtn: document.getElementById("localBackupBtn"),
+  backendStatusGrid: document.getElementById("backendStatusGrid"),
   backendLocalStatus: document.getElementById("backendLocalStatus"),
   backendDbStatus: document.getElementById("backendDbStatus"),
   backendMigrationStatus: document.getElementById("backendMigrationStatus"),
@@ -1292,6 +1297,67 @@ function shouldUseLocalBackend() {
   return Boolean(state.backend.local.available && state.backend.local.installed);
 }
 
+function readLocalSetupState() {
+  try {
+    return JSON.parse(window.localStorage.getItem(LOCAL_SETUP_STORAGE_KEY) || "null") || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveLocalSetupState(nextState = {}) {
+  const setupState = {
+    ...readLocalSetupState(),
+    ...nextState,
+    updatedAt: new Date().toISOString()
+  };
+  window.localStorage.setItem(LOCAL_SETUP_STORAGE_KEY, JSON.stringify(setupState));
+  return setupState;
+}
+
+function hasOperationalLocalData() {
+  const counts = state.backend.local.counts || {};
+  return [
+    counts.productos,
+    counts.lotes,
+    counts.movimientos,
+    counts.tareas,
+    counts.ingresosPendientes,
+    counts.pacYears,
+    counts.demandasDiarias
+  ].some((count) => Number(count || 0) > 0);
+}
+
+function isInitialLocalImportComplete() {
+  return Boolean(readLocalSetupState().initialImportComplete || state.backend.initialImportComplete || hasOperationalLocalData());
+}
+
+function markInitialLocalImportComplete(importResult = null) {
+  state.backend.initialImportComplete = true;
+  return saveLocalSetupState({
+    initialImportComplete: true,
+    importedAt: new Date().toISOString(),
+    migrationVersion: state.backend.local.migrationVersion || null,
+    totals: importResult?.totals || null
+  });
+}
+
+function rememberDetectedLocalSetup() {
+  const setupState = readLocalSetupState();
+  if (setupState.initialImportComplete || !shouldUseLocalBackend() || !hasOperationalLocalData()) return;
+  state.backend.initialImportComplete = true;
+  saveLocalSetupState({
+    initialImportComplete: true,
+    detectedAt: new Date().toISOString(),
+    source: "local_data_detected",
+    migrationVersion: state.backend.local.migrationVersion || null
+  });
+}
+
+function shouldHideLocalBackendPanel() {
+  return Boolean(shouldUseLocalBackend() && isInitialLocalImportComplete());
+}
+
 function updateActiveBackendMode() {
   if (shouldUseLocalBackend()) {
     state.backend.active = "local";
@@ -1305,19 +1371,36 @@ function updateActiveBackendMode() {
 function renderBackendStatus() {
   if (!elements.localBackendPanel) return;
   const local = state.backend.local;
+  const localReady = shouldUseLocalBackend();
+  rememberDetectedLocalSetup();
+  const importComplete = isInitialLocalImportComplete();
+  state.backend.initialImportComplete = importComplete;
+
+  if (shouldHideLocalBackendPanel()) {
+    elements.localBackendPanel.hidden = true;
+    return;
+  }
+
+  elements.localBackendPanel.hidden = false;
+  if (elements.backendStatusGrid) elements.backendStatusGrid.hidden = true;
+  if (elements.refreshBackendStatusBtn) elements.refreshBackendStatusBtn.hidden = true;
+  if (elements.localBackupBtn) elements.localBackupBtn.hidden = true;
+  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = localReady;
+  if (elements.importSupabaseBtn) elements.importSupabaseBtn.hidden = !localReady || importComplete;
+
   const supabaseStatus = state.backend.supabase.connected ? "conectado" : "desconectado";
   const localStatus = local.available ? "activo" : "inactivo";
   const dbStatus = local.installed ? "instalada" : "pendiente";
-  const activeLabel = state.backend.active === "local"
-    ? "Modo local activo"
-    : state.backend.active === "supabase"
-      ? "Supabase fallback"
-      : state.backend.active === "error"
-        ? "Sin conexion / error"
-        : "Revisando backend";
+  const activeLabel = localReady ? "Importacion pendiente" : "Preparar modo local";
+
+  if (elements.localBackendDescription) {
+    elements.localBackendDescription.textContent = localReady
+      ? "Copia los datos actuales al dispositivo local. Luego este panel se ocultara automaticamente."
+      : "Prepara este dispositivo para trabajar con base local, sin depender de internet.";
+  }
 
   elements.localModePill.textContent = activeLabel;
-  elements.localModePill.className = `backend-mode-pill ${state.backend.active}`;
+  elements.localModePill.className = `backend-mode-pill ${localReady ? "local" : "error"}`;
   elements.backendLocalStatus.textContent = localStatus;
   elements.backendDbStatus.textContent = dbStatus;
   elements.backendMigrationStatus.textContent = local.migrationVersion || "-";
@@ -1327,7 +1410,6 @@ function renderBackendStatus() {
 
   const backendErrors = [
     local.error,
-    state.backend.supabase.error,
     ...state.backend.recentErrors.map((item) => item.message)
   ].filter(Boolean);
 
@@ -1375,6 +1457,7 @@ const dataProvider = {
         migrationVersion: status.migrationVersion || null,
         latestMigration: status.latestMigration || null,
         databasePath: status.databasePath || "",
+        counts: status.counts || {},
         lastChecked: new Date().toISOString(),
         error: ""
       };
@@ -1440,6 +1523,7 @@ const dataProvider = {
       migrationVersion: status.migrationVersion || null,
       latestMigration: status.latestMigration || null,
       databasePath: status.databasePath || "",
+      counts: status.counts || {},
       lastChecked: new Date().toISOString(),
       error: ""
     };
@@ -11192,11 +11276,12 @@ elements.prepareLocalModeBtn?.addEventListener("click", async () => {
   elements.prepareLocalModeBtn.textContent = "Preparando...";
   try {
     const status = await dataProvider.installLocal();
-    await dataProvider.checkSupabaseStatus();
     await refreshInventory();
     showModalSuccess(
       "Modo local preparado",
-      `Base local ${status.installed ? "instalada" : "pendiente"}. Migracion ${status.migrationVersion || "-"}.`
+      status.installed
+        ? "Base local instalada. Ahora importa los datos iniciales para dejar este dispositivo listo."
+        : `Base local pendiente. Migracion ${status.migrationVersion || "-"}.`
     );
   } catch (error) {
     rememberBackendError(error);
@@ -11213,7 +11298,7 @@ elements.prepareLocalModeBtn?.addEventListener("click", async () => {
 
 elements.importSupabaseBtn?.addEventListener("click", async () => {
   const confirmed = await showModalConfirm({
-    title: "Importar desde Supabase",
+    title: "Importar datos existentes",
     message: "Se copiaran tablas operativas al SQLite local manteniendo IDs originales y saltando duplicados conflictivos.",
     confirmText: "Importar",
     variant: "warning"
@@ -11224,6 +11309,7 @@ elements.importSupabaseBtn?.addEventListener("click", async () => {
   elements.importSupabaseBtn.textContent = "Importando...";
   try {
     const result = await dataProvider.importFromSupabase();
+    markInitialLocalImportComplete(result);
     await refreshBackendStatus({ quiet: true });
     await refreshInventory();
     const errorTables = (result.tables || []).filter((table) => table.errors?.length);
@@ -11240,7 +11326,7 @@ elements.importSupabaseBtn?.addEventListener("click", async () => {
     showModalError("No se pudo importar", getSupabaseErrorMessage(error));
   } finally {
     elements.importSupabaseBtn.disabled = false;
-    elements.importSupabaseBtn.textContent = "Importar desde Supabase";
+    elements.importSupabaseBtn.textContent = "Importar datos existentes";
   }
 });
 
