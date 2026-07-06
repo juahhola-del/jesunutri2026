@@ -1306,7 +1306,15 @@ function updateInstallUi() {
   const installed = isStandaloneMode();
   document.body.classList.toggle("app-installed", installed);
   elements.installHint.hidden = installed;
-  if (installed || !state.deferredInstallPrompt) elements.installAppBtn.hidden = true;
+  elements.installAppBtn.hidden = installed;
+  elements.installAppBtn.textContent = state.deferredInstallPrompt ? "Instalar app" : "Como instalar";
+}
+
+function getCameraUnavailableMessage() {
+  if (!window.isSecureContext) {
+    return "Chrome bloquea la camara en direcciones http de red local. Abre la app instalada/HTTPS o usa http://127.0.0.1 cuando el backend corra en este mismo dispositivo.";
+  }
+  return "Este navegador no permite usar la camara desde la PWA.";
 }
 
 function normalizeBackendUrl(value) {
@@ -1389,7 +1397,7 @@ async function detectOwnDeviceBackend() {
 }
 
 function isPrincipalDevice() {
-  return state.backend.deviceMode === "principal";
+  return state.backend.deviceMode === "principal" || state.backend.deviceMode === "principal-remoto";
 }
 
 function isCaptureDevice() {
@@ -1397,6 +1405,7 @@ function isCaptureDevice() {
 }
 
 function getDeviceModeLabel() {
+  if (state.backend.deviceMode === "principal-remoto") return "Dispositivo principal conectado";
   if (isPrincipalDevice()) return "Dispositivo principal";
   if (isCaptureDevice()) return state.backend.local.available ? "Modo capturador conectado" : "Modo capturador";
   return "Sin sistema principal";
@@ -1982,14 +1991,18 @@ async function resolveBackendConnection({ quiet = true, role = "" } = {}) {
   const isAdminRole = isAdminRoleValue(role, state.currentUser?.email);
   const isOperatorRole = isOperatorRoleValue(role);
   if (hasOwnBackend) state.backend.deviceMode = "principal";
+  const connectedBackendCandidates = [
+    getCurrentOriginBackendUrl(),
+    readStoredPrimaryBackendUrl()
+  ].filter((url) => normalizeBackendUrl(url) !== PRIMARY_BACKEND_DEFAULT_URL);
   const candidates = hasOwnBackend
     ? [PRIMARY_BACKEND_DEFAULT_URL]
     : isAdminRole
-      ? []
-    : [
-        getCurrentOriginBackendUrl(),
-        readStoredPrimaryBackendUrl()
-      ];
+      ? connectedBackendCandidates
+      : [
+          getCurrentOriginBackendUrl(),
+          readStoredPrimaryBackendUrl()
+        ];
   const normalizedCandidates = candidates.map(normalizeBackendUrl).filter(Boolean);
   const uniqueCandidates = [...new Set(normalizedCandidates)];
 
@@ -1997,7 +2010,7 @@ async function resolveBackendConnection({ quiet = true, role = "" } = {}) {
     try {
       const status = await dataProvider.checkLocalStatus({ quiet: true, url });
       if (hasOwnBackend || status?.installed) {
-        state.backend.deviceMode = hasOwnBackend ? "principal" : "capturador";
+        state.backend.deviceMode = hasOwnBackend ? "principal" : isAdminRole ? "principal-remoto" : "capturador";
         savePrimaryBackendUrl(url);
         renderBackendStatus();
         return status;
@@ -11567,7 +11580,7 @@ async function playContinuousScanVideo(video) {
 
 async function startContinuousScanner() {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Este navegador no permite usar la camara desde la PWA.");
+    throw new Error(getCameraUnavailableMessage());
   }
 
   const scan = state.continuousScan;
@@ -13414,7 +13427,7 @@ function setProductLearningResult(extraction, ocr) {
 
 async function startProductLearningScanner() {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Este navegador no permite usar la camara desde la PWA.");
+    throw new Error(getCameraUnavailableMessage());
   }
 
   const scan = state.productLearning;
@@ -15267,11 +15280,17 @@ window.addEventListener("beforeinstallprompt", (event) => {
 });
 
 elements.installAppBtn.addEventListener("click", async () => {
-  if (!state.deferredInstallPrompt) return;
+  if (!state.deferredInstallPrompt) {
+    showModalSuccess(
+      "Instalar app",
+      "En Chrome abre el menu de tres puntos y toca Agregar a pantalla principal o Instalar app."
+    );
+    return;
+  }
   state.deferredInstallPrompt.prompt();
   await state.deferredInstallPrompt.userChoice;
   state.deferredInstallPrompt = null;
-  elements.installAppBtn.hidden = true;
+  updateInstallUi();
 });
 
 window.addEventListener("appinstalled", () => {
