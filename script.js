@@ -7,6 +7,7 @@ const PRIMARY_BACKEND_STORAGE_KEY = "jesunutri_primary_backend_url";
 const LEGACY_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_local_backend_url";
 const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
+const APP_BUILD_LABEL = "local-camera-v36";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -478,6 +479,7 @@ const state = {
     barcodeSupported: false,
     zxingReader: null,
     zxingSupported: false,
+    nativePhotoMode: false,
     lastZxingAttemptAt: 0,
     torchSupported: false,
     torchEnabled: false,
@@ -507,6 +509,7 @@ const state = {
     barcodeSupported: false,
     zxingReader: null,
     zxingSupported: false,
+    nativePhotoMode: false,
     lastZxingAttemptAt: 0,
     torchSupported: false,
     torchEnabled: false,
@@ -1325,6 +1328,26 @@ function getCameraUnavailableMessage() {
   return "Este navegador no permite usar la camara desde la PWA.";
 }
 
+function isLoopbackHostname(hostname = window.location.hostname) {
+  const clean = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
+  return clean === "localhost" || clean === "127.0.0.1" || clean === "::1";
+}
+
+function isHttpNetworkOrigin() {
+  return window.location.protocol === "http:" && !isLoopbackHostname();
+}
+
+function shouldUseNativeCameraCaptureFallback() {
+  return !window.isSecureContext || isHttpNetworkOrigin();
+}
+
+function getNativeCameraCaptureMessage() {
+  if (isHttpNetworkOrigin()) {
+    return "Chrome bloquea la camara en vivo en direcciones http de red local. Usa Tomar foto para abrir la camara nativa.";
+  }
+  return "La camara en vivo no esta disponible aqui. Usa Tomar foto para abrir la camara nativa.";
+}
+
 function normalizeBackendUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -1432,8 +1455,8 @@ function updateDeviceModeBanners() {
   [elements.deviceModeBanner, elements.operatorDeviceModeBanner].forEach((banner) => {
     if (!banner) return;
     banner.hidden = state.backend.deviceMode === "desconocido";
-    banner.textContent = state.backend.deviceMode === "desconocido" ? "" : text;
-    banner.title = url;
+    banner.textContent = state.backend.deviceMode === "desconocido" ? "" : `${text} · ${APP_BUILD_LABEL}`;
+    banner.title = `${url} · ${APP_BUILD_LABEL}`;
   });
 }
 
@@ -11495,7 +11518,7 @@ function renderContinuousScanCapabilities() {
   const scan = state.continuousScan;
   if (!elements.scanCapabilitiesStatus) return;
   const rows = [
-    ["Camara", scan.stream ? "activa" : "pendiente"],
+    ["Camara", scan.nativePhotoMode ? "foto nativa" : (scan.stream ? "activa" : "pendiente")],
     ["Linterna", scan.torchSupported ? (scan.torchEnabled ? "activa" : "soportada") : "no disponible"],
     ["Barcode", scan.barcodeSupported ? "activo" : "no disponible"],
     ["ZXing", scan.zxingSupported ? "fallback activo" : "no disponible"],
@@ -11518,6 +11541,7 @@ function resetContinuousScanStateForSession() {
     barcodeSupported: false,
     zxingReader: null,
     zxingSupported: false,
+    nativePhotoMode: false,
     lastZxingAttemptAt: 0,
     torchSupported: false,
     torchEnabled: false,
@@ -11635,12 +11659,27 @@ async function startContinuousScanner() {
   continuousScanLoop();
 }
 
+async function prepareContinuousNativePhotoMode() {
+  const scan = state.continuousScan;
+  scan.nativePhotoMode = true;
+  scan.running = false;
+  scan.paused = false;
+  setContinuousScanStatus(`${getNativeCameraCaptureMessage()} El escaneo quedara como captura por foto.`);
+  await ensureScannerEngines(scan);
+  scan.ocrSupported = detectContinuousOcrSupport();
+  renderContinuousScanCapabilities();
+}
+
 async function openContinuousScanModal() {
   clearError();
   resetContinuousScanStateForSession();
   elements.continuousScanModal.hidden = false;
   try {
     state.activeOperatorScanSession = await scanSessionService.createActive();
+    if (shouldUseNativeCameraCaptureFallback()) {
+      await prepareContinuousNativePhotoMode();
+      return;
+    }
     setContinuousScanStatus("Sesion de ingreso creada. Solicitando camara...");
     await startContinuousScanner();
   } catch (error) {
@@ -13348,7 +13387,7 @@ function renderProductLearningCapabilities() {
   const extraction = scan.currentExtraction;
   const existingLink = getExistingLearningLink(extraction);
   const rows = [
-    ["Camara", scan.stream ? "activa" : "pendiente"],
+    ["Camara", scan.nativePhotoMode ? "foto nativa" : (scan.stream ? "activa" : "pendiente")],
     ["Linterna", scan.torchSupported ? (scan.torchEnabled ? "activa" : "soportada") : "no disponible"],
     ["Barcode", scan.barcodeSupported ? "activo" : "no disponible"],
     ["ZXing", scan.zxingSupported ? "fallback activo" : "no disponible"],
@@ -13508,6 +13547,7 @@ function resetProductLearningStateForSession() {
     barcodeSupported: false,
     zxingReader: null,
     zxingSupported: false,
+    nativePhotoMode: false,
     lastZxingAttemptAt: 0,
     torchSupported: false,
     torchEnabled: false,
@@ -13596,6 +13636,15 @@ async function startProductLearningScanner() {
   productLearningLoop();
 }
 
+async function prepareProductLearningNativePhotoMode() {
+  const scan = state.productLearning;
+  scan.nativePhotoMode = true;
+  scan.running = false;
+  setProductLearningStatus(`${getNativeCameraCaptureMessage()} Toma una foto de la etiqueta para aprender el producto.`);
+  await ensureScannerEngines(scan);
+  renderProductLearningCapabilities();
+}
+
 async function processNativeProductLearningPhoto(file) {
   const scan = state.productLearning;
   scan.processing = true;
@@ -13647,6 +13696,14 @@ async function openProductLearningModal({ initialExtraction = null, initialOcr =
   elements.productLearningModal.hidden = false;
   try {
     await loadProductCodeLinks();
+    if (shouldUseNativeCameraCaptureFallback()) {
+      await prepareProductLearningNativePhotoMode();
+      if (initialExtraction) {
+        setProductLearningResult(initialExtraction, initialOcr || buildDeferredOcrResult());
+        setProductLearningStatus("Lectura cargada. Selecciona producto y acepta.");
+      }
+      return;
+    }
     await startProductLearningScanner();
     if (initialExtraction) {
       setProductLearningResult(initialExtraction, initialOcr || buildDeferredOcrResult());
@@ -15094,7 +15151,7 @@ elements.prepareLocalModeBtn?.addEventListener("click", async () => {
     renderBackendStatus();
     showModalError(
       "Backend local inactivo",
-      "Ejecuta local-backend\\iniciar-backend-local.cmd y vuelve a presionar Preparar modo local."
+      "En la tablet principal abre http://127.0.0.1:8787. Si sigue inactivo, ejecuta local-backend\\iniciar-backend-local.cmd y vuelve a presionar Preparar modo local."
     );
   } finally {
     elements.prepareLocalModeBtn.disabled = false;
@@ -15457,7 +15514,7 @@ async function handleInstallAppClick() {
   if (!state.deferredInstallPrompt) {
     showModalSuccess(
       "Instalar app",
-      "En Chrome abre el menu de tres puntos y toca Agregar a pantalla principal o Instalar app."
+      "En la tablet principal abre http://127.0.0.1:8787 en Chrome. Si entras por http://IP:8787, Chrome puede mostrar solo Agregar a pantalla principal y no instalacion PWA completa."
     );
     return;
   }
