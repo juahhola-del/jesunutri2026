@@ -756,6 +756,7 @@ const elements = {
   pauseProductBtn: document.getElementById("pauseProductBtn"),
   saveProductSettingsBtn: document.getElementById("saveProductSettingsBtn"),
   installAppBtn: document.getElementById("installAppBtn"),
+  installAppHeaderBtn: document.getElementById("installAppHeaderBtn"),
   installHint: document.getElementById("installHint"),
   localBackendPanel: document.getElementById("localBackendPanel"),
   localBackendDescription: document.getElementById("localBackendDescription"),
@@ -1304,10 +1305,13 @@ function isStandaloneMode() {
 
 function updateInstallUi() {
   const installed = isStandaloneMode();
+  const installButtons = [elements.installAppBtn, elements.installAppHeaderBtn].filter(Boolean);
   document.body.classList.toggle("app-installed", installed);
   elements.installHint.hidden = installed;
-  elements.installAppBtn.hidden = installed;
-  elements.installAppBtn.textContent = state.deferredInstallPrompt ? "Instalar app" : "Como instalar";
+  installButtons.forEach((button) => {
+    button.hidden = installed;
+    button.textContent = "Instalar app";
+  });
 }
 
 function getCameraUnavailableMessage() {
@@ -15276,10 +15280,10 @@ elements.productSettingsForm.addEventListener("submit", async (event) => {
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
   state.deferredInstallPrompt = event;
-  if (!isStandaloneMode()) elements.installAppBtn.hidden = false;
+  updateInstallUi();
 });
 
-elements.installAppBtn.addEventListener("click", async () => {
+async function handleInstallAppClick() {
   if (!state.deferredInstallPrompt) {
     showModalSuccess(
       "Instalar app",
@@ -15291,12 +15295,16 @@ elements.installAppBtn.addEventListener("click", async () => {
   await state.deferredInstallPrompt.userChoice;
   state.deferredInstallPrompt = null;
   updateInstallUi();
-});
+}
+
+elements.installAppBtn?.addEventListener("click", handleInstallAppClick);
+elements.installAppHeaderBtn?.addEventListener("click", handleInstallAppClick);
 
 window.addEventListener("appinstalled", () => {
   state.deferredInstallPrompt = null;
   document.body.classList.add("app-installed");
   elements.installAppBtn.hidden = true;
+  if (elements.installAppHeaderBtn) elements.installAppHeaderBtn.hidden = true;
   elements.installHint.hidden = true;
 });
 
