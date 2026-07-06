@@ -1428,7 +1428,7 @@ function applyDeviceModeUi() {
   if (elements.localSetupBtn) elements.localSetupBtn.hidden = captureMode;
   if (elements.adminStartContinuousScanBtn) elements.adminStartContinuousScanBtn.hidden = !captureMode;
   if (elements.reviewScanSessionsBtn) elements.reviewScanSessionsBtn.hidden = captureMode;
-  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = captureMode || shouldUseLocalBackend();
+  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = captureMode;
   if (elements.importSupabaseBtn && captureMode) elements.importSupabaseBtn.hidden = true;
   if (elements.localBackupBtn && captureMode) elements.localBackupBtn.hidden = true;
   updateDeviceModeBanners();
@@ -1622,7 +1622,7 @@ function rememberDetectedLocalSetup() {
 }
 
 function shouldHideLocalBackendPanel() {
-  return Boolean(shouldUseLocalBackend() && isInitialLocalImportComplete());
+  return false;
 }
 
 function updateActiveBackendMode() {
@@ -1653,9 +1653,13 @@ function renderBackendStatus() {
   if (elements.backendStatusGrid) elements.backendStatusGrid.hidden = isCaptureDevice();
   if (elements.refreshBackendStatusBtn) elements.refreshBackendStatusBtn.hidden = false;
   if (elements.localBackupBtn) elements.localBackupBtn.hidden = !canManageOfficialLocalBackend();
-  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = isCaptureDevice() || localReady;
+  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = isCaptureDevice();
   if (elements.importSupabaseBtn) {
-    elements.importSupabaseBtn.hidden = isCaptureDevice() || !localReady || (importComplete && !state.backend.forceShowLocalPanel);
+    elements.importSupabaseBtn.hidden = isCaptureDevice();
+    elements.importSupabaseBtn.disabled = !localReady;
+    elements.importSupabaseBtn.title = localReady
+      ? ""
+      : "Primero prepara el modo local.";
   }
   if (elements.captureConnectHint) {
     const lanUrl = (local.connectionUrls || []).find((url) => !/127\.0\.0\.1|localhost/i.test(url)) || "";
@@ -1676,7 +1680,7 @@ function renderBackendStatus() {
     elements.localBackendDescription.textContent = isCaptureDevice()
       ? "Este dispositivo envia capturas al sistema principal. No administra la base oficial."
       : localReady
-        ? "Copia los datos actuales al dispositivo local. Luego este panel se ocultara automaticamente."
+        ? "Modo local disponible. Puedes revisar migraciones o importar datos existentes desde Supabase."
         : "Prepara este dispositivo para trabajar con base local, sin depender de internet.";
   }
 
