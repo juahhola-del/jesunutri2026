@@ -1174,6 +1174,8 @@
         </div>
 
         <div class="form-actions scan-actions">
+          <button class="btn" type="button" id="nativeScanPhotoBtn">Tomar foto</button>
+          <input id="nativeScanCameraInput" type="file" accept="image/*" capture="environment" hidden>
           <button class="btn" type="button" id="pauseContinuousScanBtn">Pausar escaneo</button>
           <button class="btn primary" type="button" id="finishContinuousScanBtn">Finalizar ingreso</button>
         </div>
@@ -1299,6 +1301,8 @@
         </div>
 
         <div class="form-actions scan-actions">
+          <button class="btn" type="button" id="nativeProductLearningPhotoBtn">Tomar foto</button>
+          <input id="nativeProductLearningCameraInput" type="file" accept="image/*" capture="environment" hidden>
           <button class="btn" type="button" id="productLearningSkipBtn">Omitir</button>
           <button class="btn" type="button" id="finishProductLearningBtn">Finalizar</button>
           <button class="btn primary" type="button" id="acceptProductLearningBtn" disabled>Aceptar y continuar</button>
@@ -1853,8 +1857,8 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="vendor/zxing-browser.min.js?v=34"></script>
-    <script src="script.js?v=34"></script>
+    <script src="vendor/zxing-browser.min.js?v=35"></script>
+    <script src="script.js?v=35"></script>
   </body>
 </html>
 

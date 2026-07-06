@@ -634,6 +634,8 @@ const elements = {
   acceptScanItemBtn: document.getElementById("acceptScanItemBtn"),
   skipScanItemBtn: document.getElementById("skipScanItemBtn"),
   continuousScanDetectedList: document.getElementById("continuousScanDetectedList"),
+  nativeScanPhotoBtn: document.getElementById("nativeScanPhotoBtn"),
+  nativeScanCameraInput: document.getElementById("nativeScanCameraInput"),
   pauseContinuousScanBtn: document.getElementById("pauseContinuousScanBtn"),
   finishContinuousScanBtn: document.getElementById("finishContinuousScanBtn"),
   productLearningModal: document.getElementById("productLearningModal"),
@@ -660,6 +662,8 @@ const elements = {
   productLearningConversionFactor: document.getElementById("productLearningConversionFactor"),
   productLearningConversionNotes: document.getElementById("productLearningConversionNotes"),
   productLearningPackageHint: document.getElementById("productLearningPackageHint"),
+  nativeProductLearningPhotoBtn: document.getElementById("nativeProductLearningPhotoBtn"),
+  nativeProductLearningCameraInput: document.getElementById("nativeProductLearningCameraInput"),
   productLearningSkipBtn: document.getElementById("productLearningSkipBtn"),
   finishProductLearningBtn: document.getElementById("finishProductLearningBtn"),
   acceptProductLearningBtn: document.getElementById("acceptProductLearningBtn"),
@@ -1316,7 +1320,7 @@ function updateInstallUi() {
 
 function getCameraUnavailableMessage() {
   if (!window.isSecureContext) {
-    return "Chrome bloquea la camara en direcciones http de red local. Abre la app instalada/HTTPS o usa http://127.0.0.1 cuando el backend corra en este mismo dispositivo.";
+    return "Chrome bloquea la camara en vivo en direcciones http de red local. Usa Tomar foto para abrir la camara nativa, o abre HTTPS/127.0.0.1 para modo continuo.";
   }
   return "Este navegador no permite usar la camara desde la PWA.";
 }
@@ -11373,6 +11377,13 @@ function getBarcodeDetectorFormats() {
   return ["aztec", "code_128", "code_39", "code_93", "codabar", "data_matrix", "ean_13", "ean_8", "itf", "pdf417", "qr_code", "upc_a", "upc_e"];
 }
 
+function getScanSourceDimensions(source) {
+  return {
+    width: Number(source?.videoWidth || source?.naturalWidth || source?.width || 0),
+    height: Number(source?.videoHeight || source?.naturalHeight || source?.height || 0)
+  };
+}
+
 async function createBarcodeDetectorInstance() {
   if (!("BarcodeDetector" in window)) return;
   const supported = await window.BarcodeDetector.getSupportedFormats?.();
@@ -11434,6 +11445,7 @@ function setupContinuousZxingReader() {
   const scan = state.continuousScan;
   scan.zxingReader = null;
   scan.zxingSupported = false;
+  scan.lastZxingAttemptAt = 0;
 
   try {
     scan.zxingReader = createZxingReaderInstance();
@@ -11634,7 +11646,7 @@ async function openContinuousScanModal() {
   } catch (error) {
     setContinuousScanStatus(getSupabaseErrorMessage(error));
     renderContinuousScanCapabilities();
-    showToastError("No se pudo iniciar la camara.");
+    showToastError("Camara en vivo bloqueada. Usa Tomar foto.");
   }
 }
 
@@ -11843,10 +11855,9 @@ function hasGs1BarcodeCandidate(candidates = []) {
   return candidates.some((barcode) => parseGs1(barcode?.rawValue || "").isGs1);
 }
 
-function createContinuousScanRoiCanvases(video) {
-  if (!video?.videoWidth || !video?.videoHeight) return [];
-  const width = video.videoWidth;
-  const height = video.videoHeight;
+function createContinuousScanRoiCanvases(source) {
+  const { width, height } = getScanSourceDimensions(source);
+  if (!width || !height) return [];
   const definitions = [
     { x: 0, y: 0, width, height: Math.round(height * 0.35) },
     { x: 0, y: Math.round(height * 0.08), width, height: Math.round(height * 0.35) },
@@ -11862,7 +11873,7 @@ function createContinuousScanRoiCanvases(video) {
     canvas.height = definition.height;
     const context = canvas.getContext("2d", { willReadFrequently: true });
     context.drawImage(
-      video,
+      source,
       definition.x,
       definition.y,
       definition.width,
@@ -11876,17 +11887,17 @@ function createContinuousScanRoiCanvases(video) {
   });
 }
 
-async function detectBarcodesWithBarcodeDetectorForScanner(video, scan) {
+async function detectBarcodesWithBarcodeDetectorForScanner(source, scan) {
   if (!scan?.barcodeDetector) return [];
   const candidates = [];
   try {
-    const detected = normalizeBarcodeDetectorResults(await scan.barcodeDetector.detect(video), "full");
+    const detected = normalizeBarcodeDetectorResults(await scan.barcodeDetector.detect(source), "full");
     candidates.push(...detected);
   } catch (error) {
     console.warn("BarcodeDetector fallo en frame", error);
   }
 
-  const roiCanvases = createContinuousScanRoiCanvases(video);
+  const roiCanvases = createContinuousScanRoiCanvases(source);
   for (const roiCanvas of roiCanvases) {
     try {
       const detected = normalizeBarcodeDetectorResults(await scan.barcodeDetector.detect(roiCanvas), "roi");
@@ -11902,14 +11913,16 @@ async function detectBarcodesWithBarcodeDetector(video) {
   return detectBarcodesWithBarcodeDetectorForScanner(video, state.continuousScan);
 }
 
-async function detectBarcodesWithZxingForScanner(video, scan) {
+async function detectBarcodesWithZxingForScanner(source, scan) {
   if (!scan?.zxingReader) return [];
   const now = Date.now();
   if (now - scan.lastZxingAttemptAt < CONTINUOUS_SCAN_ZXING_INTERVAL_MS) return [];
   scan.lastZxingAttemptAt = now;
   const candidates = [];
   try {
-    const result = scan.zxingReader.decode(video);
+    const result = source instanceof HTMLCanvasElement
+      ? scan.zxingReader.decodeFromCanvas(source)
+      : scan.zxingReader.decode(source);
     const normalized = normalizeZxingResult(result);
     if (normalized) candidates.push(normalized);
   } catch (error) {
@@ -11918,7 +11931,7 @@ async function detectBarcodesWithZxingForScanner(video, scan) {
       console.warn("ZXing fallo en frame", error);
     }
   }
-  const roiCanvases = createContinuousScanRoiCanvases(video);
+  const roiCanvases = createContinuousScanRoiCanvases(source);
   for (const roiCanvas of roiCanvases) {
     try {
       const result = scan.zxingReader.decodeFromCanvas(roiCanvas);
@@ -12365,29 +12378,31 @@ function extractAdaptiveLabelFields(text) {
   };
 }
 
-function createContinuousScanOcrCanvas(video, { maxWidth = 1280 } = {}) {
-  return createContinuousScanOcrCanvasFromRegion(video, {
+function createContinuousScanOcrCanvas(source, { maxWidth = 1280 } = {}) {
+  const { width, height } = getScanSourceDimensions(source);
+  return createContinuousScanOcrCanvasFromRegion(source, {
     x: 0,
     y: 0,
-    width: video?.videoWidth || 0,
-    height: video?.videoHeight || 0,
+    width,
+    height,
     label: "completa"
   }, { maxWidth });
 }
 
-function createContinuousScanOcrCanvasFromRegion(video, region, { maxWidth = 1280 } = {}) {
-  if (!video?.videoWidth || !video?.videoHeight) return null;
-  const sourceX = Math.max(0, Math.min(video.videoWidth - 1, Math.round(region.x || 0)));
-  const sourceY = Math.max(0, Math.min(video.videoHeight - 1, Math.round(region.y || 0)));
-  const sourceWidth = Math.max(1, Math.min(video.videoWidth - sourceX, Math.round(region.width || video.videoWidth)));
-  const sourceHeight = Math.max(1, Math.min(video.videoHeight - sourceY, Math.round(region.height || video.videoHeight)));
+function createContinuousScanOcrCanvasFromRegion(source, region, { maxWidth = 1280 } = {}) {
+  const dimensions = getScanSourceDimensions(source);
+  if (!dimensions.width || !dimensions.height) return null;
+  const sourceX = Math.max(0, Math.min(dimensions.width - 1, Math.round(region.x || 0)));
+  const sourceY = Math.max(0, Math.min(dimensions.height - 1, Math.round(region.y || 0)));
+  const sourceWidth = Math.max(1, Math.min(dimensions.width - sourceX, Math.round(region.width || dimensions.width)));
+  const sourceHeight = Math.max(1, Math.min(dimensions.height - sourceY, Math.round(region.height || dimensions.height)));
   const scale = Math.min(2.2, Math.max(0.5, maxWidth / sourceWidth));
   const canvas = document.createElement("canvas");
   canvas.dataset.ocrRegion = region.label || "recorte";
   canvas.width = Math.max(1, Math.round(sourceWidth * scale));
   canvas.height = Math.max(1, Math.round(sourceHeight * scale));
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
   try {
     const image = context.getImageData(0, 0, canvas.width, canvas.height);
     for (let index = 0; index < image.data.length; index += 4) {
@@ -12405,11 +12420,10 @@ function createContinuousScanOcrCanvasFromRegion(video, region, { maxWidth = 128
   return canvas;
 }
 
-function getBarcodeContextOcrRegions(video, barcode) {
+function getBarcodeContextOcrRegions(source, barcode) {
   const box = barcode?.source === "full" ? barcode.boundingBox : null;
-  if (!video?.videoWidth || !video?.videoHeight || !box?.width || !box?.height) return [];
-  const width = video.videoWidth;
-  const height = video.videoHeight;
+  const { width, height } = getScanSourceDimensions(source);
+  if (!width || !height || !box?.width || !box?.height) return [];
   const centerY = box.y + box.height / 2;
   const tallBand = Math.max(box.height * 5.5, height * 0.26);
   return [
@@ -12440,19 +12454,18 @@ function getBarcodeContextOcrRegions(video, barcode) {
   ];
 }
 
-function createContinuousScanOcrCanvases(video, barcode = null) {
-  if (!video?.videoWidth || !video?.videoHeight) return [];
-  const width = video.videoWidth;
-  const height = video.videoHeight;
+function createContinuousScanOcrCanvases(source, barcode = null) {
+  const { width, height } = getScanSourceDimensions(source);
+  if (!width || !height) return [];
   const regions = [
-    ...getBarcodeContextOcrRegions(video, barcode),
+    ...getBarcodeContextOcrRegions(source, barcode),
     { label: "completa", x: 0, y: 0, width, height, maxWidth: 1280 },
     { label: "etiqueta-centro", x: width * 0.04, y: height * 0.16, width: width * 0.92, height: height * 0.62, maxWidth: 1500 },
     { label: "etiqueta-inferior", x: width * 0.06, y: height * 0.38, width: width * 0.88, height: height * 0.36, maxWidth: 1500 },
     { label: "etiqueta-superior", x: width * 0.06, y: height * 0.08, width: width * 0.88, height: height * 0.36, maxWidth: 1500 }
   ];
   return regions
-    .map((region) => createContinuousScanOcrCanvasFromRegion(video, region, { maxWidth: region.maxWidth }))
+    .map((region) => createContinuousScanOcrCanvasFromRegion(source, region, { maxWidth: region.maxWidth }))
     .filter(Boolean);
 }
 
@@ -12498,12 +12511,12 @@ function shouldRunOcrForExtraction(extraction, { force = false } = {}) {
   );
 }
 
-async function buildContinuousScanExtractionWithOcr({ barcode, video, forceOcr = false, onStatus = null } = {}) {
+async function buildContinuousScanExtractionWithOcr({ barcode, video, source = video, forceOcr = false, onStatus = null } = {}) {
   let ocr = buildDeferredOcrResult();
   let extraction = buildContinuousScanExtraction({ barcode, text: "", ocr });
   if (!shouldRunOcrForExtraction(extraction, { force: forceOcr })) return { extraction, ocr };
 
-  const ocrCanvases = createContinuousScanOcrCanvases(video, barcode);
+  const ocrCanvases = createContinuousScanOcrCanvases(source, barcode);
   if (!ocrCanvases.length) return { extraction, ocr };
   if (typeof onStatus === "function") onStatus("Leyendo texto de etiqueta...");
   ocr = await runContinuousScanOcrFromCanvases(ocrCanvases);
@@ -12511,20 +12524,73 @@ async function buildContinuousScanExtractionWithOcr({ barcode, video, forceOcr =
   return { extraction, ocr };
 }
 
-function captureVideoFrameDataUrl(video, { maxWidth = 960, quality = 0.72 } = {}) {
-  if (!video?.videoWidth || !video?.videoHeight) return "";
-  const scale = Math.min(1, maxWidth / video.videoWidth);
+function captureVideoFrameDataUrl(source, { maxWidth = 960, quality = 0.72 } = {}) {
+  const { width, height } = getScanSourceDimensions(source);
+  if (!width || !height) return "";
+  const scale = Math.min(1, maxWidth / width);
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
   const context = canvas.getContext("2d");
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
   try {
     return canvas.toDataURL("image/jpeg", quality);
   } catch (error) {
     console.warn("No se pudo capturar imagen de referencia", error);
     return "";
   }
+}
+
+function loadImageFileToCanvas(file, { maxWidth = 1600, quality = 0.82 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new Error("No se selecciono imagen."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("No se pudo leer la imagen."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("No se pudo abrir la imagen capturada."));
+      image.onload = () => {
+        const scale = Math.min(1, maxWidth / Math.max(image.naturalWidth || 1, image.naturalHeight || 1));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+        canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        let dataUrl = "";
+        try {
+          dataUrl = canvas.toDataURL("image/jpeg", quality);
+        } catch (error) {
+          console.warn("No se pudo serializar imagen capturada", error);
+        }
+        resolve({ canvas, dataUrl });
+      };
+      image.src = String(reader.result || "");
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function ensureScannerEngines(scan) {
+  scan.barcodeDetector = null;
+  scan.barcodeSupported = false;
+  scan.zxingReader = null;
+  scan.zxingSupported = false;
+  try {
+    scan.barcodeDetector = await createBarcodeDetectorInstance();
+    scan.barcodeSupported = Boolean(scan.barcodeDetector);
+  } catch (error) {
+    console.warn("BarcodeDetector no disponible", error);
+  }
+  try {
+    scan.zxingReader = createZxingReaderInstance();
+    scan.zxingSupported = Boolean(scan.zxingReader);
+  } catch (error) {
+    console.warn("ZXing no disponible", error);
+  }
+  scan.ocrSupported = detectContinuousOcrSupport();
 }
 
 function buildContinuousScanExtraction({ barcode, text = "", ocr = null }) {
@@ -12868,7 +12934,7 @@ function renderContinuousScanDetectedList() {
   }).join("");
 }
 
-async function captureContinuousScanFrame({ barcodes, metrics, reason }) {
+async function captureContinuousScanFrame({ barcodes, metrics, reason, source = elements.continuousScanVideo }) {
   const scan = state.continuousScan;
   const barcode = barcodes[0]
     ? {
@@ -12880,7 +12946,7 @@ async function captureContinuousScanFrame({ barcodes, metrics, reason }) {
     : null;
   const { extraction, ocr } = await buildContinuousScanExtractionWithOcr({
     barcode,
-    video: elements.continuousScanVideo,
+    source,
     forceOcr: reason !== "codigo_barra",
     onStatus: setContinuousScanStatus
   });
@@ -12923,6 +12989,55 @@ async function captureContinuousScanFrame({ barcodes, metrics, reason }) {
   setContinuousScanStatus(extraction.productLinked
     ? `Producto reconocido: ${row.nombre}. Ingresa cantidad recibida.${ocrNotice}`
     : `Codigo detectado sin producto aprendido.${ocrNotice} Omite o aprende este codigo desde modo admin.`);
+}
+
+async function processNativeContinuousScanPhoto(file) {
+  const scan = state.continuousScan;
+  if (scan.pendingCapture) {
+    showToastError("Acepta u omite la lectura actual antes de tomar otra foto.");
+    return;
+  }
+  scan.processing = true;
+  elements.nativeScanPhotoBtn.disabled = true;
+  try {
+    if (!state.activeOperatorScanSession?.id) {
+      state.activeOperatorScanSession = await scanSessionService.createActive();
+    }
+    setContinuousScanStatus("Procesando foto de etiqueta...");
+    await ensureScannerEngines(scan);
+    renderContinuousScanCapabilities();
+    const { canvas } = await loadImageFileToCanvas(file);
+    let barcodes = await detectBarcodesWithBarcodeDetectorForScanner(canvas, scan);
+    if (!hasGs1BarcodeCandidate(barcodes)) {
+      const zxingBarcodes = await detectBarcodesWithZxingForScanner(canvas, scan);
+      barcodes = rankBarcodeCandidates([...barcodes, ...zxingBarcodes]);
+    }
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const metrics = getFrameMetrics(canvas, context, null);
+    const hasBarcode = Boolean(barcodes[0]?.rawValue);
+    const ocrProbe = !hasBarcode
+      ? await runContinuousScanOcrFromCanvases(createContinuousScanOcrCanvases(canvas, null))
+      : null;
+    if (!hasBarcode && !ocrProbe?.fields?.hasUsefulData && !String(ocrProbe?.text || "").trim()) {
+      setContinuousScanStatus("No se detecto codigo ni texto claro. Toma otra foto mas cerca y con buena luz.");
+      showToastError("No se detecto etiqueta.");
+      return;
+    }
+    await captureContinuousScanFrame({
+      barcodes,
+      metrics,
+      reason: hasBarcode ? "codigo_barra" : "estabilidad_visual",
+      source: canvas
+    });
+  } catch (error) {
+    setContinuousScanStatus(getSupabaseErrorMessage(error));
+    showToastError("No se pudo procesar la foto.");
+  } finally {
+    scan.processing = false;
+    elements.nativeScanPhotoBtn.disabled = false;
+    if (elements.nativeScanCameraInput) elements.nativeScanCameraInput.value = "";
+    renderContinuousScanCapabilities();
+  }
 }
 
 async function acceptPendingContinuousScanItem() {
@@ -13481,6 +13596,51 @@ async function startProductLearningScanner() {
   productLearningLoop();
 }
 
+async function processNativeProductLearningPhoto(file) {
+  const scan = state.productLearning;
+  scan.processing = true;
+  elements.nativeProductLearningPhotoBtn.disabled = true;
+  try {
+    setProductLearningStatus("Procesando foto de etiqueta...");
+    await ensureScannerEngines(scan);
+    renderProductLearningCapabilities();
+    const { canvas, dataUrl } = await loadImageFileToCanvas(file);
+    let barcodes = await detectBarcodesWithBarcodeDetectorForScanner(canvas, scan);
+    if (!hasGs1BarcodeCandidate(barcodes)) {
+      const zxingBarcodes = await detectBarcodesWithZxingForScanner(canvas, scan);
+      barcodes = rankBarcodeCandidates([...barcodes, ...zxingBarcodes]);
+    }
+    const barcode = barcodes[0]?.rawValue ? barcodes[0] : null;
+    const { extraction, ocr } = await buildContinuousScanExtractionWithOcr({
+      barcode,
+      source: canvas,
+      forceOcr: true,
+      onStatus: setProductLearningStatus
+    });
+    const hasCode = Boolean(extraction.fields.codigoBarra.value || extraction.fields.gtin.value);
+    const hasText = Boolean(String(ocr?.text || "").trim() || ocr?.fields?.hasUsefulData);
+    if (!hasCode && !hasText) {
+      setProductLearningStatus("No se detecto codigo ni texto claro. Toma otra foto mas cerca.");
+      showToastError("No se detecto etiqueta.");
+      return;
+    }
+    scan.currentImageDataUrl = dataUrl || captureVideoFrameDataUrl(canvas);
+    setProductLearningResult(extraction, ocr);
+    beepContinuousScan();
+    setProductLearningStatus(hasCode
+      ? "Foto procesada. Revisa, selecciona producto y acepta."
+      : "Foto procesada con texto. Ingresa el codigo manualmente, selecciona producto y acepta.");
+  } catch (error) {
+    setProductLearningStatus(getSupabaseErrorMessage(error));
+    showToastError("No se pudo procesar la foto.");
+  } finally {
+    scan.processing = false;
+    elements.nativeProductLearningPhotoBtn.disabled = false;
+    if (elements.nativeProductLearningCameraInput) elements.nativeProductLearningCameraInput.value = "";
+    renderProductLearningCapabilities();
+  }
+}
+
 async function openProductLearningModal({ initialExtraction = null, initialOcr = null } = {}) {
   clearError();
   resetProductLearningStateForSession();
@@ -13493,9 +13653,9 @@ async function openProductLearningModal({ initialExtraction = null, initialOcr =
       setProductLearningStatus("Lectura cargada. Selecciona producto y acepta.");
     }
   } catch (error) {
-    setProductLearningStatus(getSupabaseErrorMessage(error));
+    setProductLearningStatus(`${getSupabaseErrorMessage(error)} Usa Tomar foto para abrir la camara nativa.`);
     renderProductLearningCapabilities();
-    showToastError("No se pudo iniciar aprendizaje por camara.");
+    showToastError("Camara en vivo bloqueada. Usa Tomar foto.");
     if (initialExtraction) setProductLearningResult(initialExtraction, initialOcr || buildDeferredOcrResult());
   }
 }
@@ -14568,6 +14728,11 @@ elements.continuousScanModal.addEventListener("click", (event) => {
 });
 elements.pauseContinuousScanBtn.addEventListener("click", toggleContinuousScanPause);
 elements.finishContinuousScanBtn.addEventListener("click", finishContinuousScan);
+elements.nativeScanPhotoBtn?.addEventListener("click", () => elements.nativeScanCameraInput?.click());
+elements.nativeScanCameraInput?.addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  if (file) processNativeContinuousScanPhoto(file);
+});
 elements.scanPackageCountInput?.addEventListener("input", renderContinuousScanAcceptCard);
 elements.acceptScanItemBtn?.addEventListener("click", acceptPendingContinuousScanItem);
 elements.skipScanItemBtn?.addEventListener("click", skipPendingContinuousScanItem);
@@ -14591,6 +14756,11 @@ elements.productLearningModal.addEventListener("click", (event) => {
   if (event.target === elements.productLearningModal) closeProductLearningModal();
 });
 elements.productLearningSearch.addEventListener("input", renderProductLearningResults);
+elements.nativeProductLearningPhotoBtn?.addEventListener("click", () => elements.nativeProductLearningCameraInput?.click());
+elements.nativeProductLearningCameraInput?.addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  if (file) processNativeProductLearningPhoto(file);
+});
 elements.productLearningResults.addEventListener("click", (event) => {
   const productButton = event.target.closest("[data-learning-product-id]");
   if (productButton) selectProductForLearning(productButton.dataset.learningProductId);
