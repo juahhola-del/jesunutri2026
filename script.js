@@ -1984,6 +1984,8 @@ async function resolveBackendConnection({ quiet = true, role = "" } = {}) {
   if (hasOwnBackend) state.backend.deviceMode = "principal";
   const candidates = hasOwnBackend
     ? [PRIMARY_BACKEND_DEFAULT_URL]
+    : isAdminRole
+      ? []
     : [
         getCurrentOriginBackendUrl(),
         readStoredPrimaryBackendUrl()
