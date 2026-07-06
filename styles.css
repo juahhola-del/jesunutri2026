@@ -47,14 +47,16 @@ button, input, select, textarea { font: inherit; }
   filter: drop-shadow(0 0 18px rgba(79, 140, 255, 0.14));
 }
 
-.login-screen {
+.login-screen,
+.connector-screen {
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: 24px;
 }
 
-.login-card {
+.login-card,
+.connector-card {
   width: min(420px, 100%);
   display: grid;
   gap: 16px;
@@ -65,31 +67,39 @@ button, input, select, textarea { font: inherit; }
   box-shadow: var(--shadow);
 }
 
+.connector-card {
+  width: min(520px, 100%);
+}
+
 .login-logo {
   width: min(280px, 72vw);
   height: auto;
   object-fit: contain;
 }
 
-.login-card h1 {
+.login-card h1,
+.connector-card h1 {
   margin-bottom: 6px;
   font-size: 1.6rem;
   line-height: 1.1;
 }
 
-.login-card p {
+.login-card p,
+.connector-card p {
   margin-bottom: 0;
   color: var(--muted);
 }
 
-.login-card label {
+.login-card label,
+.connector-card label {
   display: grid;
   gap: 7px;
   color: var(--muted);
   font-size: 0.84rem;
 }
 
-.login-card input {
+.login-card input,
+.connector-card input {
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--line);
@@ -100,7 +110,8 @@ button, input, select, textarea { font: inherit; }
   color: var(--text);
 }
 
-.login-card input:focus {
+.login-card input:focus,
+.connector-card input:focus {
   border-color: var(--blue);
 }
 
@@ -111,6 +122,12 @@ button, input, select, textarea { font: inherit; }
   background: rgba(239, 83, 80, 0.12);
   color: #ffc4c2;
   font-size: 0.86rem;
+}
+
+.connector-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 
 .app-shell {
@@ -671,6 +688,27 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   display: none;
 }
 
+.device-mode-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(79, 140, 255, 0.32);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(79, 140, 255, 0.1);
+  color: #dbe8ff;
+  font-weight: 900;
+  text-align: center;
+}
+
+.capture-mode .device-mode-banner {
+  border-color: rgba(35, 196, 131, 0.38);
+  background: rgba(35, 196, 131, 0.12);
+  color: #c8ffe1;
+}
+
 .local-backend-panel {
   border-color: rgba(35, 196, 131, 0.24);
   background: rgba(17, 24, 39, 0.92);
@@ -700,6 +738,12 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   border-color: rgba(242, 201, 76, 0.44);
   background: rgba(242, 201, 76, 0.14);
   color: #ffe58a;
+}
+
+.backend-mode-pill.capture {
+  border-color: rgba(35, 196, 131, 0.44);
+  background: rgba(35, 196, 131, 0.14);
+  color: #baf7d9;
 }
 
 .backend-status-grid {
@@ -741,6 +785,17 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   margin-top: 12px;
 }
 
+.capture-connect-hint {
+  margin-top: 12px;
+  border: 1px solid rgba(79, 140, 255, 0.24);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(79, 140, 255, 0.08);
+  color: #dbe8ff;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
 .backend-error-list {
   display: grid;
   gap: 6px;
@@ -760,6 +815,28 @@ h2 { margin-bottom: 6px; font-size: 1.1rem; }
   border-color: rgba(35, 196, 131, 0.22);
   background: rgba(35, 196, 131, 0.08);
   color: #baf7d9;
+}
+
+.capture-mode .header-actions .action-tile:not(.learn-products-btn):not(.capture-intake-btn),
+.capture-mode #reviewScanSessionsBtn,
+.capture-mode #pendingAdminPanel,
+.capture-mode #scanSessionsAdminPanel,
+.capture-mode .dashboard-grid,
+.capture-mode .critical-panel,
+.capture-mode #compactCriticalPanel,
+.capture-mode #clinicalSupplyPanel,
+.capture-mode #analyticsGrid,
+.capture-mode #alertsList,
+.capture-mode #inventoryTable,
+.capture-mode #historyTableBody,
+.capture-mode .operator-panel .pos-form,
+.capture-mode .operator-panel .pos-summary,
+.capture-mode .operator-panel > .form-actions {
+  display: none !important;
+}
+
+.capture-mode .local-backend-panel {
+  border-color: rgba(35, 196, 131, 0.28);
 }
 
 .dashboard-grid {

@@ -1,7 +1,9 @@
 const http = require("http");
 const { HOST, PORT } = require("../config");
 
-const request = http.get(`http://${HOST}:${PORT}/api/health`, (response) => {
+const CHECK_HOST = HOST === "0.0.0.0" ? "127.0.0.1" : HOST;
+
+const request = http.get(`http://${CHECK_HOST}:${PORT}/api/health`, (response) => {
   let body = "";
   response.on("data", (chunk) => {
     body += chunk;

@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Jesunutri">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=22">
+    <link rel="stylesheet" href="styles.css?v=26">
   </head>
   <body>
     <section class="app-splash" id="appSplash">
@@ -40,6 +40,27 @@
       </form>
     </section>
 
+    <section class="connector-screen" id="connectorScreen" hidden>
+      <form class="connector-card" id="connectorForm">
+        <img src="logo.png" alt="Jesunutri" class="login-logo">
+        <div>
+          <h1>Conectar con dispositivo principal</h1>
+          <p>No se encontro el dispositivo principal. Conectate a la misma red que la tablet de Jesu o configura la direccion del servidor.</p>
+        </div>
+        <label>
+          <span>Direccion del servidor principal</span>
+          <input id="primaryBackendUrlInput" name="primary_backend_url" type="url" inputmode="url" autocomplete="url" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="http://192.168.1.132:8787">
+        </label>
+        <div class="connector-actions">
+          <button class="btn" type="button" id="testPrimaryBackendBtn">Probar conexion</button>
+          <button class="btn primary" type="submit" id="savePrimaryBackendBtn">Guardar</button>
+        </div>
+        <button class="btn secondary" type="button" id="retryLocalBackendBtn">Reintentar</button>
+        <button class="btn secondary" type="button" disabled>Escanear QR de conexion</button>
+        <div class="login-error" id="connectorError" hidden></div>
+      </form>
+    </section>
+
     <section class="operator-shell" id="operatorShell" hidden>
       <header class="operator-header">
         <img class="operator-logo" src="logo.png" alt="Jesunutri">
@@ -51,6 +72,7 @@
 
       <main>
         <div class="internal-notice operator-notice" id="operatorNotice" hidden></div>
+        <div class="device-mode-banner" id="operatorDeviceModeBanner" hidden></div>
 
         <section class="panel operator-panel">
           <div class="section-heading">
@@ -158,6 +180,7 @@
         <div class="actions header-actions">
           <button class="btn primary action-tile" type="button" id="bulkEntryBtn">Ingreso masivo</button>
           <button class="btn use-stock-btn action-tile" type="button" id="useStockBtn">Stock consumido</button>
+          <button class="btn action-tile capture-intake-btn" type="button" id="adminStartContinuousScanBtn" hidden>Ingresar productos</button>
           <button class="btn action-tile learn-products-btn" type="button" id="learnProductsBtn">Aprender etiquetas</button>
           <button class="btn action-tile" type="button" id="reviewScanSessionsBtn">Revisar ingresos por escaneo</button>
           <button class="btn action-tile" type="button" id="labelsBtn">Etiquetas</button>
@@ -168,6 +191,7 @@
       </header>
 
       <div class="error-box" id="errorBox" hidden></div>
+      <div class="device-mode-banner" id="deviceModeBanner" hidden></div>
       <div class="install-hint" id="installHint" hidden>
         <span>Para instalar en tablet: Chrome -> menu -> Agregar a pantalla principal.</span>
         <button class="btn install-btn" type="button" id="installAppBtn" hidden>Instalar app</button>
@@ -213,8 +237,10 @@
             <button class="btn primary" type="button" id="prepareLocalModeBtn">Preparar modo local</button>
             <button class="btn" type="button" id="importSupabaseBtn" hidden>Importar datos existentes</button>
             <button class="btn" type="button" id="refreshBackendStatusBtn" hidden>Revisar estado</button>
+            <button class="btn" type="button" id="openBackendConfigBtn" hidden>Configurar servidor</button>
             <button class="btn" type="button" id="localBackupBtn" hidden>Backup local</button>
           </div>
+          <div class="capture-connect-hint" id="captureConnectHint" hidden></div>
           <div class="backend-error-list" id="backendErrorList">
             <div class="backend-ok">Sin errores recientes.</div>
           </div>
@@ -1847,8 +1873,8 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="vendor/zxing-browser.min.js?v=23"></script>
-    <script src="script.js?v=23"></script>
+    <script src="vendor/zxing-browser.min.js?v=26"></script>
+    <script src="script.js?v=26"></script>
   </body>
 </html>
 

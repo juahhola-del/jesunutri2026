@@ -1,6 +1,8 @@
 const cors = require("cors");
 const express = require("express");
-const { HOST, LABEL_IMAGES_DIR, PORT, SUPABASE_IMPORT } = require("./config");
+const os = require("os");
+const path = require("path");
+const { APP_PUBLIC_DIR, HOST, LABEL_IMAGES_DIR, PORT, SUPABASE_IMPORT } = require("./config");
 const {
   IMPORT_TABLES,
   createBackup,
@@ -31,6 +33,17 @@ const {
 
 const app = express();
 const recentErrors = [];
+const PUBLIC_APP_ASSETS = new Set([
+  "index.html",
+  "styles.css",
+  "script.js",
+  "service-worker.js",
+  "manifest.json",
+  "logo.png",
+  "icon-192.png",
+  "icon-512.png",
+  "vendor/zxing-browser.min.js"
+]);
 
 function rememberError(error) {
   recentErrors.unshift({
@@ -45,8 +58,19 @@ function publicStatus() {
   const status = getStatus();
   return {
     ...status,
+    connectionUrls: getConnectionUrls(),
     recentErrors
   };
+}
+
+function getConnectionUrls() {
+  const urls = [`http://127.0.0.1:${PORT}`];
+  const interfaces = os.networkInterfaces();
+  Object.values(interfaces).flat().forEach((item) => {
+    if (!item || item.family !== "IPv4" || item.internal) return;
+    urls.push(`http://${item.address}:${PORT}`);
+  });
+  return [...new Set(urls)];
 }
 
 function sendError(res, error) {
@@ -72,19 +96,37 @@ app.use("/label-images", express.static(LABEL_IMAGES_DIR, {
   maxAge: "30d"
 }));
 
-app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    service: "jesunutri-local-backend",
-    message: "Backend local JESUnutri activo."
+function sendPublicAppAsset(req, res, next) {
+  const relativePath = req.path === "/" ? "index.html" : req.path.replace(/^\/+/, "");
+  const normalizedPath = relativePath.replace(/\\/g, "/");
+  if (!PUBLIC_APP_ASSETS.has(normalizedPath)) return next();
+
+  const filePath = path.resolve(APP_PUBLIC_DIR, normalizedPath);
+  if (!filePath.startsWith(`${APP_PUBLIC_DIR}${path.sep}`)) return next();
+  return res.sendFile(filePath, (error) => {
+    if (error) next(error);
   });
-});
+}
+
+app.get("/", sendPublicAppAsset);
+app.get([
+  "/index.html",
+  "/styles.css",
+  "/script.js",
+  "/service-worker.js",
+  "/manifest.json",
+  "/logo.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/vendor/zxing-browser.min.js"
+], sendPublicAppAsset);
 
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     service: "jesunutri-local-backend",
     mode: "local",
+    connectionUrls: getConnectionUrls(),
     time: new Date().toISOString()
   });
 });

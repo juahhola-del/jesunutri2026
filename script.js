@@ -2,7 +2,9 @@ const SUPABASE_URL = "https://kfobwrcxvqygmfvvccfl.supabase.co";
 
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmb2J3cmN4dnF5Z21mdnZjY2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMzY0MTQsImV4cCI6MjA5NTgxMjQxNH0.hgGBTlCDtz3gbBTxnwmikVEtM6FFzRI1pL5BzgRFTPI";
-const LOCAL_BACKEND_URL = window.localStorage.getItem("jesunutri_local_backend_url") || "http://127.0.0.1:8787";
+const PRIMARY_BACKEND_DEFAULT_URL = "http://127.0.0.1:8787";
+const PRIMARY_BACKEND_STORAGE_KEY = "jesunutri_primary_backend_url";
+const LEGACY_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_local_backend_url";
 const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 
@@ -524,6 +526,10 @@ const state = {
   usingFallback: false,
   backend: {
     active: "desconocido",
+    baseUrl: "",
+    deviceMode: "desconocido",
+    hasOwnLocalBackend: null,
+    lastConnectionUrl: "",
     local: {
       available: false,
       installed: false,
@@ -531,6 +537,7 @@ const state = {
       migrationVersion: null,
       latestMigration: null,
       databasePath: "",
+      connectionUrls: [],
       counts: {},
       lastChecked: null,
       error: ""
@@ -591,12 +598,20 @@ const state = {
 
 const elements = {
   appSplash: document.getElementById("appSplash"),
+  connectorScreen: document.getElementById("connectorScreen"),
+  connectorForm: document.getElementById("connectorForm"),
+  connectorError: document.getElementById("connectorError"),
+  primaryBackendUrlInput: document.getElementById("primaryBackendUrlInput"),
+  testPrimaryBackendBtn: document.getElementById("testPrimaryBackendBtn"),
+  savePrimaryBackendBtn: document.getElementById("savePrimaryBackendBtn"),
+  retryLocalBackendBtn: document.getElementById("retryLocalBackendBtn"),
   loginScreen: document.getElementById("loginScreen"),
   loginForm: document.getElementById("loginForm"),
   loginError: document.getElementById("loginError"),
   loginBtn: document.getElementById("loginBtn"),
   appShell: document.getElementById("appShell"),
   operatorShell: document.getElementById("operatorShell"),
+  operatorDeviceModeBanner: document.getElementById("operatorDeviceModeBanner"),
   operatorBulkErrorList: document.getElementById("operatorBulkErrorList"),
   operatorWelcome: document.getElementById("operatorWelcome"),
   operatorNotice: document.getElementById("operatorNotice"),
@@ -610,6 +625,7 @@ const elements = {
   operatorPendingList: document.getElementById("operatorPendingList"),
   sendPendingBtn: document.getElementById("sendPendingBtn"),
   startContinuousScanBtn: document.getElementById("startContinuousScanBtn"),
+  adminStartContinuousScanBtn: document.getElementById("adminStartContinuousScanBtn"),
   learnProductsBtn: document.getElementById("learnProductsBtn"),
   reviewScanSessionsBtn: document.getElementById("reviewScanSessionsBtn"),
   continuousScanModal: document.getElementById("continuousScanModal"),
@@ -695,6 +711,7 @@ const elements = {
   searchInput: document.getElementById("searchInput"),
   toast: document.getElementById("toast"),
   errorBox: document.getElementById("errorBox"),
+  deviceModeBanner: document.getElementById("deviceModeBanner"),
   inventorySourceText: document.getElementById("inventorySourceText"),
   productSuggestions: document.getElementById("productSuggestions"),
   entryModal: document.getElementById("entryModal"),
@@ -751,7 +768,9 @@ const elements = {
   prepareLocalModeBtn: document.getElementById("prepareLocalModeBtn"),
   importSupabaseBtn: document.getElementById("importSupabaseBtn"),
   refreshBackendStatusBtn: document.getElementById("refreshBackendStatusBtn"),
+  openBackendConfigBtn: document.getElementById("openBackendConfigBtn"),
   localBackupBtn: document.getElementById("localBackupBtn"),
+  captureConnectHint: document.getElementById("captureConnectHint"),
   backendStatusGrid: document.getElementById("backendStatusGrid"),
   backendLocalStatus: document.getElementById("backendLocalStatus"),
   backendDbStatus: document.getElementById("backendDbStatus"),
@@ -1296,6 +1315,132 @@ function updateInstallUi() {
   if (installed || !state.deferredInstallPrompt) elements.installAppBtn.hidden = true;
 }
 
+function normalizeBackendUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+  try {
+    const url = new URL(withProtocol);
+    url.pathname = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch (error) {
+    return "";
+  }
+}
+
+function getCurrentOriginBackendUrl() {
+  try {
+    if (!/^https?:$/.test(window.location.protocol)) return "";
+    if (!window.location.hostname || window.location.hostname.includes("supabase.co")) return "";
+    return normalizeBackendUrl(window.location.origin);
+  } catch (error) {
+    return "";
+  }
+}
+
+function readStoredPrimaryBackendUrl() {
+  return normalizeBackendUrl(
+    window.localStorage.getItem(PRIMARY_BACKEND_STORAGE_KEY) ||
+    window.localStorage.getItem(LEGACY_LOCAL_BACKEND_STORAGE_KEY) ||
+    ""
+  );
+}
+
+function getActiveBackendUrl() {
+  return normalizeBackendUrl(
+    state.backend.baseUrl ||
+    readStoredPrimaryBackendUrl() ||
+    getCurrentOriginBackendUrl() ||
+    PRIMARY_BACKEND_DEFAULT_URL
+  );
+}
+
+function savePrimaryBackendUrl(url) {
+  const normalized = normalizeBackendUrl(url);
+  if (!normalized) throw new Error("Direccion de servidor invalida.");
+  window.localStorage.setItem(PRIMARY_BACKEND_STORAGE_KEY, normalized);
+  window.localStorage.setItem(LEGACY_LOCAL_BACKEND_STORAGE_KEY, normalized);
+  state.backend.baseUrl = normalized;
+  return normalized;
+}
+
+async function probeBackendHealth(url, timeoutMs = 1600) {
+  const baseUrl = normalizeBackendUrl(url);
+  if (!baseUrl) throw new Error("Direccion de servidor invalida.");
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${baseUrl}/api/health`, { signal: controller.signal });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) throw new Error(payload.error || "Backend no disponible.");
+    return payload;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+async function detectOwnDeviceBackend() {
+  try {
+    await probeBackendHealth(PRIMARY_BACKEND_DEFAULT_URL);
+    state.backend.hasOwnLocalBackend = true;
+    state.backend.deviceMode = "principal";
+    state.backend.baseUrl = PRIMARY_BACKEND_DEFAULT_URL;
+    return true;
+  } catch (error) {
+    state.backend.hasOwnLocalBackend = false;
+    state.backend.deviceMode = "capturador";
+    return false;
+  }
+}
+
+function isPrincipalDevice() {
+  return state.backend.deviceMode === "principal";
+}
+
+function isCaptureDevice() {
+  return state.backend.deviceMode === "capturador";
+}
+
+function getDeviceModeLabel() {
+  if (isPrincipalDevice()) return "Dispositivo principal";
+  if (isCaptureDevice()) return state.backend.local.available ? "Modo capturador conectado" : "Modo capturador";
+  return "Sin sistema principal";
+}
+
+function updateDeviceModeBanners() {
+  const label = getDeviceModeLabel();
+  const url = getActiveBackendUrl();
+  const text = isCaptureDevice()
+    ? state.backend.local.available
+      ? `${label}. Capturas enviadas al dispositivo principal.`
+      : "Modo capturador. Conecta con el dispositivo principal."
+    : isPrincipalDevice()
+      ? `${label}. Base oficial local activa.`
+      : label;
+  [elements.deviceModeBanner, elements.operatorDeviceModeBanner].forEach((banner) => {
+    if (!banner) return;
+    banner.hidden = state.backend.deviceMode === "desconocido";
+    banner.textContent = state.backend.deviceMode === "desconocido" ? "" : text;
+    banner.title = url;
+  });
+}
+
+function applyDeviceModeUi() {
+  const captureMode = isCaptureDevice();
+  const principalMode = isPrincipalDevice();
+  document.body.classList.toggle("capture-mode", captureMode);
+  document.body.classList.toggle("principal-device", principalMode);
+  if (elements.adminStartContinuousScanBtn) elements.adminStartContinuousScanBtn.hidden = !captureMode;
+  if (elements.reviewScanSessionsBtn) elements.reviewScanSessionsBtn.hidden = captureMode;
+  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = captureMode || shouldUseLocalBackend();
+  if (elements.importSupabaseBtn && captureMode) elements.importSupabaseBtn.hidden = true;
+  if (elements.localBackupBtn && captureMode) elements.localBackupBtn.hidden = true;
+  if (elements.openBackendConfigBtn) elements.openBackendConfigBtn.hidden = principalMode;
+  updateDeviceModeBanners();
+}
+
 function getMonthInfo(isoDate) {
   if (!isoDate) return null;
   const [year, month] = isoDate.split("-");
@@ -1384,26 +1529,56 @@ function hideSplash() {
 function showLogin() {
   hideSplash();
   state.currentUser = null;
+  if (elements.connectorScreen) elements.connectorScreen.hidden = true;
   elements.appShell.hidden = true;
   elements.operatorShell.hidden = true;
   elements.loginScreen.hidden = false;
   elements.loginForm.elements.email.focus();
 }
 
+function showConnectorScreen(message = "") {
+  hideSplash();
+  state.currentUser = null;
+  elements.loginScreen.hidden = true;
+  elements.appShell.hidden = true;
+  elements.operatorShell.hidden = true;
+  if (elements.connectorScreen) elements.connectorScreen.hidden = false;
+  if (elements.primaryBackendUrlInput) {
+    elements.primaryBackendUrlInput.value = readStoredPrimaryBackendUrl() || getCurrentOriginBackendUrl() || "";
+  }
+  if (elements.connectorError) {
+    elements.connectorError.textContent = message || "No se encontro el dispositivo principal. Revisa la red o configura la direccion del servidor.";
+    elements.connectorError.hidden = false;
+  }
+  elements.primaryBackendUrlInput?.focus();
+}
+
+function hideConnectorScreen() {
+  if (elements.connectorScreen) elements.connectorScreen.hidden = true;
+  if (elements.connectorError) {
+    elements.connectorError.textContent = "";
+    elements.connectorError.hidden = true;
+  }
+}
+
 function showAdminApp() {
   hideSplash();
+  hideConnectorScreen();
   elements.loginScreen.hidden = true;
   elements.operatorShell.hidden = true;
   elements.appShell.hidden = false;
+  applyDeviceModeUi();
 }
 
 function showOperatorApp() {
   hideSplash();
+  hideConnectorScreen();
   elements.loginScreen.hidden = true;
   elements.appShell.hidden = true;
   elements.operatorShell.hidden = false;
   const displayName = state.currentUser?.nombre || state.currentUser?.email || "Operador";
   elements.operatorWelcome.innerHTML = `<strong>Bienvenido: ${escapeHtml(displayName)}</strong><span>Rol: Operador</span>`;
+  applyDeviceModeUi();
 }
 
 function withTimeout(promise, timeoutMs, message) {
@@ -1425,6 +1600,10 @@ function rememberBackendError(error) {
 
 function shouldUseLocalBackend() {
   return Boolean(state.backend.local.available && state.backend.local.installed);
+}
+
+function canManageOfficialLocalBackend() {
+  return Boolean(shouldUseLocalBackend() && isPrincipalDevice());
 }
 
 function readLocalSetupState() {
@@ -1459,6 +1638,7 @@ function hasOperationalLocalData() {
 }
 
 function isInitialLocalImportComplete() {
+  if (!isPrincipalDevice()) return false;
   return Boolean(readLocalSetupState().initialImportComplete || state.backend.initialImportComplete || hasOperationalLocalData());
 }
 
@@ -1473,6 +1653,7 @@ function markInitialLocalImportComplete(importResult = null) {
 }
 
 function rememberDetectedLocalSetup() {
+  if (!isPrincipalDevice()) return;
   const setupState = readLocalSetupState();
   if (setupState.initialImportComplete || !shouldUseLocalBackend() || !hasOperationalLocalData()) return;
   state.backend.initialImportComplete = true;
@@ -1490,7 +1671,7 @@ function shouldHideLocalBackendPanel() {
 
 function updateActiveBackendMode() {
   if (shouldUseLocalBackend()) {
-    state.backend.active = "local";
+    state.backend.active = isCaptureDevice() ? "capturador" : "local";
   } else if (state.backend.supabase.connected) {
     state.backend.active = "supabase";
   } else {
@@ -1506,31 +1687,44 @@ function renderBackendStatus() {
   const importComplete = isInitialLocalImportComplete();
   state.backend.initialImportComplete = importComplete;
 
-  if (shouldHideLocalBackendPanel()) {
+  if (!isCaptureDevice() && shouldHideLocalBackendPanel()) {
     elements.localBackendPanel.hidden = true;
+    applyDeviceModeUi();
     return;
   }
 
   elements.localBackendPanel.hidden = false;
-  if (elements.backendStatusGrid) elements.backendStatusGrid.hidden = true;
-  if (elements.refreshBackendStatusBtn) elements.refreshBackendStatusBtn.hidden = true;
-  if (elements.localBackupBtn) elements.localBackupBtn.hidden = true;
-  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = localReady;
-  if (elements.importSupabaseBtn) elements.importSupabaseBtn.hidden = !localReady || importComplete;
+  if (elements.backendStatusGrid) elements.backendStatusGrid.hidden = isCaptureDevice();
+  if (elements.refreshBackendStatusBtn) elements.refreshBackendStatusBtn.hidden = false;
+  if (elements.localBackupBtn) elements.localBackupBtn.hidden = !canManageOfficialLocalBackend();
+  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = isCaptureDevice() || localReady;
+  if (elements.importSupabaseBtn) elements.importSupabaseBtn.hidden = isCaptureDevice() || !localReady || importComplete;
+  if (elements.openBackendConfigBtn) elements.openBackendConfigBtn.hidden = isPrincipalDevice();
+  if (elements.captureConnectHint) {
+    const lanUrl = (local.connectionUrls || []).find((url) => !/127\.0\.0\.1|localhost/i.test(url)) || "";
+    elements.captureConnectHint.hidden = !isPrincipalDevice() || !lanUrl;
+    elements.captureConnectHint.textContent = lanUrl ? `Conecta capturador en: ${lanUrl}` : "";
+  }
 
   const supabaseStatus = state.backend.supabase.connected ? "conectado" : "desconectado";
   const localStatus = local.available ? "activo" : "inactivo";
   const dbStatus = local.installed ? "instalada" : "pendiente";
-  const activeLabel = localReady ? "Importacion pendiente" : "Preparar modo local";
+  const activeLabel = isCaptureDevice()
+    ? "Modo capturador conectado"
+    : localReady
+      ? importComplete ? "Dispositivo principal" : "Importacion pendiente"
+      : "Preparar modo local";
 
   if (elements.localBackendDescription) {
-    elements.localBackendDescription.textContent = localReady
-      ? "Copia los datos actuales al dispositivo local. Luego este panel se ocultara automaticamente."
-      : "Prepara este dispositivo para trabajar con base local, sin depender de internet.";
+    elements.localBackendDescription.textContent = isCaptureDevice()
+      ? "Este dispositivo envia capturas al sistema principal. No administra la base oficial."
+      : localReady
+        ? "Copia los datos actuales al dispositivo local. Luego este panel se ocultara automaticamente."
+        : "Prepara este dispositivo para trabajar con base local, sin depender de internet.";
   }
 
   elements.localModePill.textContent = activeLabel;
-  elements.localModePill.className = `backend-mode-pill ${localReady ? "local" : "error"}`;
+  elements.localModePill.className = `backend-mode-pill ${isCaptureDevice() ? "capture" : localReady ? "local" : "error"}`;
   elements.backendLocalStatus.textContent = localStatus;
   elements.backendDbStatus.textContent = dbStatus;
   elements.backendMigrationStatus.textContent = local.migrationVersion || "-";
@@ -1546,6 +1740,7 @@ function renderBackendStatus() {
   elements.backendErrorList.innerHTML = backendErrors.length
     ? backendErrors.slice(0, 5).map((message) => `<div>${escapeHtml(message)}</div>`).join("")
     : '<div class="backend-ok">Sin errores recientes.</div>';
+  applyDeviceModeUi();
 }
 
 const dataProvider = {
@@ -1553,11 +1748,13 @@ const dataProvider = {
     return supabaseClient.from(tableName);
   },
 
-  async localRequest(path, { method = "GET", body = null, timeoutMs = 4500 } = {}) {
+  async localRequest(path, { method = "GET", body = null, timeoutMs = 4500, baseUrl = "" } = {}) {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(`${LOCAL_BACKEND_URL}${path}`, {
+      const requestBaseUrl = normalizeBackendUrl(baseUrl || getActiveBackendUrl());
+      if (!requestBaseUrl) throw new Error("Direccion de backend invalida.");
+      const response = await fetch(`${requestBaseUrl}${path}`, {
         method,
         headers: body ? { "Content-Type": "application/json" } : undefined,
         body: body ? JSON.stringify(body) : undefined,
@@ -1577,9 +1774,12 @@ const dataProvider = {
     }
   },
 
-  async checkLocalStatus({ quiet = false } = {}) {
+  async checkLocalStatus({ quiet = false, url = "" } = {}) {
+    const baseUrl = normalizeBackendUrl(url || getActiveBackendUrl());
     try {
-      const status = await this.localRequest("/api/status", { timeoutMs: 3000 });
+      const status = await this.localRequest("/api/status", { timeoutMs: 3000, baseUrl });
+      state.backend.baseUrl = baseUrl;
+      state.backend.lastConnectionUrl = baseUrl;
       state.backend.local = {
         available: true,
         installed: Boolean(status.installed),
@@ -1587,6 +1787,7 @@ const dataProvider = {
         migrationVersion: status.migrationVersion || null,
         latestMigration: status.latestMigration || null,
         databasePath: status.databasePath || "",
+        connectionUrls: status.connectionUrls || [],
         counts: status.counts || {},
         lastChecked: new Date().toISOString(),
         error: ""
@@ -1596,13 +1797,18 @@ const dataProvider = {
       renderBackendStatus();
       return status;
     } catch (error) {
+      if (url) {
+        throw error;
+      }
       state.backend.local = {
         ...state.backend.local,
         available: false,
         installed: false,
         status: "inactivo",
         lastChecked: new Date().toISOString(),
-        error: "Backend local inactivo. Ejecuta local-backend\\iniciar-backend-local.cmd."
+        error: isCaptureDevice()
+          ? "No se encontro el dispositivo principal."
+          : "Backend local inactivo."
       };
       updateActiveBackendMode();
       if (!quiet) rememberBackendError(error);
@@ -1645,6 +1851,7 @@ const dataProvider = {
   },
 
   async installLocal() {
+    if (!isPrincipalDevice()) throw new Error("La instalacion local solo esta disponible en el dispositivo principal.");
     const status = await this.localRequest("/api/install", { method: "POST", body: {}, timeoutMs: 20000 });
     state.backend.local = {
       available: true,
@@ -1664,10 +1871,12 @@ const dataProvider = {
   },
 
   async backupLocal() {
+    if (!isPrincipalDevice()) throw new Error("El backup local solo esta disponible en el dispositivo principal.");
     return this.localRequest("/api/backup", { method: "POST", body: {}, timeoutMs: 20000 });
   },
 
   async importFromSupabase() {
+    if (!isPrincipalDevice()) throw new Error("La importacion solo esta disponible en el dispositivo principal.");
     let accessToken = "";
     try {
       const { data } = await supabaseClient.auth.getSession();
@@ -1807,9 +2016,64 @@ const dataProvider = {
   }
 };
 
+async function resolveBackendConnection({ quiet = true } = {}) {
+  const hasOwnBackend = await detectOwnDeviceBackend();
+  const candidates = hasOwnBackend
+    ? [PRIMARY_BACKEND_DEFAULT_URL]
+    : [
+        getCurrentOriginBackendUrl(),
+        readStoredPrimaryBackendUrl()
+      ];
+  const normalizedCandidates = candidates.map(normalizeBackendUrl).filter(Boolean);
+  const uniqueCandidates = [...new Set(normalizedCandidates)];
+
+  for (const url of uniqueCandidates) {
+    try {
+      const status = await dataProvider.checkLocalStatus({ quiet: true, url });
+      if (hasOwnBackend || status?.installed) {
+        savePrimaryBackendUrl(url);
+        renderBackendStatus();
+        return status;
+      }
+    } catch (error) {
+      if (!quiet) rememberBackendError(error);
+    }
+  }
+
+  state.backend.baseUrl = hasOwnBackend
+    ? PRIMARY_BACKEND_DEFAULT_URL
+    : readStoredPrimaryBackendUrl() || getCurrentOriginBackendUrl() || "";
+  state.backend.local = {
+    ...state.backend.local,
+    available: false,
+    installed: false,
+    status: "inactivo",
+    lastChecked: new Date().toISOString(),
+    error: hasOwnBackend ? "Backend local inactivo." : "No se encontro el dispositivo principal."
+  };
+  updateActiveBackendMode();
+  renderBackendStatus();
+  return null;
+}
+
+async function connectToPrimaryBackend(url, { persist = true } = {}) {
+  const hasOwnBackend = await detectOwnDeviceBackend();
+  const normalized = normalizeBackendUrl(url);
+  if (!normalized) throw new Error("Direccion de servidor invalida.");
+  const targetUrl = hasOwnBackend ? PRIMARY_BACKEND_DEFAULT_URL : normalized;
+  const status = await dataProvider.checkLocalStatus({ quiet: false, url: targetUrl });
+  const connectsToOwnBackend = hasOwnBackend && targetUrl === PRIMARY_BACKEND_DEFAULT_URL;
+  if (!status?.installed && !connectsToOwnBackend) {
+    throw new Error("El servidor responde, pero la base local no esta instalada.");
+  }
+  if (persist) savePrimaryBackendUrl(targetUrl);
+  renderBackendStatus();
+  return status;
+}
+
 async function refreshBackendStatus({ quiet = true } = {}) {
   const [local] = await Promise.all([
-    dataProvider.checkLocalStatus({ quiet }),
+    resolveBackendConnection({ quiet }),
     dataProvider.checkSupabaseStatus()
   ]);
   renderBackendStatus();
@@ -1852,6 +2116,7 @@ function isAdmin() {
 
 function requireAdminAction() {
   if (!isAdmin()) throw new Error("Accion disponible solo para admin.");
+  if (isCaptureDevice()) throw new Error("Accion disponible solo en el dispositivo principal.");
 }
 
 async function loadAuthorizedUser(authUser) {
@@ -1889,10 +2154,18 @@ async function loadAuthorizedUser(authUser) {
 async function startAuthenticatedApp(session) {
   await withTimeout(loadAuthorizedUser(session.user), 12000, "No se pudo validar el usuario. Revisa internet o permisos RLS.");
   await refreshBackendStatus({ quiet: true });
-  await loadClinicalSupplyState();
-  setupClinicalSupplyControls();
   if (isAdmin()) {
     showAdminApp();
+    if (isCaptureDevice()) {
+      try {
+        await withTimeout(loadInventoryFromLocal(), 12000, "No se pudo cargar catalogo desde el dispositivo principal.");
+      } catch (error) {
+        showError("Sesion iniciada, pero hubo un problema cargando datos de captura", error);
+      }
+      return;
+    }
+    await loadClinicalSupplyState();
+    setupClinicalSupplyControls();
     try {
       await withTimeout(loadDailyTasks(), 12000, "No se pudieron cargar tareas del dia.");
       await withTimeout(refreshInventory(), 18000, "No se pudo cargar inventario a tiempo.");
@@ -1923,9 +2196,13 @@ async function startAuthenticatedApp(session) {
 
 async function checkInitialSession() {
   clearLoginError();
-  const localStatus = await dataProvider.checkLocalStatus({ quiet: true });
+  const localStatus = await resolveBackendConnection({ quiet: true });
+  if (!localStatus) {
+    showConnectorScreen();
+    return;
+  }
   dataProvider.checkSupabaseStatus().catch(() => {});
-  if (localStatus?.installed && await resumeLocalSession()) return;
+  if (await resumeLocalSession()) return;
 
   try {
     const { data, error } = await withTimeout(
@@ -2170,10 +2447,12 @@ async function loadInventoryFromLocal() {
   state.lowStockProducts = snapshot.lowStock || [];
   state.movements = (snapshot.movements || []).map(mapMovementRow);
   state.usingFallback = false;
-  state.backend.active = "local";
-  elements.inventorySourceText.textContent = state.inventory.length
-    ? "Modo local activo. Datos cargados desde SQLite local."
-    : "Modo local activo. Base SQLite local instalada, sin inventario cargado aun.";
+  state.backend.active = isCaptureDevice() ? "capturador" : "local";
+  elements.inventorySourceText.textContent = isCaptureDevice()
+    ? "Modo capturador conectado. Catalogo cargado desde el dispositivo principal."
+    : state.inventory.length
+      ? "Modo local activo. Datos cargados desde SQLite local."
+      : "Modo local activo. Base SQLite local instalada, sin inventario cargado aun.";
   renderProductSuggestions();
   renderBackendStatus();
   clearError();
@@ -2191,31 +2470,37 @@ const inventoryService = {
   },
 
   async createEntry(payload) {
+    if (isCaptureDevice()) throw new Error("El capturador no modifica inventario directo. Envia una sesion pendiente.");
     if (shouldUseLocalBackend()) return dataProvider.createLocalEntry(payload);
     return null;
   },
 
   async updateEntry(lotId, payload) {
+    if (isCaptureDevice()) throw new Error("El capturador no modifica inventario directo.");
     if (shouldUseLocalBackend()) return dataProvider.updateLocalEntry(lotId, payload);
     return null;
   },
 
   async deleteLot(lotId) {
+    if (isCaptureDevice()) throw new Error("El capturador no modifica inventario directo.");
     if (shouldUseLocalBackend()) return dataProvider.deleteLocalLot(lotId);
     return null;
   },
 
   async createMovements(movements) {
+    if (isCaptureDevice()) throw new Error("El capturador no modifica inventario directo.");
     if (shouldUseLocalBackend()) return dataProvider.createLocalMovements(movements);
     return null;
   },
 
   async updateLot(lotId, fields) {
+    if (isCaptureDevice()) throw new Error("El capturador no modifica inventario directo.");
     if (shouldUseLocalBackend()) return dataProvider.updateLocalLot(lotId, fields);
     return null;
   },
 
   async updateProduct(productId, fields) {
+    if (isCaptureDevice()) throw new Error("El capturador no modifica inventario directo.");
     if (shouldUseLocalBackend()) return dataProvider.updateLocalProduct(productId, fields);
     return null;
   }
@@ -14273,6 +14558,7 @@ document.getElementById("operatorCancelEntry").addEventListener("click", () => {
   resetPosSession("operator");
 });
 elements.startContinuousScanBtn.addEventListener("click", openContinuousScanModal);
+elements.adminStartContinuousScanBtn?.addEventListener("click", openContinuousScanModal);
 document.getElementById("closeContinuousScanModal").addEventListener("click", closeContinuousScanModal);
 elements.continuousScanModal.addEventListener("click", (event) => {
   if (event.target === elements.continuousScanModal) closeContinuousScanModal();
@@ -14611,6 +14897,64 @@ document.getElementById("backupBtn").addEventListener("click", exportBackupCsv);
 document.getElementById("criticalViewBtn").addEventListener("click", () => {
   elements.compactCriticalPanel.hidden = !elements.compactCriticalPanel.hidden;
 });
+
+async function handlePrimaryBackendConnect({ persist }) {
+  const url = elements.primaryBackendUrlInput?.value || "";
+  if (elements.connectorError) elements.connectorError.hidden = true;
+  const button = persist ? elements.savePrimaryBackendBtn : elements.testPrimaryBackendBtn;
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = persist ? "Guardando..." : "Probando...";
+  }
+  try {
+    const status = await connectToPrimaryBackend(url, { persist });
+    const mode = isCaptureDevice() ? "Modo capturador conectado" : "Dispositivo principal conectado";
+    showToastSuccess(`${mode}.`);
+    if (persist) {
+      hideConnectorScreen();
+      await checkInitialSession();
+    } else if (elements.connectorError) {
+      const baseState = status.installed ? `Base ${status.migrationVersion || ""} lista.` : "Base local pendiente de preparar.";
+      elements.connectorError.textContent = `${mode}. ${baseState}`;
+      elements.connectorError.hidden = false;
+    }
+  } catch (error) {
+    if (elements.connectorError) {
+      elements.connectorError.textContent = getSupabaseErrorMessage(error);
+      elements.connectorError.hidden = false;
+    }
+    showToastError("No se pudo conectar.");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+}
+
+elements.testPrimaryBackendBtn?.addEventListener("click", () => handlePrimaryBackendConnect({ persist: false }));
+elements.connectorForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  handlePrimaryBackendConnect({ persist: true });
+});
+elements.retryLocalBackendBtn?.addEventListener("click", async () => {
+  const originalText = elements.retryLocalBackendBtn.textContent;
+  elements.retryLocalBackendBtn.disabled = true;
+  elements.retryLocalBackendBtn.textContent = "Reintentando...";
+  try {
+    await checkInitialSession();
+  } catch (error) {
+    if (elements.connectorError) {
+      elements.connectorError.textContent = "No se encontro el dispositivo principal. Configura la direccion de la tablet/PC principal.";
+      elements.connectorError.hidden = false;
+    }
+  } finally {
+    elements.retryLocalBackendBtn.disabled = false;
+    elements.retryLocalBackendBtn.textContent = originalText;
+  }
+});
+elements.openBackendConfigBtn?.addEventListener("click", () => showConnectorScreen("Configura o cambia la direccion del dispositivo principal."));
 
 elements.prepareLocalModeBtn?.addEventListener("click", async () => {
   elements.prepareLocalModeBtn.disabled = true;

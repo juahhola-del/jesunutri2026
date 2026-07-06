@@ -14,6 +14,14 @@ URL local por defecto:
 http://127.0.0.1:8787
 ```
 
+Desde un celular en la misma red, abre la app con la IP del dispositivo principal:
+
+```text
+http://IP-DE-LA-TABLET-O-PC:8787
+```
+
+El backend escucha la red local por defecto para que el celular funcione como capturador. La base SQLite, imagenes de etiquetas y sesiones quedan guardadas solo en este dispositivo principal.
+
 ## Credenciales locales iniciales
 
 Por defecto se crea un usuario administrador local:

@@ -26,8 +26,9 @@ const DATA_DIR = path.resolve(process.env.JESUNUTRI_LOCAL_DATA_DIR || path.join(
 const BACKUP_DIR = path.resolve(process.env.JESUNUTRI_LOCAL_BACKUP_DIR || path.join(__dirname, "backups"));
 const DB_PATH = path.resolve(process.env.JESUNUTRI_LOCAL_DB_PATH || path.join(DATA_DIR, "jesunutri-local.sqlite"));
 const LABEL_IMAGES_DIR = path.resolve(process.env.JESUNUTRI_LOCAL_LABEL_IMAGES_DIR || path.join(DATA_DIR, "label-images"));
+const APP_PUBLIC_DIR = path.resolve(process.env.JESUNUTRI_APP_PUBLIC_DIR || path.join(__dirname, ".."));
 const PORT = Number(process.env.JESUNUTRI_LOCAL_PORT || 8787);
-const HOST = process.env.JESUNUTRI_LOCAL_HOST || "127.0.0.1";
+const HOST = process.env.JESUNUTRI_LOCAL_HOST || "0.0.0.0";
 
 const LOCAL_ADMIN = {
   id: process.env.JESUNUTRI_LOCAL_ADMIN_ID || "local-admin",
@@ -48,6 +49,7 @@ module.exports = {
   BACKUP_DIR,
   DB_PATH,
   LABEL_IMAGES_DIR,
+  APP_PUBLIC_DIR,
   PORT,
   HOST,
   LOCAL_ADMIN,

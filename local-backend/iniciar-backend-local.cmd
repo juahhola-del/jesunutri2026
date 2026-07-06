@@ -17,7 +17,8 @@ if not exist backups mkdir backups
 
 echo.
 echo Backend local JESUnutri
-echo URL: http://127.0.0.1:8787
+echo En este dispositivo: http://127.0.0.1:8787
+echo Desde celular/tablet en la misma red: http://IP-DE-ESTE-DISPOSITIVO:8787
 echo.
 echo Deja esta ventana abierta mientras uses la app.
 echo.

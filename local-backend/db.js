@@ -490,27 +490,31 @@ function importRowsIntoTable(table, rows = []) {
 function buildWhere(filters = []) {
   const clauses = [];
   const values = [];
+  const normalizeFilterValue = (value) => {
+    if (typeof value === "boolean") return value ? 1 : 0;
+    return value;
+  };
   filters.forEach((filter) => {
     const column = filter.column;
     if (!/^[a-zA-Z0-9_]+$/.test(column)) throw new Error(`Filtro invalido: ${column}`);
     if (filter.op === "eq") {
       clauses.push(`${column} = ?`);
-      values.push(filter.value);
+      values.push(normalizeFilterValue(filter.value));
     } else if (filter.op === "neq") {
       clauses.push(`${column} <> ?`);
-      values.push(filter.value);
+      values.push(normalizeFilterValue(filter.value));
     } else if (filter.op === "gt") {
       clauses.push(`${column} > ?`);
-      values.push(filter.value);
+      values.push(normalizeFilterValue(filter.value));
     } else if (filter.op === "is") {
       clauses.push(filter.value === null ? `${column} is null` : `${column} is ?`);
-      if (filter.value !== null) values.push(filter.value);
+      if (filter.value !== null) values.push(normalizeFilterValue(filter.value));
     } else if (filter.op === "in") {
       const list = Array.isArray(filter.value) ? filter.value : [];
       if (!list.length) clauses.push("1 = 0");
       else {
         clauses.push(`${column} in (${list.map(() => "?").join(", ")})`);
-        values.push(...list);
+        values.push(...list.map(normalizeFilterValue));
       }
     }
   });

@@ -1,4 +1,4 @@
-const CACHE_NAME = "jesunutri-pwa-v26";
+const CACHE_NAME = "jesunutri-pwa-v29";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
@@ -10,6 +10,17 @@ const STATIC_ASSETS = [
   "./icon-512.png",
   "./manifest.json"
 ];
+const STATIC_PATHS = new Set([
+  "/",
+  "/index.html",
+  "/styles.css",
+  "/script.js",
+  "/vendor/zxing-browser.min.js",
+  "/logo.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/manifest.json"
+]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -52,6 +63,10 @@ self.addEventListener("fetch", (event) => {
 
   if (requestUrl.hostname.includes("supabase.co")) return;
   if (event.request.method !== "GET") return;
+  if (requestUrl.origin === self.location.origin && (
+    requestUrl.pathname.startsWith("/api/") ||
+    requestUrl.pathname.startsWith("/label-images/")
+  )) return;
 
   if (event.request.mode === "navigate") {
     event.respondWith(networkFirst(event.request));
@@ -59,6 +74,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (requestUrl.origin === self.location.origin) {
+    if (!STATIC_PATHS.has(requestUrl.pathname)) return;
     if (requestUrl.pathname.endsWith(".js") || requestUrl.pathname.endsWith(".css")) {
       event.respondWith(networkFirst(event.request));
       return;
