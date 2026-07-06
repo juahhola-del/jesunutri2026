@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Jesunutri">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=26">
+    <link rel="stylesheet" href="styles.css?v=27">
   </head>
   <body>
     <section class="app-splash" id="appSplash">
@@ -37,27 +37,6 @@
         </label>
         <div class="login-error" id="loginError" hidden></div>
         <button class="btn primary" type="submit" id="loginBtn">Ingresar</button>
-      </form>
-    </section>
-
-    <section class="connector-screen" id="connectorScreen" hidden>
-      <form class="connector-card" id="connectorForm">
-        <img src="logo.png" alt="Jesunutri" class="login-logo">
-        <div>
-          <h1>Conectar con dispositivo principal</h1>
-          <p>No se encontro el dispositivo principal. Conectate a la misma red que la tablet de Jesu o configura la direccion del servidor.</p>
-        </div>
-        <label>
-          <span>Direccion del servidor principal</span>
-          <input id="primaryBackendUrlInput" name="primary_backend_url" type="url" inputmode="url" autocomplete="url" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="http://192.168.1.132:8787">
-        </label>
-        <div class="connector-actions">
-          <button class="btn" type="button" id="testPrimaryBackendBtn">Probar conexion</button>
-          <button class="btn primary" type="submit" id="savePrimaryBackendBtn">Guardar</button>
-        </div>
-        <button class="btn secondary" type="button" id="retryLocalBackendBtn">Reintentar</button>
-        <button class="btn secondary" type="button" disabled>Escanear QR de conexion</button>
-        <div class="login-error" id="connectorError" hidden></div>
       </form>
     </section>
 
@@ -237,7 +216,6 @@
             <button class="btn primary" type="button" id="prepareLocalModeBtn">Preparar modo local</button>
             <button class="btn" type="button" id="importSupabaseBtn" hidden>Importar datos existentes</button>
             <button class="btn" type="button" id="refreshBackendStatusBtn" hidden>Revisar estado</button>
-            <button class="btn" type="button" id="openBackendConfigBtn" hidden>Configurar servidor</button>
             <button class="btn" type="button" id="localBackupBtn" hidden>Backup local</button>
           </div>
           <div class="capture-connect-hint" id="captureConnectHint" hidden></div>
@@ -1873,8 +1851,8 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="vendor/zxing-browser.min.js?v=26"></script>
-    <script src="script.js?v=26"></script>
+    <script src="vendor/zxing-browser.min.js?v=27"></script>
+    <script src="script.js?v=27"></script>
   </body>
 </html>
 

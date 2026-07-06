@@ -598,13 +598,6 @@ const state = {
 
 const elements = {
   appSplash: document.getElementById("appSplash"),
-  connectorScreen: document.getElementById("connectorScreen"),
-  connectorForm: document.getElementById("connectorForm"),
-  connectorError: document.getElementById("connectorError"),
-  primaryBackendUrlInput: document.getElementById("primaryBackendUrlInput"),
-  testPrimaryBackendBtn: document.getElementById("testPrimaryBackendBtn"),
-  savePrimaryBackendBtn: document.getElementById("savePrimaryBackendBtn"),
-  retryLocalBackendBtn: document.getElementById("retryLocalBackendBtn"),
   loginScreen: document.getElementById("loginScreen"),
   loginForm: document.getElementById("loginForm"),
   loginError: document.getElementById("loginError"),
@@ -768,7 +761,6 @@ const elements = {
   prepareLocalModeBtn: document.getElementById("prepareLocalModeBtn"),
   importSupabaseBtn: document.getElementById("importSupabaseBtn"),
   refreshBackendStatusBtn: document.getElementById("refreshBackendStatusBtn"),
-  openBackendConfigBtn: document.getElementById("openBackendConfigBtn"),
   localBackupBtn: document.getElementById("localBackupBtn"),
   captureConnectHint: document.getElementById("captureConnectHint"),
   backendStatusGrid: document.getElementById("backendStatusGrid"),
@@ -1390,7 +1382,6 @@ async function detectOwnDeviceBackend() {
     return true;
   } catch (error) {
     state.backend.hasOwnLocalBackend = false;
-    state.backend.deviceMode = "capturador";
     return false;
   }
 }
@@ -1437,7 +1428,6 @@ function applyDeviceModeUi() {
   if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = captureMode || shouldUseLocalBackend();
   if (elements.importSupabaseBtn && captureMode) elements.importSupabaseBtn.hidden = true;
   if (elements.localBackupBtn && captureMode) elements.localBackupBtn.hidden = true;
-  if (elements.openBackendConfigBtn) elements.openBackendConfigBtn.hidden = principalMode;
   updateDeviceModeBanners();
 }
 
@@ -1529,41 +1519,14 @@ function hideSplash() {
 function showLogin() {
   hideSplash();
   state.currentUser = null;
-  if (elements.connectorScreen) elements.connectorScreen.hidden = true;
   elements.appShell.hidden = true;
   elements.operatorShell.hidden = true;
   elements.loginScreen.hidden = false;
   elements.loginForm.elements.email.focus();
 }
 
-function showConnectorScreen(message = "") {
-  hideSplash();
-  state.currentUser = null;
-  elements.loginScreen.hidden = true;
-  elements.appShell.hidden = true;
-  elements.operatorShell.hidden = true;
-  if (elements.connectorScreen) elements.connectorScreen.hidden = false;
-  if (elements.primaryBackendUrlInput) {
-    elements.primaryBackendUrlInput.value = readStoredPrimaryBackendUrl() || getCurrentOriginBackendUrl() || "";
-  }
-  if (elements.connectorError) {
-    elements.connectorError.textContent = message || "No se encontro el dispositivo principal. Revisa la red o configura la direccion del servidor.";
-    elements.connectorError.hidden = false;
-  }
-  elements.primaryBackendUrlInput?.focus();
-}
-
-function hideConnectorScreen() {
-  if (elements.connectorScreen) elements.connectorScreen.hidden = true;
-  if (elements.connectorError) {
-    elements.connectorError.textContent = "";
-    elements.connectorError.hidden = true;
-  }
-}
-
 function showAdminApp() {
   hideSplash();
-  hideConnectorScreen();
   elements.loginScreen.hidden = true;
   elements.operatorShell.hidden = true;
   elements.appShell.hidden = false;
@@ -1572,7 +1535,6 @@ function showAdminApp() {
 
 function showOperatorApp() {
   hideSplash();
-  hideConnectorScreen();
   elements.loginScreen.hidden = true;
   elements.appShell.hidden = true;
   elements.operatorShell.hidden = false;
@@ -1699,7 +1661,6 @@ function renderBackendStatus() {
   if (elements.localBackupBtn) elements.localBackupBtn.hidden = !canManageOfficialLocalBackend();
   if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = isCaptureDevice() || localReady;
   if (elements.importSupabaseBtn) elements.importSupabaseBtn.hidden = isCaptureDevice() || !localReady || importComplete;
-  if (elements.openBackendConfigBtn) elements.openBackendConfigBtn.hidden = isPrincipalDevice();
   if (elements.captureConnectHint) {
     const lanUrl = (local.connectionUrls || []).find((url) => !/127\.0\.0\.1|localhost/i.test(url)) || "";
     elements.captureConnectHint.hidden = !isPrincipalDevice() || !lanUrl;
@@ -2016,8 +1977,11 @@ const dataProvider = {
   }
 };
 
-async function resolveBackendConnection({ quiet = true } = {}) {
+async function resolveBackendConnection({ quiet = true, role = "" } = {}) {
   const hasOwnBackend = await detectOwnDeviceBackend();
+  const isAdminRole = role === "admin";
+  const isOperatorRole = role === "operador";
+  if (hasOwnBackend) state.backend.deviceMode = "principal";
   const candidates = hasOwnBackend
     ? [PRIMARY_BACKEND_DEFAULT_URL]
     : [
@@ -2031,6 +1995,7 @@ async function resolveBackendConnection({ quiet = true } = {}) {
     try {
       const status = await dataProvider.checkLocalStatus({ quiet: true, url });
       if (hasOwnBackend || status?.installed) {
+        state.backend.deviceMode = hasOwnBackend ? "principal" : "capturador";
         savePrimaryBackendUrl(url);
         renderBackendStatus();
         return status;
@@ -2040,7 +2005,12 @@ async function resolveBackendConnection({ quiet = true } = {}) {
     }
   }
 
-  state.backend.baseUrl = hasOwnBackend
+  state.backend.deviceMode = hasOwnBackend || isAdminRole
+    ? "principal"
+    : isOperatorRole
+      ? "capturador"
+      : "desconocido";
+  state.backend.baseUrl = hasOwnBackend || isAdminRole
     ? PRIMARY_BACKEND_DEFAULT_URL
     : readStoredPrimaryBackendUrl() || getCurrentOriginBackendUrl() || "";
   state.backend.local = {
@@ -2049,31 +2019,20 @@ async function resolveBackendConnection({ quiet = true } = {}) {
     installed: false,
     status: "inactivo",
     lastChecked: new Date().toISOString(),
-    error: hasOwnBackend ? "Backend local inactivo." : "No se encontro el dispositivo principal."
+    error: hasOwnBackend || isAdminRole
+      ? "Backend local inactivo."
+      : isOperatorRole
+        ? "No se encontro el dispositivo principal."
+        : ""
   };
   updateActiveBackendMode();
   renderBackendStatus();
   return null;
 }
 
-async function connectToPrimaryBackend(url, { persist = true } = {}) {
-  const hasOwnBackend = await detectOwnDeviceBackend();
-  const normalized = normalizeBackendUrl(url);
-  if (!normalized) throw new Error("Direccion de servidor invalida.");
-  const targetUrl = hasOwnBackend ? PRIMARY_BACKEND_DEFAULT_URL : normalized;
-  const status = await dataProvider.checkLocalStatus({ quiet: false, url: targetUrl });
-  const connectsToOwnBackend = hasOwnBackend && targetUrl === PRIMARY_BACKEND_DEFAULT_URL;
-  if (!status?.installed && !connectsToOwnBackend) {
-    throw new Error("El servidor responde, pero la base local no esta instalada.");
-  }
-  if (persist) savePrimaryBackendUrl(targetUrl);
-  renderBackendStatus();
-  return status;
-}
-
 async function refreshBackendStatus({ quiet = true } = {}) {
   const [local] = await Promise.all([
-    resolveBackendConnection({ quiet }),
+    resolveBackendConnection({ quiet, role: state.currentUser?.rol || "" }),
     dataProvider.checkSupabaseStatus()
   ]);
   renderBackendStatus();
@@ -2196,11 +2155,7 @@ async function startAuthenticatedApp(session) {
 
 async function checkInitialSession() {
   clearLoginError();
-  const localStatus = await resolveBackendConnection({ quiet: true });
-  if (!localStatus) {
-    showConnectorScreen();
-    return;
-  }
+  await resolveBackendConnection({ quiet: true });
   dataProvider.checkSupabaseStatus().catch(() => {});
   if (await resumeLocalSession()) return;
 
@@ -14897,64 +14852,6 @@ document.getElementById("backupBtn").addEventListener("click", exportBackupCsv);
 document.getElementById("criticalViewBtn").addEventListener("click", () => {
   elements.compactCriticalPanel.hidden = !elements.compactCriticalPanel.hidden;
 });
-
-async function handlePrimaryBackendConnect({ persist }) {
-  const url = elements.primaryBackendUrlInput?.value || "";
-  if (elements.connectorError) elements.connectorError.hidden = true;
-  const button = persist ? elements.savePrimaryBackendBtn : elements.testPrimaryBackendBtn;
-  const originalText = button?.textContent || "";
-  if (button) {
-    button.disabled = true;
-    button.textContent = persist ? "Guardando..." : "Probando...";
-  }
-  try {
-    const status = await connectToPrimaryBackend(url, { persist });
-    const mode = isCaptureDevice() ? "Modo capturador conectado" : "Dispositivo principal conectado";
-    showToastSuccess(`${mode}.`);
-    if (persist) {
-      hideConnectorScreen();
-      await checkInitialSession();
-    } else if (elements.connectorError) {
-      const baseState = status.installed ? `Base ${status.migrationVersion || ""} lista.` : "Base local pendiente de preparar.";
-      elements.connectorError.textContent = `${mode}. ${baseState}`;
-      elements.connectorError.hidden = false;
-    }
-  } catch (error) {
-    if (elements.connectorError) {
-      elements.connectorError.textContent = getSupabaseErrorMessage(error);
-      elements.connectorError.hidden = false;
-    }
-    showToastError("No se pudo conectar.");
-  } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = originalText;
-    }
-  }
-}
-
-elements.testPrimaryBackendBtn?.addEventListener("click", () => handlePrimaryBackendConnect({ persist: false }));
-elements.connectorForm?.addEventListener("submit", (event) => {
-  event.preventDefault();
-  handlePrimaryBackendConnect({ persist: true });
-});
-elements.retryLocalBackendBtn?.addEventListener("click", async () => {
-  const originalText = elements.retryLocalBackendBtn.textContent;
-  elements.retryLocalBackendBtn.disabled = true;
-  elements.retryLocalBackendBtn.textContent = "Reintentando...";
-  try {
-    await checkInitialSession();
-  } catch (error) {
-    if (elements.connectorError) {
-      elements.connectorError.textContent = "No se encontro el dispositivo principal. Configura la direccion de la tablet/PC principal.";
-      elements.connectorError.hidden = false;
-    }
-  } finally {
-    elements.retryLocalBackendBtn.disabled = false;
-    elements.retryLocalBackendBtn.textContent = originalText;
-  }
-});
-elements.openBackendConfigBtn?.addEventListener("click", () => showConnectorScreen("Configura o cambia la direccion del dispositivo principal."));
 
 elements.prepareLocalModeBtn?.addEventListener("click", async () => {
   elements.prepareLocalModeBtn.disabled = true;
