@@ -528,6 +528,7 @@ const state = {
     active: "desconocido",
     baseUrl: "",
     deviceMode: "desconocido",
+    forceShowLocalPanel: false,
     hasOwnLocalBackend: null,
     lastConnectionUrl: "",
     local: {
@@ -618,6 +619,7 @@ const elements = {
   operatorPendingList: document.getElementById("operatorPendingList"),
   sendPendingBtn: document.getElementById("sendPendingBtn"),
   startContinuousScanBtn: document.getElementById("startContinuousScanBtn"),
+  localSetupBtn: document.getElementById("localSetupBtn"),
   adminStartContinuousScanBtn: document.getElementById("adminStartContinuousScanBtn"),
   learnProductsBtn: document.getElementById("learnProductsBtn"),
   reviewScanSessionsBtn: document.getElementById("reviewScanSessionsBtn"),
@@ -1423,6 +1425,7 @@ function applyDeviceModeUi() {
   const principalMode = isPrincipalDevice();
   document.body.classList.toggle("capture-mode", captureMode);
   document.body.classList.toggle("principal-device", principalMode);
+  if (elements.localSetupBtn) elements.localSetupBtn.hidden = captureMode;
   if (elements.adminStartContinuousScanBtn) elements.adminStartContinuousScanBtn.hidden = !captureMode;
   if (elements.reviewScanSessionsBtn) elements.reviewScanSessionsBtn.hidden = captureMode;
   if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = captureMode || shouldUseLocalBackend();
@@ -1615,16 +1618,7 @@ function markInitialLocalImportComplete(importResult = null) {
 }
 
 function rememberDetectedLocalSetup() {
-  if (!isPrincipalDevice()) return;
-  const setupState = readLocalSetupState();
-  if (setupState.initialImportComplete || !shouldUseLocalBackend() || !hasOperationalLocalData()) return;
-  state.backend.initialImportComplete = true;
-  saveLocalSetupState({
-    initialImportComplete: true,
-    detectedAt: new Date().toISOString(),
-    source: "local_data_detected",
-    migrationVersion: state.backend.local.migrationVersion || null
-  });
+  return;
 }
 
 function shouldHideLocalBackendPanel() {
@@ -1649,7 +1643,7 @@ function renderBackendStatus() {
   const importComplete = isInitialLocalImportComplete();
   state.backend.initialImportComplete = importComplete;
 
-  if (!isCaptureDevice() && shouldHideLocalBackendPanel()) {
+  if (!isCaptureDevice() && shouldHideLocalBackendPanel() && !state.backend.forceShowLocalPanel) {
     elements.localBackendPanel.hidden = true;
     applyDeviceModeUi();
     return;
@@ -1660,7 +1654,9 @@ function renderBackendStatus() {
   if (elements.refreshBackendStatusBtn) elements.refreshBackendStatusBtn.hidden = false;
   if (elements.localBackupBtn) elements.localBackupBtn.hidden = !canManageOfficialLocalBackend();
   if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = isCaptureDevice() || localReady;
-  if (elements.importSupabaseBtn) elements.importSupabaseBtn.hidden = isCaptureDevice() || !localReady || importComplete;
+  if (elements.importSupabaseBtn) {
+    elements.importSupabaseBtn.hidden = isCaptureDevice() || !localReady || (importComplete && !state.backend.forceShowLocalPanel);
+  }
   if (elements.captureConnectHint) {
     const lanUrl = (local.connectionUrls || []).find((url) => !/127\.0\.0\.1|localhost/i.test(url)) || "";
     elements.captureConnectHint.hidden = !isPrincipalDevice() || !lanUrl;
@@ -14853,6 +14849,12 @@ elements.printLabelsBtn.addEventListener("click", printSelectedLabels);
 document.getElementById("backupBtn").addEventListener("click", exportBackupCsv);
 document.getElementById("criticalViewBtn").addEventListener("click", () => {
   elements.compactCriticalPanel.hidden = !elements.compactCriticalPanel.hidden;
+});
+
+elements.localSetupBtn?.addEventListener("click", () => {
+  state.backend.forceShowLocalPanel = true;
+  renderBackendStatus();
+  elements.localBackendPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
 elements.prepareLocalModeBtn?.addEventListener("click", async () => {
