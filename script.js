@@ -1975,8 +1975,8 @@ const dataProvider = {
 
 async function resolveBackendConnection({ quiet = true, role = "" } = {}) {
   const hasOwnBackend = await detectOwnDeviceBackend();
-  const isAdminRole = role === "admin";
-  const isOperatorRole = role === "operador";
+  const isAdminRole = isAdminRoleValue(role, state.currentUser?.email);
+  const isOperatorRole = isOperatorRoleValue(role);
   if (hasOwnBackend) state.backend.deviceMode = "principal";
   const candidates = hasOwnBackend
     ? [PRIMARY_BACKEND_DEFAULT_URL]
@@ -2058,6 +2058,25 @@ function clearLocalSession() {
   window.localStorage.removeItem(LOCAL_SESSION_STORAGE_KEY);
 }
 
+function normalizeRole(value = "") {
+  return normalize(String(value || "")).replace(/\s+/g, "_");
+}
+
+function isAdminRoleValue(role = "", email = "") {
+  const normalizedRole = normalizeRole(role);
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  return normalizedEmail === "jesu@nutri.cl" || [
+    "admin",
+    "administrador",
+    "administradora",
+    "nutricionista"
+  ].includes(normalizedRole);
+}
+
+function isOperatorRoleValue(role = "") {
+  return ["operador", "operator"].includes(normalizeRole(role));
+}
+
 async function resumeLocalSession() {
   const saved = readLocalSession();
   if (!saved?.user) return false;
@@ -2068,7 +2087,7 @@ async function resumeLocalSession() {
 }
 
 function isAdmin() {
-  return state.currentUser?.rol === "admin";
+  return isAdminRoleValue(state.currentUser?.rol, state.currentUser?.email);
 }
 
 function requireAdminAction() {
@@ -2088,13 +2107,23 @@ async function loadAuthorizedUser(authUser) {
     return state.currentUser;
   }
 
-  const { data, error } = await dataProvider.table("usuarios_app")
+  let { data, error } = await dataProvider.table("usuarios_app")
     .select("id,email,nombre,rol,activo")
     .eq("id", authUser.id)
     .maybeSingle();
 
   if (error) throw error;
-  if (!data || data.activo !== true) {
+  if (!data && authUser.email) {
+    const fallback = await dataProvider.table("usuarios_app")
+      .select("id,email,nombre,rol,activo")
+      .eq("email", authUser.email)
+      .maybeSingle();
+    if (fallback.error) throw fallback.error;
+    data = fallback.data;
+  }
+
+  const active = data?.activo === true || data?.activo === 1 || data?.activo === "true";
+  if (!data || !active) {
     await supabaseClient.auth.signOut();
     throw new Error("Usuario sin acceso autorizado.");
   }
