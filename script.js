@@ -10,7 +10,7 @@ const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
 const BROWSER_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_browser_local_enabled_v1";
-const APP_BUILD_LABEL = "tablet-indexeddb-v41";
+const APP_BUILD_LABEL = "tablet-indexeddb-v42";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -1699,6 +1699,14 @@ function shouldRouteToBrowserLocalBackend() {
   return Boolean(state.backend.local.mode === "browser" || isBrowserLocalBackendEnabled());
 }
 
+function shouldPreferBrowserLocalBackend() {
+  return Boolean(
+    isHostedAppOrigin() ||
+    shouldRouteToBrowserLocalBackend() ||
+    state.backend.hasOwnLocalBackend !== true
+  );
+}
+
 function canUseOfficialLocalDevice() {
   return Boolean(!isCaptureDevice() && (
     state.backend.hasOwnLocalBackend === true ||
@@ -1998,7 +2006,10 @@ const dataProvider = {
 
   async installLocal() {
     if (!isPrincipalDevice()) throw new Error("La instalacion local solo esta disponible en el dispositivo principal.");
-    if (isBrowserLocalBackendSupported() && (isHostedInstalledApp() || state.backend.hasOwnLocalBackend !== true)) {
+    if (shouldPreferBrowserLocalBackend()) {
+      if (!isBrowserLocalBackendSupported()) {
+        throw new Error("Base local PWA no cargada. Cierra y vuelve a abrir la app para actualizarla.");
+      }
       const status = await browserLocalBackend().install();
       return applyBrowserLocalStatus(status);
     }
@@ -15308,10 +15319,11 @@ elements.prepareLocalModeBtn?.addEventListener("click", async () => {
   } catch (error) {
     rememberBackendError(error);
     renderBackendStatus();
+    const message = getSupabaseErrorMessage(error);
     showModalError(
-      "Backend local inactivo",
+      isHostedAppOrigin() ? "Base local PWA no disponible" : "Backend local inactivo",
       isHostedAppOrigin()
-        ? "La app de Vercel necesita que el backend local este corriendo como servicio en este dispositivo. Ejecuta local-backend\\iniciar-backend-local.cmd y vuelve a presionar Preparar modo local."
+        ? `${message || "La capa local de tablet no esta cargada."} Cierra completamente la app, abre nuevamente y verifica que aparezca tablet-indexeddb-v42.`
         : "En la tablet principal abre http://127.0.0.1:8787. Si sigue inactivo, ejecuta local-backend\\iniciar-backend-local.cmd y vuelve a presionar Preparar modo local."
     );
   } finally {
@@ -15323,7 +15335,9 @@ elements.prepareLocalModeBtn?.addEventListener("click", async () => {
 elements.importSupabaseBtn?.addEventListener("click", async () => {
   const confirmed = await showModalConfirm({
     title: "Importar datos existentes",
-    message: "Se copiaran tablas operativas al SQLite local manteniendo IDs originales y saltando duplicados conflictivos.",
+    message: shouldRouteToBrowserLocalBackend()
+      ? "Se copiaran tablas operativas desde Supabase a la base local PWA de esta tablet."
+      : "Se copiaran tablas operativas al SQLite local manteniendo IDs originales y saltando duplicados conflictivos.",
     confirmText: "Importar",
     variant: "warning"
   });

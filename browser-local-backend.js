@@ -393,7 +393,20 @@
       totals[table] = rows.length;
     }
     await setMeta("lastImport", { at: now(), totals });
-    return { ok: true, imported: true, totals, status: await getStatus() };
+    const fetched = Object.values(totals).reduce((sum, value) => sum + Number(value || 0), 0);
+    return {
+      ok: true,
+      imported: true,
+      totals: {
+        fetched,
+        inserted: fetched,
+        updated: 0,
+        duplicates: 0,
+        skipped: 0,
+        byTable: totals
+      },
+      status: await getStatus()
+    };
   }
 
   async function inventorySnapshot() {
