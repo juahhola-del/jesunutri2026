@@ -10,7 +10,7 @@ const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
 const BROWSER_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_browser_local_enabled_v1";
-const APP_BUILD_LABEL = "tablet-indexeddb-v40";
+const APP_BUILD_LABEL = "tablet-indexeddb-v41";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -1708,7 +1708,7 @@ function canUseOfficialLocalDevice() {
 }
 
 function canShowOfficialLocalSetup() {
-  return Boolean(isAdmin() && canUseOfficialLocalDevice());
+  return Boolean(isAdmin() && (canUseOfficialLocalDevice() || shouldUseLocalBackend()));
 }
 
 function canClaimOfficialLocalDeviceHere(role = state.currentUser?.rol, email = state.currentUser?.email) {
@@ -1720,7 +1720,7 @@ function canPrepareOfficialLocalMode() {
 }
 
 function canImportOfficialLocalData() {
-  return Boolean(canShowOfficialLocalSetup() && shouldUseLocalBackend());
+  return Boolean(isAdmin() && !isCaptureDevice() && shouldUseLocalBackend());
 }
 
 function hasOperationalLocalData() {
@@ -1759,7 +1759,7 @@ function rememberDetectedLocalSetup() {
 }
 
 function shouldHideLocalBackendPanel() {
-  return !canShowOfficialLocalSetup();
+  return !canShowOfficialLocalSetup() && !canImportOfficialLocalData();
 }
 
 function updateActiveBackendMode() {
@@ -1794,6 +1794,7 @@ function renderBackendStatus() {
   if (elements.importSupabaseBtn) {
     elements.importSupabaseBtn.hidden = !canImportOfficialLocalData();
     elements.importSupabaseBtn.disabled = !localReady;
+    elements.importSupabaseBtn.textContent = importComplete ? "Reimportar desde Supabase" : "Importar datos existentes";
     elements.importSupabaseBtn.title = localReady
       ? ""
       : "Primero prepara el modo local.";
