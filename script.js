@@ -10,7 +10,7 @@ const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
 const BROWSER_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_browser_local_enabled_v1";
-const APP_BUILD_LABEL = "tablet-indexeddb-v42";
+const APP_BUILD_LABEL = "tablet-indexeddb-v43";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -15345,11 +15345,16 @@ elements.importSupabaseBtn?.addEventListener("click", async () => {
 
   elements.importSupabaseBtn.disabled = true;
   elements.importSupabaseBtn.textContent = "Importando...";
+  clearError();
+  state.backend.recentErrors = [];
+  renderBackendStatus();
   try {
     const result = await dataProvider.importFromSupabase();
     markInitialLocalImportComplete(result);
     await refreshBackendStatus({ quiet: true });
     await refreshInventory();
+    state.backend.recentErrors = [];
+    renderBackendStatus();
     const errorTables = (result.tables || []).filter((table) => table.errors?.length);
     const errorText = errorTables.length
       ? ` Tablas con aviso: ${errorTables.slice(0, 4).map((table) => table.table).join(", ")}${errorTables.length > 4 ? "..." : ""}.`
@@ -15364,7 +15369,7 @@ elements.importSupabaseBtn?.addEventListener("click", async () => {
     showModalError("No se pudo importar", getSupabaseErrorMessage(error));
   } finally {
     elements.importSupabaseBtn.disabled = false;
-    elements.importSupabaseBtn.textContent = "Importar datos existentes";
+    elements.importSupabaseBtn.textContent = isInitialLocalImportComplete() ? "Reimportar desde Supabase" : "Importar datos existentes";
   }
 });
 

@@ -36,6 +36,12 @@
     ...VIEW_TABLES
   ];
   const IMPORT_TABLES = TABLES.filter((table) => !VIEW_TABLES.has(table));
+  const REQUIRED_IMPORT_TABLES = new Set([
+    "usuarios_app",
+    "productos_insumos",
+    "insumo_lotes",
+    "movimientos_inventario"
+  ]);
 
   let dbPromise = null;
 
@@ -374,7 +380,11 @@
       });
       if (!response.ok) {
         const message = await response.text().catch(() => response.statusText);
-        throw new Error(`No se pudo importar ${table}: ${message || response.status}`);
+        const error = new Error(`No se pudo importar ${table}: ${message || response.status}`);
+        error.status = response.status;
+        error.payload = message || "";
+        error.table = table;
+        throw error;
       }
       const page = await response.json();
       rows.push(...page);
@@ -383,17 +393,55 @@
     return rows;
   }
 
+  function isMissingSupabaseTableError(error) {
+    const text = `${error?.message || ""} ${error?.payload || ""}`;
+    return error?.status === 404 || /PGRST205|Could not find the table|schema cache|does not exist/i.test(text);
+  }
+
   async function importFromSupabase(config = {}) {
     await install();
-    await clearAllTables();
     const totals = {};
+    const summary = [];
+    const fetchedTables = [];
     for (const table of IMPORT_TABLES) {
-      const rows = await fetchSupabaseRows({ ...config, table });
+      try {
+        const rows = await fetchSupabaseRows({ ...config, table });
+        totals[table] = rows.length;
+        fetchedTables.push({ table, rows });
+        summary.push({
+          table,
+          fetched: rows.length,
+          inserted: rows.length,
+          updated: 0,
+          duplicates: 0,
+          skipped: 0,
+          errors: []
+        });
+      } catch (error) {
+        if (isMissingSupabaseTableError(error) && !REQUIRED_IMPORT_TABLES.has(table)) {
+          totals[table] = 0;
+          summary.push({
+            table,
+            fetched: 0,
+            inserted: 0,
+            updated: 0,
+            duplicates: 0,
+            skipped: 0,
+            optional: true,
+            errors: [{ message: "Tabla opcional no existe en Supabase; se omitio." }]
+          });
+          continue;
+        }
+        throw error;
+      }
+    }
+    await clearAllTables();
+    for (const { table, rows } of fetchedTables) {
       await replaceTable(table, rows);
-      totals[table] = rows.length;
     }
     await setMeta("lastImport", { at: now(), totals });
     const fetched = Object.values(totals).reduce((sum, value) => sum + Number(value || 0), 0);
+    const skipped = summary.filter((row) => row.optional && row.errors?.length).length;
     return {
       ok: true,
       imported: true,
@@ -402,9 +450,10 @@
         inserted: fetched,
         updated: 0,
         duplicates: 0,
-        skipped: 0,
+        skipped,
         byTable: totals
       },
+      tables: summary,
       status: await getStatus()
     };
   }
