@@ -7,7 +7,8 @@ const PRIMARY_BACKEND_STORAGE_KEY = "jesunutri_primary_backend_url";
 const LEGACY_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_local_backend_url";
 const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
-const APP_BUILD_LABEL = "vercel-local-v37";
+const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
+const APP_BUILD_LABEL = "vercel-local-v38";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -1442,6 +1443,7 @@ function isCaptureDevice() {
 }
 
 function getDeviceModeLabel() {
+  if (isHostedAppOrigin() && isPrincipalDevice() && !state.backend.local.available) return "App Vercel";
   if (isHostedAppOrigin() && state.backend.deviceMode === "principal") return "App Vercel con backend local";
   if (isHostedAppOrigin() && state.backend.deviceMode === "principal-remoto") return "App Vercel conectada al principal";
   if (isHostedAppOrigin() && isCaptureDevice()) return state.backend.local.available ? "App Vercel capturador conectado" : "App Vercel capturador";
@@ -1459,7 +1461,9 @@ function updateDeviceModeBanners() {
       ? `${label}. Capturas enviadas al dispositivo principal.`
       : "Modo capturador. Conecta con el dispositivo principal."
     : isPrincipalDevice()
-      ? `${label}. Base oficial local activa.`
+      ? state.backend.local.available
+        ? `${label}. Base oficial local activa.`
+        : `${label}. Usando Supabase; modo local solo en la tablet oficial.`
       : label;
   [elements.deviceModeBanner, elements.operatorDeviceModeBanner].forEach((banner) => {
     if (!banner) return;
@@ -1474,12 +1478,12 @@ function applyDeviceModeUi() {
   const principalMode = isPrincipalDevice();
   document.body.classList.toggle("capture-mode", captureMode);
   document.body.classList.toggle("principal-device", principalMode);
-  if (elements.localSetupBtn) elements.localSetupBtn.hidden = captureMode;
+  if (elements.localSetupBtn) elements.localSetupBtn.hidden = !canShowOfficialLocalSetup();
   if (elements.adminStartContinuousScanBtn) elements.adminStartContinuousScanBtn.hidden = !captureMode;
   if (elements.reviewScanSessionsBtn) elements.reviewScanSessionsBtn.hidden = captureMode;
-  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = captureMode;
-  if (elements.importSupabaseBtn && captureMode) elements.importSupabaseBtn.hidden = true;
-  if (elements.localBackupBtn && captureMode) elements.localBackupBtn.hidden = true;
+  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = !canPrepareOfficialLocalMode();
+  if (elements.importSupabaseBtn) elements.importSupabaseBtn.hidden = !canImportOfficialLocalData();
+  if (elements.localBackupBtn) elements.localBackupBtn.hidden = !canManageOfficialLocalBackend();
   updateDeviceModeBanners();
 }
 
@@ -1617,7 +1621,7 @@ function shouldUseLocalBackend() {
 }
 
 function canManageOfficialLocalBackend() {
-  return Boolean(shouldUseLocalBackend() && isPrincipalDevice());
+  return Boolean(canShowOfficialLocalSetup() && shouldUseLocalBackend());
 }
 
 function readLocalSetupState() {
@@ -1636,6 +1640,46 @@ function saveLocalSetupState(nextState = {}) {
   };
   window.localStorage.setItem(LOCAL_SETUP_STORAGE_KEY, JSON.stringify(setupState));
   return setupState;
+}
+
+function readOfficialLocalDeviceState() {
+  try {
+    return JSON.parse(window.localStorage.getItem(OFFICIAL_LOCAL_DEVICE_STORAGE_KEY) || "null") || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function rememberOfficialLocalDevice(status = null) {
+  const local = status || state.backend.local || {};
+  window.localStorage.setItem(OFFICIAL_LOCAL_DEVICE_STORAGE_KEY, JSON.stringify({
+    claimed: true,
+    backendUrl: PRIMARY_BACKEND_DEFAULT_URL,
+    installed: Boolean(local.installed),
+    migrationVersion: local.migrationVersion || null,
+    claimedAt: readOfficialLocalDeviceState().claimedAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }));
+}
+
+function isOfficialLocalDeviceRemembered() {
+  return Boolean(readOfficialLocalDeviceState().claimed);
+}
+
+function canUseOfficialLocalDevice() {
+  return Boolean(!isCaptureDevice() && (state.backend.hasOwnLocalBackend === true || isOfficialLocalDeviceRemembered()));
+}
+
+function canShowOfficialLocalSetup() {
+  return Boolean(isAdmin() && canUseOfficialLocalDevice());
+}
+
+function canPrepareOfficialLocalMode() {
+  return Boolean(canShowOfficialLocalSetup() && !shouldUseLocalBackend());
+}
+
+function canImportOfficialLocalData() {
+  return Boolean(canShowOfficialLocalSetup() && shouldUseLocalBackend());
 }
 
 function hasOperationalLocalData() {
@@ -1658,6 +1702,7 @@ function isInitialLocalImportComplete() {
 
 function markInitialLocalImportComplete(importResult = null) {
   state.backend.initialImportComplete = true;
+  rememberOfficialLocalDevice(state.backend.local);
   return saveLocalSetupState({
     initialImportComplete: true,
     importedAt: new Date().toISOString(),
@@ -1667,11 +1712,13 @@ function markInitialLocalImportComplete(importResult = null) {
 }
 
 function rememberDetectedLocalSetup() {
-  return;
+  if (state.backend.hasOwnLocalBackend === true && state.backend.local.installed) {
+    rememberOfficialLocalDevice(state.backend.local);
+  }
 }
 
 function shouldHideLocalBackendPanel() {
-  return false;
+  return !canShowOfficialLocalSetup();
 }
 
 function updateActiveBackendMode() {
@@ -1699,12 +1746,12 @@ function renderBackendStatus() {
   }
 
   elements.localBackendPanel.hidden = false;
-  if (elements.backendStatusGrid) elements.backendStatusGrid.hidden = isCaptureDevice();
-  if (elements.refreshBackendStatusBtn) elements.refreshBackendStatusBtn.hidden = false;
+  if (elements.backendStatusGrid) elements.backendStatusGrid.hidden = !canShowOfficialLocalSetup();
+  if (elements.refreshBackendStatusBtn) elements.refreshBackendStatusBtn.hidden = !canShowOfficialLocalSetup();
   if (elements.localBackupBtn) elements.localBackupBtn.hidden = !canManageOfficialLocalBackend();
-  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = isCaptureDevice();
+  if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = !canPrepareOfficialLocalMode();
   if (elements.importSupabaseBtn) {
-    elements.importSupabaseBtn.hidden = isCaptureDevice();
+    elements.importSupabaseBtn.hidden = !canImportOfficialLocalData();
     elements.importSupabaseBtn.disabled = !localReady;
     elements.importSupabaseBtn.title = localReady
       ? ""
@@ -1712,7 +1759,7 @@ function renderBackendStatus() {
   }
   if (elements.captureConnectHint) {
     const lanUrl = (local.connectionUrls || []).find((url) => !/127\.0\.0\.1|localhost/i.test(url)) || "";
-    elements.captureConnectHint.hidden = !isPrincipalDevice() || !lanUrl;
+    elements.captureConnectHint.hidden = !canManageOfficialLocalBackend() || !lanUrl;
     elements.captureConnectHint.textContent = lanUrl ? `Conecta capturador en: ${lanUrl}` : "";
   }
 
@@ -1806,6 +1853,7 @@ const dataProvider = {
         lastChecked: new Date().toISOString(),
         error: ""
       };
+      if (state.backend.hasOwnLocalBackend === true && status.installed) rememberOfficialLocalDevice(status);
       updateActiveBackendMode();
       if (Array.isArray(status.recentErrors)) state.backend.recentErrors = status.recentErrors;
       renderBackendStatus();
@@ -1878,6 +1926,7 @@ const dataProvider = {
       lastChecked: new Date().toISOString(),
       error: ""
     };
+    rememberOfficialLocalDevice(status);
     updateActiveBackendMode();
     if (Array.isArray(status.recentErrors)) state.backend.recentErrors = status.recentErrors;
     renderBackendStatus();
