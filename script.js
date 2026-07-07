@@ -9,7 +9,8 @@ const LEGACY_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_local_backend_url";
 const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
-const APP_BUILD_LABEL = "vercel-local-v39";
+const BROWSER_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_browser_local_enabled_v1";
+const APP_BUILD_LABEL = "tablet-indexeddb-v40";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -1452,6 +1453,7 @@ function isCaptureDevice() {
 
 function getDeviceModeLabel() {
   if (isHostedAppOrigin() && isPrincipalDevice() && !state.backend.local.available) return "App Vercel";
+  if (isHostedAppOrigin() && state.backend.local.mode === "browser") return "App Vercel con base local PWA";
   if (isHostedAppOrigin() && state.backend.deviceMode === "principal") return "App Vercel con backend local";
   if (isHostedAppOrigin() && state.backend.deviceMode === "principal-remoto") return "App Vercel conectada al principal";
   if (isHostedAppOrigin() && isCaptureDevice()) return state.backend.local.available ? "App Vercel capturador conectado" : "App Vercel capturador";
@@ -1676,6 +1678,27 @@ function isOfficialLocalDeviceRemembered() {
   return Boolean(readOfficialLocalDeviceState().claimed);
 }
 
+function browserLocalBackend() {
+  return window.JesunutriBrowserLocal || null;
+}
+
+function isBrowserLocalBackendSupported() {
+  return Boolean(browserLocalBackend()?.isSupported?.());
+}
+
+function isBrowserLocalBackendEnabled() {
+  return window.localStorage.getItem(BROWSER_LOCAL_BACKEND_STORAGE_KEY) === "1";
+}
+
+function setBrowserLocalBackendEnabled(enabled = true) {
+  if (enabled) window.localStorage.setItem(BROWSER_LOCAL_BACKEND_STORAGE_KEY, "1");
+  else window.localStorage.removeItem(BROWSER_LOCAL_BACKEND_STORAGE_KEY);
+}
+
+function shouldRouteToBrowserLocalBackend() {
+  return Boolean(state.backend.local.mode === "browser" || isBrowserLocalBackendEnabled());
+}
+
 function canUseOfficialLocalDevice() {
   return Boolean(!isCaptureDevice() && (
     state.backend.hasOwnLocalBackend === true ||
@@ -1783,11 +1806,13 @@ function renderBackendStatus() {
 
   const supabaseStatus = state.backend.supabase.connected ? "conectado" : "desconectado";
   const localStatus = local.available ? "activo" : "inactivo";
-  const dbStatus = local.installed ? "instalada" : "pendiente";
+  const dbStatus = local.installed ? (local.mode === "browser" ? "PWA local" : "instalada") : "pendiente";
   const activeLabel = isCaptureDevice()
     ? "Modo capturador conectado"
     : localReady
-      ? importComplete ? "Dispositivo principal" : "Importacion pendiente"
+      ? local.mode === "browser"
+        ? importComplete ? "Base local PWA" : "Importacion pendiente"
+        : importComplete ? "Dispositivo principal" : "Importacion pendiente"
       : "Preparar modo local";
 
   if (elements.localBackendDescription) {
@@ -1795,8 +1820,10 @@ function renderBackendStatus() {
       ? "Este dispositivo envia capturas al sistema principal. No administra la base oficial."
       : isHostedAppOrigin()
         ? localReady
-          ? "App Vercel conectada al backend local. Puedes revisar migraciones o importar datos existentes desde Supabase."
-          : "App Vercel instalada. Para modo local, deja corriendo el backend local y prepara SQLite desde aqui."
+          ? local.mode === "browser"
+            ? "App Vercel conectada a base local PWA en esta tablet. Puedes importar datos existentes desde Supabase."
+            : "App Vercel conectada al backend local. Puedes revisar migraciones o importar datos existentes desde Supabase."
+          : "App Vercel instalada. Para modo local en tablet, prepara una base local PWA desde aqui."
         : localReady
           ? "Modo local disponible. Puedes revisar migraciones o importar datos existentes desde Supabase."
           : "Prepara este dispositivo para trabajar con base local, sin depender de internet.";
@@ -1822,12 +1849,42 @@ function renderBackendStatus() {
   applyDeviceModeUi();
 }
 
+function applyBrowserLocalStatus(status = {}) {
+  state.backend.baseUrl = "pwa://indexeddb";
+  state.backend.lastConnectionUrl = "pwa://indexeddb";
+  state.backend.local = {
+    available: true,
+    installed: Boolean(status.installed),
+    status: status.status || (status.installed ? "instalado" : "pendiente"),
+    migrationVersion: status.migrationVersion || "indexeddb-v1",
+    latestMigration: status.latestMigration || "indexeddb-v1",
+    databasePath: status.databasePath || "IndexedDB del navegador",
+    connectionUrls: status.connectionUrls || ["pwa://indexeddb"],
+    counts: status.counts || {},
+    lastChecked: new Date().toISOString(),
+    error: "",
+    mode: "browser"
+  };
+  if (status.installed) {
+    setBrowserLocalBackendEnabled(true);
+    rememberOfficialLocalDevice(state.backend.local);
+  }
+  updateActiveBackendMode();
+  renderBackendStatus();
+  return status;
+}
+
 const dataProvider = {
   table(tableName) {
     return supabaseClient.from(tableName);
   },
 
   async localRequest(path, { method = "GET", body = null, timeoutMs = 4500, baseUrl = "" } = {}) {
+    if (!baseUrl && shouldRouteToBrowserLocalBackend()) {
+      const local = browserLocalBackend();
+      if (!local?.request) throw new Error("Base local PWA no disponible en este navegador.");
+      return local.request(path, { method, body, timeoutMs });
+    }
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -1854,6 +1911,14 @@ const dataProvider = {
   },
 
   async checkLocalStatus({ quiet = false, url = "" } = {}) {
+    if (!url && isBrowserLocalBackendSupported() && (isBrowserLocalBackendEnabled() || state.backend.local.mode === "browser")) {
+      try {
+        const status = await browserLocalBackend().status();
+        if (status?.installed) return applyBrowserLocalStatus(status);
+      } catch (error) {
+        if (!quiet) rememberBackendError(error);
+      }
+    }
     const baseUrl = normalizeBackendUrl(url || getActiveBackendUrl());
     try {
       const status = await this.localRequest("/api/status", { timeoutMs: 3000, baseUrl });
@@ -1932,6 +1997,10 @@ const dataProvider = {
 
   async installLocal() {
     if (!isPrincipalDevice()) throw new Error("La instalacion local solo esta disponible en el dispositivo principal.");
+    if (isBrowserLocalBackendSupported() && (isHostedInstalledApp() || state.backend.hasOwnLocalBackend !== true)) {
+      const status = await browserLocalBackend().install();
+      return applyBrowserLocalStatus(status);
+    }
     const status = await this.localRequest("/api/install", { method: "POST", body: {}, timeoutMs: 20000 });
     state.backend.local = {
       available: true,
@@ -1953,6 +2022,7 @@ const dataProvider = {
 
   async backupLocal() {
     if (!isPrincipalDevice()) throw new Error("El backup local solo esta disponible en el dispositivo principal.");
+    if (shouldRouteToBrowserLocalBackend()) return this.localRequest("/api/backup", { method: "POST", body: {}, timeoutMs: 20000 });
     return this.localRequest("/api/backup", { method: "POST", body: {}, timeoutMs: 20000 });
   },
 
@@ -1965,7 +2035,7 @@ const dataProvider = {
     } catch (error) {
       accessToken = "";
     }
-    return this.localRequest("/api/import-from-supabase", {
+    const result = await this.localRequest("/api/import-from-supabase", {
       method: "POST",
       body: {
         supabaseUrl: SUPABASE_URL,
@@ -1974,6 +2044,8 @@ const dataProvider = {
       },
       timeoutMs: 120000
     });
+    if (shouldRouteToBrowserLocalBackend() && result?.status) applyBrowserLocalStatus(result.status);
+    return result;
   },
 
   async localLogin(email, password) {

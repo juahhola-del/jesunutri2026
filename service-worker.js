@@ -1,9 +1,10 @@
-const CACHE_NAME = "jesunutri-pwa-v42";
+const CACHE_NAME = "jesunutri-pwa-v43";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./script.js",
+  "./browser-local-backend.js",
   "./vendor/zxing-browser.min.js",
   "./logo.png",
   "./icon-192.png",
@@ -15,6 +16,7 @@ const STATIC_PATHS = new Set([
   "/index.html",
   "/styles.css",
   "/script.js",
+  "/browser-local-backend.js",
   "/vendor/zxing-browser.min.js",
   "/logo.png",
   "/icon-192.png",
