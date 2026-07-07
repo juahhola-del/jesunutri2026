@@ -4,7 +4,6 @@ import java.text.Normalizer
 import java.time.LocalDate
 import java.time.YearMonth
 import java.util.Locale
-import kotlin.math.max
 import kotlin.math.min
 
 class LabelIntelligenceEngine {
@@ -15,8 +14,8 @@ class LabelIntelligenceEngine {
         observations.clear()
     }
 
-    fun observe(barcodes: List<BarcodeHit>, ocrText: String): LabelScanResult {
-        observations.addLast(FrameObservation(barcodes, ocrText, System.currentTimeMillis()))
+    fun observe(barcodes: List<BarcodeHit>, ocrText: String, dominantColor: String = ""): LabelScanResult {
+        observations.addLast(FrameObservation(barcodes, ocrText, dominantColor, System.currentTimeMillis()))
         while (observations.size > maxFrames) observations.removeFirst()
         return buildResult()
     }
@@ -24,6 +23,14 @@ class LabelIntelligenceEngine {
     private fun buildResult(): LabelScanResult {
         val allText = observations.joinToString("\n") { it.ocrText }
         val cleanedText = normalizeOcrText(allText)
+        val dominantColor = observations
+            .map { it.dominantColor }
+            .filter { it.isNotBlank() }
+            .groupingBy { it }
+            .eachCount()
+            .maxByOrNull { it.value }
+            ?.key
+            .orEmpty()
         val barcodeCandidates = observations.flatMap { it.barcodes }
             .filter { it.rawValue.isNotBlank() }
         val bestBarcode = barcodeCandidates
@@ -35,7 +42,9 @@ class LabelIntelligenceEngine {
         val rawCode = bestBarcode?.rawValue.orEmpty()
         val normalizedCode = normalizeCode(rawCode)
         val barcodeFormat = bestBarcode?.format.orEmpty()
-        val gs1 = parseGs1(rawCode)
+        val gs1FromBarcode = parseGs1(rawCode)
+        val gs1FromOcr = parseGs1FromOcrText(cleanedText)
+        val gs1 = gs1FromOcr + gs1FromBarcode
         val codeType = when {
             gs1.isNotEmpty() -> "GS1"
             normalizedCode.length == 14 -> "DUN-14"
@@ -53,9 +62,9 @@ class LabelIntelligenceEngine {
         val presentation = extractPresentation(cleanedText)
         val name = extractSuggestedName(cleanedText, presentation)
 
-        val lot = gs1["10"] ?: lotFromText
-        val expiry = gs1["17"]?.let(::parseGs1Date).orEmpty().ifBlank { expiryFromText }
-        val mfg = gs1["11"]?.let(::parseGs1Date).orEmpty().ifBlank { mfgFromText }
+        val lot = gs1["10"]?.let(::cleanupGs1Lot)?.ifBlank { null } ?: lotFromText
+        val expiry = gs1["17"]?.let { parseGs1Date(it, forExpiry = true) }.orEmpty().ifBlank { expiryFromText }
+        val mfg = gs1["11"]?.let { parseGs1Date(it, forExpiry = false) }.orEmpty().ifBlank { mfgFromText }
         val detectedQuantity = gs1["30"]?.toDoubleOrNull() ?: quantityFromText
 
         val sources = mutableMapOf<String, String>()
@@ -67,6 +76,7 @@ class LabelIntelligenceEngine {
         if (detectedQuantity != null) sources["quantity"] = if (gs1.containsKey("30")) "gs1" else "ocr"
         if (name.isNotBlank()) sources["suggestedName"] = "ocr"
         if (presentation.isNotBlank()) sources["presentation"] = "ocr"
+        if (dominantColor.isNotBlank()) sources["color"] = "camera"
 
         val stability = bestBarcode?.let { barcode ->
             barcodeCandidates.count { normalizeCode(it.rawValue) == normalizedCode }
@@ -80,7 +90,8 @@ class LabelIntelligenceEngine {
             name,
             presentation
         ).count { it.isNotBlank() } + if (detectedQuantity != null) 1 else 0
-        val confidence = min(0.99, 0.18 + stability * 0.09 + filledFields * 0.08 + if (gs1.isNotEmpty()) 0.18 else 0.0)
+        val confidencePenalty = listOf(lot, expiry, mfg).count { it.isBlank() } * 0.04
+        val confidence = min(0.96, 0.18 + stability * 0.09 + filledFields * 0.08 + if (gs1.isNotEmpty()) 0.18 else 0.0) - confidencePenalty
         val missing = buildList {
             if (normalizedCode.isBlank()) add("codigo")
             if (name.isBlank()) add("nombre")
@@ -101,6 +112,7 @@ class LabelIntelligenceEngine {
             detectedQuantity = detectedQuantity,
             suggestedName = name,
             presentation = presentation,
+            dominantColor = dominantColor,
             ocrText = cleanedText,
             gs1Payload = gs1,
             sources = sources,
@@ -110,7 +122,7 @@ class LabelIntelligenceEngine {
         )
     }
 
-    private fun parseGs1(raw: String): Map<String, String> {
+    private fun parseGs1(raw: String, allowCompact: Boolean = true): Map<String, String> {
         val text = raw.trim()
         if (text.isBlank()) return emptyMap()
         val visible = Regex("""\((\d{2,4})\)([^\(]+)""").findAll(text).associate { match ->
@@ -118,6 +130,7 @@ class LabelIntelligenceEngine {
         }
         if (visible.isNotEmpty()) return visible.filterKeys { it in gs1KnownAis }
 
+        if (!allowCompact) return emptyMap()
         val compact = text.replace("""[^A-Za-z0-9]""".toRegex(), "")
         if (compact.length < 8) return emptyMap()
         val result = linkedMapOf<String, String>()
@@ -153,6 +166,27 @@ class LabelIntelligenceEngine {
         return result
     }
 
+    private fun parseGs1FromOcrText(text: String): Map<String, String> {
+        val visible = parseGs1(text, allowCompact = false)
+        val compact = text.replace("""[^A-Z0-9]""".toRegex(), "")
+        val tolerant = parseGs1(compact, allowCompact = true)
+            .takeIf { it.containsKey("01") || it.containsKey("17") || it.containsKey("10") }
+            .orEmpty()
+
+        val regexBest = Regex("""01\d{14}(?:(?:11|15|17)[A-Z0-9]{6}|(?:30|37)\d{1,8}|10[A-Z0-9]{4,18}){1,5}""")
+            .findAll(compact)
+            .map { parseGs1(it.value, allowCompact = true) }
+            .filter { it.isNotEmpty() }
+            .maxByOrNull { it.size }
+            .orEmpty()
+
+        val merged = linkedMapOf<String, String>()
+        merged.putAll(tolerant)
+        merged.putAll(regexBest)
+        merged.putAll(visible)
+        return merged
+    }
+
     private fun findNextAi(text: String, start: Int): Int {
         for (i in start until text.length - 1) {
             val candidate = text.substring(i, i + 2)
@@ -161,20 +195,24 @@ class LabelIntelligenceEngine {
         return -1
     }
 
-    private fun parseGs1Date(value: String): String {
+    private fun parseGs1Date(value: String, forExpiry: Boolean): String {
         if (!Regex("""\d{6}""").matches(value)) return ""
         val yy = value.substring(0, 2).toInt()
         val year = if (yy >= 70) 1900 + yy else 2000 + yy
         val month = value.substring(2, 4).toIntOrNull() ?: return ""
         val day = value.substring(4, 6).toIntOrNull() ?: return ""
-        return runCatching { LocalDate.of(year, month, day).toString() }.getOrDefault("")
+        return runCatching { LocalDate.of(year, month, day) }
+            .getOrNull()
+            ?.takeIf { isReasonableDate(it, forExpiry) }
+            ?.toString()
+            .orEmpty()
     }
 
     private fun extractLot(text: String): String {
         val patterns = listOf(
-            Regex("""(?i)\b(?:LOTE|LOT|L\.?|L)\s*[:\-]?\s*([A-Z0-9][A-Z0-9\-/.]{2,18})"""),
-            Regex("""(?i)\b([0O][1I]L[0O]\d{3,5})\b"""),
-            Regex("""(?i)\b([A-Z]{1,3}\d{3,8}[A-Z0-9]{0,4})\b""")
+            Regex("""(?i)\b(?:LOTE|LOT)\s*[:\-]?\s*([A-Z0-9][A-Z0-9\-/.]{3,18})"""),
+            Regex("""(?i)\bL[.:\-\s]+([A-Z0-9][A-Z0-9\-/.]{3,18})"""),
+            Regex("""(?i)\b([0O][1I]L[0O]\d{3,5})\b""")
         )
         val raw = patterns.firstNotNullOfOrNull { pattern ->
             pattern.find(text)?.groupValues?.getOrNull(1)
@@ -185,46 +223,48 @@ class LabelIntelligenceEngine {
     private fun extractDateNearKeywords(text: String, keywords: List<String>): String {
         val normalized = text.replace("\n", " ")
         val keywordPattern = keywords.joinToString("|") { Regex.escape(it) }
-        val withKeyword = Regex("""(?i)\b(?:$keywordPattern)\b\.?\s*[:\-]?\s*(.{0,34})""")
+        val direct = Regex("""(?i)\b(?:$keywordPattern)\b\.?\s*[:\-]?\s*((?:\d[\s./\-]?){6,8}|(?:ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)[A-Z]*\.?\s*\d{4})""")
             .findAll(normalized)
-            .mapNotNull { match -> extractBestDate(match.groupValues[1]) }
+            .mapNotNull { match -> normalizeDateToken(match.groupValues[1], keywords == expiryKeywords) }
+            .firstOrNull()
+        if (direct != null) return direct
+
+        val withKeyword = Regex("""(?i)\b(?:$keywordPattern)\b\.?\s*[:\-]?\s*(.{0,48})""")
+            .findAll(normalized)
+            .mapNotNull { match -> extractBestDate(match.groupValues[1], keywords == expiryKeywords) }
             .firstOrNull()
         if (withKeyword != null) return withKeyword
 
-        val dateCandidates = Regex("""\b\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}\b|\b\d{8}\b|\b\d{6}\b|\b(?:ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)[A-Z]*\.?\s*\d{4}\b""")
-            .findAll(text)
-            .mapNotNull { extractBestDate(it.value) }
-            .distinct()
-            .toList()
         if (keywords == expiryKeywords) {
-            return dateCandidates
-                .mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
-                .filter { it.isAfter(LocalDate.now().minusDays(15)) }
-                .maxOrNull()
-                ?.toString()
-                .orEmpty()
+            extractLatestDateInText(normalized)?.let { return it }
         }
-        return dateCandidates
-            .mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
-            .filter { it.isBefore(LocalDate.now().plusDays(30)) }
-            .maxOrNull()
-            ?.toString()
-            .orEmpty()
+
+        return ""
     }
 
-    private fun extractBestDate(fragment: String): String? {
-        normalizeDateToken(fragment)?.let { return it }
+    private fun extractBestDate(fragment: String, forExpiry: Boolean): String? {
+        normalizeDateToken(fragment, forExpiry)?.let { return it }
         Regex("""\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}|\d{8}|\d{6}|(?:ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)[A-Z]*\.?\s*\d{4}""", RegexOption.IGNORE_CASE)
             .findAll(fragment)
-            .forEach { match -> normalizeDateToken(match.value)?.let { return it } }
+            .forEach { match -> normalizeDateToken(match.value, forExpiry)?.let { return it } }
         return null
     }
 
-    private fun normalizeDateToken(raw: String): String? {
+    private fun extractLatestDateInText(text: String): String? {
+        return Regex("""\b\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}\b|\b\d{8}\b|\b\d{6}\b|\b(?:ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)[A-Z]*\.?\s*\d{4}\b""", RegexOption.IGNORE_CASE)
+            .findAll(text)
+            .mapNotNull { normalizeDateToken(it.value, forExpiry = true) }
+            .mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
+            .maxOrNull()
+            ?.toString()
+    }
+
+    private fun normalizeDateToken(raw: String, forExpiry: Boolean): String? {
         val token = raw.uppercase(Locale.ROOT)
             .replace("O", "0")
             .replace("I", "1")
             .replace("L", "1")
+            .replace(Regex("""(?<=\d)\s+(?=\d)"""), "")
             .replace(",", " ")
             .trim()
         Regex("""^(\d{1,2})[./\-](\d{1,2})[./\-](\d{2,4})$""").find(token)?.let { match ->
@@ -232,28 +272,49 @@ class LabelIntelligenceEngine {
             val month = match.groupValues[2].toIntOrNull() ?: return null
             val rawYear = match.groupValues[3].toIntOrNull() ?: return null
             val year = if (rawYear < 100) 2000 + rawYear else rawYear
-            return runCatching { LocalDate.of(year, month, day).toString() }.getOrNull()
+            return runCatching { LocalDate.of(year, month, day) }
+                .getOrNull()
+                ?.takeIf { isReasonableDate(it, forExpiry) }
+                ?.toString()
         }
         Regex("""^(\d{4})(\d{2})(\d{2})$""").find(token)?.let { match ->
             val year = match.groupValues[1].toIntOrNull() ?: return null
             val month = match.groupValues[2].toIntOrNull() ?: return null
             val day = match.groupValues[3].toIntOrNull() ?: return null
-            return runCatching { LocalDate.of(year, month, day).toString() }.getOrNull()
+            return runCatching { LocalDate.of(year, month, day) }
+                .getOrNull()
+                ?.takeIf { isReasonableDate(it, forExpiry) }
+                ?.toString()
         }
         Regex("""^(\d{2})(\d{2})(\d{2})$""").find(token)?.let { match ->
             val first = match.groupValues[1].toIntOrNull() ?: return null
             val second = match.groupValues[2].toIntOrNull() ?: return null
             val third = match.groupValues[3].toIntOrNull() ?: return null
             val gs1 = runCatching { LocalDate.of(2000 + first, second, third) }.getOrNull()
-            if (gs1 != null && gs1.year in 2020..2099) return gs1.toString()
-            return runCatching { LocalDate.of(2000 + third, second, first).toString() }.getOrNull()
+            if (gs1 != null && isReasonableDate(gs1, forExpiry)) return gs1.toString()
+            return runCatching { LocalDate.of(2000 + third, second, first) }
+                .getOrNull()
+                ?.takeIf { isReasonableDate(it, forExpiry) }
+                ?.toString()
         }
         Regex("""^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)[A-Z]*\.?\s*(\d{4})$""").find(token)?.let { match ->
             val month = monthMap[match.groupValues[1]] ?: return null
             val year = match.groupValues[2].toIntOrNull() ?: return null
-            return runCatching { YearMonth.of(year, month).atEndOfMonth().toString() }.getOrNull()
+            val date = runCatching {
+                if (forExpiry) YearMonth.of(year, month).atEndOfMonth() else YearMonth.of(year, month).atDay(1)
+            }.getOrNull()
+            return date?.takeIf { isReasonableDate(it, forExpiry) }?.toString()
         }
         return null
+    }
+
+    private fun isReasonableDate(date: LocalDate, forExpiry: Boolean): Boolean {
+        val now = LocalDate.now()
+        return if (forExpiry) {
+            date.year in (now.year - 1)..(now.year + 12)
+        } else {
+            date.year in (now.year - 8)..(now.year + 1)
+        }
     }
 
     private fun extractQuantity(text: String): Double? {
@@ -312,7 +373,26 @@ class LabelIntelligenceEngine {
         }
         return scored.maxByOrNull { it.second }?.first
             ?.replace("LUCCHETT]", "LUCCHETTI")
+            ?.replace("LUCCHETT ", "LUCCHETTI ")
+            ?.replace("LUCCHETT", "LUCCHETTI")
+            ?.replace("LUCCHETTII", "LUCCHETTI")
+            ?.replace("LUCCHETTI I", "LUCCHETTI")
+            ?.replace(Regex("""\bLUCC\b"""), "LUCCHETTI")
+            ?.replace(Regex("""LUCCHETT[I1]+"""), "LUCCHETTI")
+            ?.replace("LUCCHETTIINAC", "LUCCHETTI NAC")
+            ?.replace("LUCCHETTINAC", "LUCCHETTI NAC")
+            ?.replace("PLPTA.", "PTA.")
+            ?.replace("PLPTA", "PTA")
+            ?.replace(Regex("""^A\. LUCCHETTI"""), "PTA. LUCCHETTI")
+            ?.replace("LASAA", "LASANA")
+            ?.replace(Regex("""\bASANA\b"""), "LASANA")
+            ?.replace("IRAD", "TRAD")
+            ?.replace(Regex("""\bAC\b"""), "NAC")
             ?.replace("5009", "500G")
+            ?.replace("80LSA", "BOLSA")
+            ?.replace("80LSSA", "BOLSA")
+            ?.replace("8OLSA", "BOLSA")
+            ?.replace("HEARTE", "HEART")
             ?.let { name ->
                 if (presentation.isNotBlank() && !name.contains(presentation)) "$name $presentation" else name
             }
@@ -348,6 +428,16 @@ class LabelIntelligenceEngine {
             .replace("I", "1")
             .replace(Regex("""[^A-Z0-9\-/.]"""), "")
             .take(20)
+            .takeIf { it.length >= 4 && it.any(Char::isDigit) }
+            .orEmpty()
+    }
+
+    private fun cleanupGs1Lot(value: String): String {
+        val cleaned = cleanupLot(value)
+        Regex("""^\d{2}L\d{4}""").find(cleaned)?.let { return it.value }
+        Regex("""^[0-9]{0,3}L[0-9]{3,6}""").find(cleaned)?.let { return it.value }
+        Regex("""^L[A-Z0-9]{3,10}""").find(cleaned)?.let { return it.value }
+        return cleaned
     }
 
     private fun normalizeCode(value: String): String {
@@ -357,14 +447,15 @@ class LabelIntelligenceEngine {
     private data class FrameObservation(
         val barcodes: List<BarcodeHit>,
         val ocrText: String,
+        val dominantColor: String,
         val timeMs: Long
     )
 
     companion object {
         private val gs1KnownAis = setOf("01", "10", "11", "15", "17", "30", "37")
         private val gs1VariableStopAis = setOf("01", "10", "11", "15", "17", "30", "37")
-        private val expiryKeywords = listOf("VENC", "VENCE", "VENCIMIENTO", "VTO", "EXP", "EXPIRA", "CONSUMIR ANTES DE", "V")
-        private val mfgKeywords = listOf("ELAB", "ELABORACION", "F. ELABORACION", "FAB", "FABRICACION", "E")
+        private val expiryKeywords = listOf("CONSUMIR ANTES DE", "VENC", "VENCE", "VENCIMIENTO", "VTO", "EXP", "EXPIRA", "V")
+        private val mfgKeywords = listOf("F. ELABORACION", "ELABORACION", "ELAB", "FABRICACION", "FAB")
         private val monthMap = mapOf(
             "ENE" to 1, "FEB" to 2, "MAR" to 3, "ABR" to 4, "MAY" to 5, "JUN" to 6,
             "JUL" to 7, "AGO" to 8, "SEP" to 9, "OCT" to 10, "NOV" to 11, "DIC" to 12
@@ -372,12 +463,14 @@ class LabelIntelligenceEngine {
         private val metadataWords = listOf(
             "LOTE", "VENC", "ELAB", "CODIGO", "CODE", "BARRA", "CONTENIDO", "NETO",
             "PESO", "FABRICADO", "ELABORADO", "SEREMI", "CONSERVE", "INGREDIENTES",
-            "NUTRITION", "CALORIES", "SELECCIONADO"
+            "NUTRITION", "CALORIES", "SELECCIONADO", "CONSUMIR", "ANTES", "VENCE",
+            "CONSERVE", "LUGAR", "FRESCO", "SECO"
         )
         private val productWords = listOf(
             "SEMOLA", "ARROZ", "ALMIDON", "MAIZ", "LASANA", "LASAGNA", "ESPIRALES",
-            "PURE", "PAPAS", "TE", "MENTA", "CEYLAN", "CHUNO", "CHUCHoca".uppercase(Locale.ROOT),
-            "POLENTA", "SHOT", "CHECK", "OREGANO", "ENTERO", "FARDO"
+            "LUCCHETTI", "PASTA", "PURE", "PAPAS", "TE", "MENTA", "CEYLAN", "CHUNO",
+            "CHUCHoca".uppercase(Locale.ROOT), "POLENTA", "SHOT", "CHECK", "OREGANO",
+            "ENTERO", "FARDO"
         )
     }
 }

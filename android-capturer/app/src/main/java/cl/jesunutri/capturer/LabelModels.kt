@@ -57,6 +57,7 @@ data class LabelScanResult(
     val detectedQuantity: Double? = null,
     val suggestedName: String = "",
     val presentation: String = "",
+    val dominantColor: String = "",
     val ocrText: String = "",
     val gs1Payload: Map<String, String> = emptyMap(),
     val sources: Map<String, String> = emptyMap(),
@@ -70,5 +71,5 @@ data class LabelScanResult(
             lot.isNotBlank() ||
             expiryDate.isNotBlank() ||
             mfgDate.isNotBlank() ||
-            suggestedName.isNotBlank()
+            presentation.isNotBlank()
 }

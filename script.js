@@ -10935,9 +10935,8 @@ function printSelectedLabels() {
           </div>
         </header>
         <h1>${escapeHtml(item.nombre)}</h1>
-        <p>Vence: ${formatDisplayDate(item.fechaVencimiento)}</p>
+        <p class="print-expiry">Vence: ${formatDisplayDate(item.fechaVencimiento)}</p>
         <p>Lote: ${escapeHtml(item.lote || "sin lote")}</p>
-        <p>Cantidad: ${formatNumber(item.cantidad)} ${escapeHtml(item.unidad)}</p>
       </article>
     `).join("");
   }).join("");
@@ -10962,6 +10961,7 @@ function printSelectedLabels() {
           .print-label-top img { width: 84px; max-height: 42px; object-fit: contain; object-position: left top; }
           h1 { margin: 0 0 12px; font-size: 30px; line-height: 1.05; text-transform: uppercase; }
           p { margin: 8px 0; font-size: 18px; }
+          .print-expiry { font-size: 36px; font-weight: 900; line-height: 1; }
           .print-month { font-size: 24px; font-weight: 900; text-align: right; text-transform: uppercase; }
           @media print {
             body { padding: 0; }
