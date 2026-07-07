@@ -10,7 +10,7 @@ const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
 const BROWSER_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_browser_local_enabled_v1";
-const APP_BUILD_LABEL = "tablet-indexeddb-v43";
+const APP_BUILD_LABEL = "tablet-indexeddb-v44";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -1479,8 +1479,9 @@ function updateDeviceModeBanners() {
       : label;
   [elements.deviceModeBanner, elements.operatorDeviceModeBanner].forEach((banner) => {
     if (!banner) return;
-    banner.hidden = state.backend.deviceMode === "desconocido";
-    banner.textContent = state.backend.deviceMode === "desconocido" ? "" : `${text} - ${APP_BUILD_LABEL}`;
+    const hidden = state.backend.deviceMode === "desconocido" || shouldSilenceCompletedLocalModeUi();
+    banner.hidden = hidden;
+    banner.textContent = hidden ? "" : `${text} - ${APP_BUILD_LABEL}`;
     banner.title = `${url} - ${APP_BUILD_LABEL}`;
   });
 }
@@ -1490,7 +1491,7 @@ function applyDeviceModeUi() {
   const principalMode = isPrincipalDevice();
   document.body.classList.toggle("capture-mode", captureMode);
   document.body.classList.toggle("principal-device", principalMode);
-  if (elements.localSetupBtn) elements.localSetupBtn.hidden = !canShowOfficialLocalSetup();
+  if (elements.localSetupBtn) elements.localSetupBtn.hidden = shouldHideLocalSetupShortcut() || !canShowOfficialLocalSetup();
   if (elements.adminStartContinuousScanBtn) elements.adminStartContinuousScanBtn.hidden = !captureMode;
   if (elements.reviewScanSessionsBtn) elements.reviewScanSessionsBtn.hidden = captureMode;
   if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = !canPrepareOfficialLocalMode();
@@ -1749,6 +1750,14 @@ function isInitialLocalImportComplete() {
   return Boolean(readLocalSetupState().initialImportComplete || state.backend.initialImportComplete || hasOperationalLocalData());
 }
 
+function shouldHideLocalSetupShortcut() {
+  return Boolean(shouldUseLocalBackend() && !state.backend.forceShowLocalPanel);
+}
+
+function shouldSilenceCompletedLocalModeUi() {
+  return Boolean(shouldUseLocalBackend() && isInitialLocalImportComplete() && !state.backend.forceShowLocalPanel);
+}
+
 function markInitialLocalImportComplete(importResult = null) {
   state.backend.initialImportComplete = true;
   rememberOfficialLocalDevice(state.backend.local);
@@ -1787,6 +1796,12 @@ function renderBackendStatus() {
   rememberDetectedLocalSetup();
   const importComplete = isInitialLocalImportComplete();
   state.backend.initialImportComplete = importComplete;
+
+  if (shouldSilenceCompletedLocalModeUi()) {
+    elements.localBackendPanel.hidden = true;
+    applyDeviceModeUi();
+    return;
+  }
 
   if (!isCaptureDevice() && shouldHideLocalBackendPanel() && !state.backend.forceShowLocalPanel) {
     elements.localBackendPanel.hidden = true;
@@ -11523,6 +11538,21 @@ function parseGs1(rawValue) {
   };
 }
 
+function extractGs1PayloadFromText(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    const compact = line.replace(/\s+/g, "");
+    const parenthesized = compact.match(/(?:[(\[]\d{2,4}[)\]][A-Z0-9/_-]+){2,}/i);
+    if (parenthesized && parseGs1(parenthesized[0]).isGs1) return parenthesized[0];
+    const raw = compact.match(/01\d{14}(?:11\d{6})?(?:13\d{6})?(?:15\d{6})?(?:17\d{6})?(?:10[A-Z0-9/_-]{2,20})?/i);
+    if (raw && parseGs1(raw[0]).isGs1) return raw[0];
+  }
+  return "";
+}
+
 function getProductFromCodeLink(link) {
   if (!link?.productId) return null;
   return state.products.find((product) => String(product.id) === String(link.productId)) || null;
@@ -12274,19 +12304,44 @@ async function processContinuousScanFrame() {
   }
 }
 
+function scoreContinuousOcrResult(result) {
+  if (!result) return -1;
+  const fields = result.fields || {};
+  const textLength = String(result.text || "").replace(/\s+/g, "").length;
+  let score = result.status === "ok" ? 5 : 0;
+  if (fields.lot) score += 90;
+  if (fields.expiryDate) score += 100;
+  if (fields.mfgDate) score += 55;
+  if (fields.quantity) score += 35;
+  return score + Math.min(40, Math.floor(textLength / 8));
+}
+
+function hasCompleteLabelOcrFields(result) {
+  const fields = result?.fields || {};
+  return Boolean(fields.lot && fields.expiryDate);
+}
+
+function pickBestContinuousOcrResult(primary, secondary) {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  return scoreContinuousOcrResult(secondary) > scoreContinuousOcrResult(primary) ? secondary : primary;
+}
+
 async function runContinuousScanOcr(canvas) {
+  let nativeResult = null;
   if (window.TextDetector) {
     try {
       const detector = new window.TextDetector();
       const rows = await detector.detect(canvas);
       const text = rows.map((row) => row.rawValue || row.text || "").filter(Boolean).join("\n");
-      return {
+      nativeResult = {
         text,
         method: "TextDetector",
         status: "ok",
         fields: extractAdaptiveLabelFields(text),
         notice: text ? "" : "OCR nativo sin texto legible."
       };
+      if (hasCompleteLabelOcrFields(nativeResult)) return nativeResult;
     } catch (error) {
       console.warn("TextDetector no pudo leer OCR", error);
     }
@@ -12296,20 +12351,21 @@ async function runContinuousScanOcr(canvas) {
     try {
       const result = await window.Tesseract.recognize(canvas, "spa+eng");
       const text = result?.data?.text || "";
-      return {
+      const tesseractResult = {
         text,
         method: "Tesseract.js",
         status: "ok",
         fields: extractAdaptiveLabelFields(text),
         notice: text ? "" : "OCR sin texto legible en esta captura."
       };
+      return pickBestContinuousOcrResult(nativeResult, tesseractResult);
     } catch (error) {
       console.warn("Tesseract.js no pudo leer OCR", error);
-      return { text: "", method: "Tesseract.js", status: "error", fields: {}, notice: "OCR fallo en esta captura." };
+      return nativeResult || { text: "", method: "Tesseract.js", status: "error", fields: {}, notice: "OCR fallo en esta captura." };
     }
   }
 
-  return { text: "", method: "no disponible", status: "unavailable", fields: {}, notice: "OCR no disponible sin motor local o externo." };
+  return nativeResult || { text: "", method: "no disponible", status: "unavailable", fields: {}, notice: "OCR no disponible sin motor local o externo." };
 }
 
 function getOcrLines(text) {
@@ -12808,7 +12864,10 @@ function buildContinuousScanExtraction({ barcode, text = "", ocr = null }) {
   const barcodeFormat = barcode?.format || "";
   const barcodeEngine = barcode?.engine || (barcodeValue ? "BarcodeDetector" : "");
   const barcodeConfidence = barcode?.confidence ?? (barcodeValue ? 1 : 0);
-  const gs1 = parseGs1(barcodeRaw || barcodeValue);
+  const barcodeGs1 = parseGs1(barcodeRaw || barcodeValue);
+  const ocrGs1Payload = barcodeGs1.isGs1 ? "" : extractGs1PayloadFromText(text);
+  const ocrGs1 = ocrGs1Payload ? parseGs1(ocrGs1Payload) : { isGs1: false, rawValue: "", fields: {}, aiFields: [] };
+  const gs1 = barcodeGs1.isGs1 ? barcodeGs1 : ocrGs1;
   const gtinFromGs1 = gs1.fields.gtin || gs1.fields.contentGtin || "";
   const gtinFromBarcode = extractGtinFromScanText(text, barcodeValue);
   const gtin = gtinFromGs1 || gtinFromBarcode;
@@ -13156,7 +13215,7 @@ async function captureContinuousScanFrame({ barcodes, metrics, reason, source = 
   const { extraction, ocr } = await buildContinuousScanExtractionWithOcr({
     barcode,
     source,
-    forceOcr: reason !== "codigo_barra",
+    forceOcr: reason !== "codigo_barra" || source !== elements.continuousScanVideo,
     onStatus: setContinuousScanStatus
   });
   const row = continuousScanExtractionToPosRow(extraction, ocr, reason);
@@ -13959,6 +14018,7 @@ async function processProductLearningFrame() {
   const { extraction, ocr } = await buildContinuousScanExtractionWithOcr({
     barcode,
     video,
+    forceOcr: true,
     onStatus: setProductLearningStatus
   });
   const extractionKey = getProductLearningCodeKey(extraction);
@@ -15323,7 +15383,7 @@ elements.prepareLocalModeBtn?.addEventListener("click", async () => {
     showModalError(
       isHostedAppOrigin() ? "Base local PWA no disponible" : "Backend local inactivo",
       isHostedAppOrigin()
-        ? `${message || "La capa local de tablet no esta cargada."} Cierra completamente la app, abre nuevamente y verifica que aparezca tablet-indexeddb-v42.`
+        ? `${message || "La capa local de tablet no esta cargada."} Cierra completamente la app, abre nuevamente y verifica que aparezca tablet-indexeddb-v44.`
         : "En la tablet principal abre http://127.0.0.1:8787. Si sigue inactivo, ejecuta local-backend\\iniciar-backend-local.cmd y vuelve a presionar Preparar modo local."
     );
   } finally {
