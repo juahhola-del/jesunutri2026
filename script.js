@@ -7,7 +7,7 @@ const PRIMARY_BACKEND_STORAGE_KEY = "jesunutri_primary_backend_url";
 const LEGACY_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_local_backend_url";
 const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
-const APP_BUILD_LABEL = "local-camera-v36";
+const APP_BUILD_LABEL = "vercel-local-v37";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -1367,10 +1367,16 @@ function getCurrentOriginBackendUrl() {
   try {
     if (!/^https?:$/.test(window.location.protocol)) return "";
     if (!window.location.hostname || window.location.hostname.includes("supabase.co")) return "";
+    if (isHostedAppOrigin()) return "";
     return normalizeBackendUrl(window.location.origin);
   } catch (error) {
     return "";
   }
+}
+
+function isHostedAppOrigin(hostname = window.location.hostname) {
+  const clean = String(hostname || "").toLowerCase();
+  return clean.endsWith(".vercel.app") || clean === "jesunutri2026.vercel.app" || clean === "jesunutri2025.vercel.app";
 }
 
 function readStoredPrimaryBackendUrl() {
@@ -1436,6 +1442,9 @@ function isCaptureDevice() {
 }
 
 function getDeviceModeLabel() {
+  if (isHostedAppOrigin() && state.backend.deviceMode === "principal") return "App Vercel con backend local";
+  if (isHostedAppOrigin() && state.backend.deviceMode === "principal-remoto") return "App Vercel conectada al principal";
+  if (isHostedAppOrigin() && isCaptureDevice()) return state.backend.local.available ? "App Vercel capturador conectado" : "App Vercel capturador";
   if (state.backend.deviceMode === "principal-remoto") return "Dispositivo principal conectado";
   if (isPrincipalDevice()) return "Dispositivo principal";
   if (isCaptureDevice()) return state.backend.local.available ? "Modo capturador conectado" : "Modo capturador";
@@ -1719,9 +1728,13 @@ function renderBackendStatus() {
   if (elements.localBackendDescription) {
     elements.localBackendDescription.textContent = isCaptureDevice()
       ? "Este dispositivo envia capturas al sistema principal. No administra la base oficial."
-      : localReady
-        ? "Modo local disponible. Puedes revisar migraciones o importar datos existentes desde Supabase."
-        : "Prepara este dispositivo para trabajar con base local, sin depender de internet.";
+      : isHostedAppOrigin()
+        ? localReady
+          ? "App Vercel conectada al backend local. Puedes revisar migraciones o importar datos existentes desde Supabase."
+          : "App Vercel instalada. Para modo local, deja corriendo el backend local y prepara SQLite desde aqui."
+        : localReady
+          ? "Modo local disponible. Puedes revisar migraciones o importar datos existentes desde Supabase."
+          : "Prepara este dispositivo para trabajar con base local, sin depender de internet.";
   }
 
   elements.localModePill.textContent = activeLabel;
@@ -15151,7 +15164,9 @@ elements.prepareLocalModeBtn?.addEventListener("click", async () => {
     renderBackendStatus();
     showModalError(
       "Backend local inactivo",
-      "En la tablet principal abre http://127.0.0.1:8787. Si sigue inactivo, ejecuta local-backend\\iniciar-backend-local.cmd y vuelve a presionar Preparar modo local."
+      isHostedAppOrigin()
+        ? "La app de Vercel necesita que el backend local este corriendo como servicio en este dispositivo. Ejecuta local-backend\\iniciar-backend-local.cmd y vuelve a presionar Preparar modo local."
+        : "En la tablet principal abre http://127.0.0.1:8787. Si sigue inactivo, ejecuta local-backend\\iniciar-backend-local.cmd y vuelve a presionar Preparar modo local."
     );
   } finally {
     elements.prepareLocalModeBtn.disabled = false;
@@ -15514,7 +15529,9 @@ async function handleInstallAppClick() {
   if (!state.deferredInstallPrompt) {
     showModalSuccess(
       "Instalar app",
-      "En la tablet principal abre http://127.0.0.1:8787 en Chrome. Si entras por http://IP:8787, Chrome puede mostrar solo Agregar a pantalla principal y no instalacion PWA completa."
+      isHostedAppOrigin()
+        ? "Instala esta misma app de Vercel desde el menu de Chrome. Para modo local, el backend local corre aparte y la app se conecta a el."
+        : "En la tablet principal abre http://127.0.0.1:8787 en Chrome. Si entras por http://IP:8787, Chrome puede mostrar solo Agregar a pantalla principal y no instalacion PWA completa."
     );
     return;
   }
