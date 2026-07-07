@@ -3,12 +3,13 @@ const SUPABASE_URL = "https://kfobwrcxvqygmfvvccfl.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmb2J3cmN4dnF5Z21mdnZjY2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMzY0MTQsImV4cCI6MjA5NTgxMjQxNH0.hgGBTlCDtz3gbBTxnwmikVEtM6FFzRI1pL5BzgRFTPI";
 const PRIMARY_BACKEND_DEFAULT_URL = "http://127.0.0.1:8787";
+const LOCAL_BACKEND_CANDIDATE_URLS = [PRIMARY_BACKEND_DEFAULT_URL, "http://localhost:8787"];
 const PRIMARY_BACKEND_STORAGE_KEY = "jesunutri_primary_backend_url";
 const LEGACY_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_local_backend_url";
 const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
-const APP_BUILD_LABEL = "vercel-local-v38";
+const APP_BUILD_LABEL = "vercel-local-v39";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -1380,6 +1381,10 @@ function isHostedAppOrigin(hostname = window.location.hostname) {
   return clean.endsWith(".vercel.app") || clean === "jesunutri2026.vercel.app" || clean === "jesunutri2025.vercel.app";
 }
 
+function isHostedInstalledApp() {
+  return isHostedAppOrigin() && isStandaloneMode();
+}
+
 function readStoredPrimaryBackendUrl() {
   return normalizeBackendUrl(
     window.localStorage.getItem(PRIMARY_BACKEND_STORAGE_KEY) ||
@@ -1422,16 +1427,19 @@ async function probeBackendHealth(url, timeoutMs = 1600) {
 }
 
 async function detectOwnDeviceBackend() {
-  try {
-    await probeBackendHealth(PRIMARY_BACKEND_DEFAULT_URL);
-    state.backend.hasOwnLocalBackend = true;
-    state.backend.deviceMode = "principal";
-    state.backend.baseUrl = PRIMARY_BACKEND_DEFAULT_URL;
-    return true;
-  } catch (error) {
-    state.backend.hasOwnLocalBackend = false;
-    return false;
+  for (const url of LOCAL_BACKEND_CANDIDATE_URLS) {
+    try {
+      await probeBackendHealth(url);
+      state.backend.hasOwnLocalBackend = true;
+      state.backend.deviceMode = "principal";
+      state.backend.baseUrl = normalizeBackendUrl(url);
+      return true;
+    } catch (error) {
+      // Try the next loopback alias before deciding this device has no backend.
+    }
   }
+  state.backend.hasOwnLocalBackend = false;
+  return false;
 }
 
 function isPrincipalDevice() {
@@ -1463,13 +1471,15 @@ function updateDeviceModeBanners() {
     : isPrincipalDevice()
       ? state.backend.local.available
         ? `${label}. Base oficial local activa.`
-        : `${label}. Usando Supabase; modo local solo en la tablet oficial.`
+        : canShowOfficialLocalSetup()
+          ? `${label}. Backend local pendiente en esta tablet.`
+          : `${label}. Usando Supabase; modo local solo en la tablet oficial.`
       : label;
   [elements.deviceModeBanner, elements.operatorDeviceModeBanner].forEach((banner) => {
     if (!banner) return;
     banner.hidden = state.backend.deviceMode === "desconocido";
-    banner.textContent = state.backend.deviceMode === "desconocido" ? "" : `${text} · ${APP_BUILD_LABEL}`;
-    banner.title = `${url} · ${APP_BUILD_LABEL}`;
+    banner.textContent = state.backend.deviceMode === "desconocido" ? "" : `${text} - ${APP_BUILD_LABEL}`;
+    banner.title = `${url} - ${APP_BUILD_LABEL}`;
   });
 }
 
@@ -1667,11 +1677,19 @@ function isOfficialLocalDeviceRemembered() {
 }
 
 function canUseOfficialLocalDevice() {
-  return Boolean(!isCaptureDevice() && (state.backend.hasOwnLocalBackend === true || isOfficialLocalDeviceRemembered()));
+  return Boolean(!isCaptureDevice() && (
+    state.backend.hasOwnLocalBackend === true ||
+    isOfficialLocalDeviceRemembered() ||
+    canClaimOfficialLocalDeviceHere()
+  ));
 }
 
 function canShowOfficialLocalSetup() {
   return Boolean(isAdmin() && canUseOfficialLocalDevice());
+}
+
+function canClaimOfficialLocalDeviceHere(role = state.currentUser?.rol, email = state.currentUser?.email) {
+  return Boolean(isAdminRoleValue(role, email) && isHostedInstalledApp());
 }
 
 function canPrepareOfficialLocalMode() {
@@ -2083,15 +2101,20 @@ async function resolveBackendConnection({ quiet = true, role = "" } = {}) {
   const hasOwnBackend = await detectOwnDeviceBackend();
   const isAdminRole = isAdminRoleValue(role, state.currentUser?.email);
   const isOperatorRole = isOperatorRoleValue(role);
+  const canClaimOfficialLocal = canClaimOfficialLocalDeviceHere(role, state.currentUser?.email);
+  const shouldProbeOfficialLocal = canClaimOfficialLocal || isOfficialLocalDeviceRemembered();
   if (hasOwnBackend) state.backend.deviceMode = "principal";
   const connectedBackendCandidates = [
     getCurrentOriginBackendUrl(),
     readStoredPrimaryBackendUrl()
-  ].filter((url) => normalizeBackendUrl(url) !== PRIMARY_BACKEND_DEFAULT_URL);
+  ].filter((url) => !LOCAL_BACKEND_CANDIDATE_URLS.map(normalizeBackendUrl).includes(normalizeBackendUrl(url)));
   const candidates = hasOwnBackend
-    ? [PRIMARY_BACKEND_DEFAULT_URL]
+    ? [state.backend.baseUrl || PRIMARY_BACKEND_DEFAULT_URL]
     : isAdminRole
-      ? connectedBackendCandidates
+      ? [
+          ...(shouldProbeOfficialLocal ? LOCAL_BACKEND_CANDIDATE_URLS : []),
+          ...connectedBackendCandidates
+        ]
       : [
           getCurrentOriginBackendUrl(),
           readStoredPrimaryBackendUrl()
@@ -2102,9 +2125,10 @@ async function resolveBackendConnection({ quiet = true, role = "" } = {}) {
   for (const url of uniqueCandidates) {
     try {
       const status = await dataProvider.checkLocalStatus({ quiet: true, url });
-      if (hasOwnBackend || status?.installed) {
-        state.backend.deviceMode = hasOwnBackend ? "principal" : isAdminRole ? "principal-remoto" : "capturador";
+      if (hasOwnBackend || shouldProbeOfficialLocal || status?.installed) {
+        state.backend.deviceMode = hasOwnBackend || shouldProbeOfficialLocal ? "principal" : isAdminRole ? "principal-remoto" : "capturador";
         savePrimaryBackendUrl(url);
+        if ((hasOwnBackend || canClaimOfficialLocal) && status?.installed) rememberOfficialLocalDevice(status);
         renderBackendStatus();
         return status;
       }
