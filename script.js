@@ -10,7 +10,7 @@ const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
 const BROWSER_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_browser_local_enabled_v1";
-const APP_BUILD_LABEL = "tablet-indexeddb-v44";
+const APP_BUILD_LABEL = "tablet-indexeddb-v47";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -256,6 +256,7 @@ const CONTINUOUS_SCAN_ZXING_INTERVAL_MS = 700;
 const CONTINUOUS_SCAN_BARCODE_STABLE_TICKS = 2;
 const CONTINUOUS_SCAN_STABLE_TICKS = 4;
 const CONTINUOUS_SCAN_MIN_SHARPNESS = 8;
+const SCAN_OCR_ENRICH_INTERVAL_MS = 1600;
 const PRODUCT_LEARNING_SCAN_INTERVAL_MS = 380;
 const PRODUCT_LEARNING_BARCODE_STABLE_TICKS = 2;
 const PRODUCT_LEARNING_REPEAT_GRACE_MS = 2200;
@@ -499,6 +500,7 @@ const state = {
     recentBarcodeCaptures: {},
     lastSignature: "",
     lastScanSummary: null,
+    lastOcrEnrichmentAt: 0,
     captures: [],
     pendingCapture: null
   },
@@ -520,6 +522,7 @@ const state = {
     currentOcr: null,
     currentBarcodeKey: "",
     currentImageDataUrl: "",
+    lastOcrEnrichmentAt: 0,
     candidateBarcodeKey: "",
     candidateBarcodeTicks: 0,
     selectedProductId: null,
@@ -11760,6 +11763,7 @@ function resetContinuousScanStateForSession() {
     recentBarcodeCaptures: {},
     lastSignature: "",
     lastScanSummary: null,
+    lastOcrEnrichmentAt: 0,
     captures: [],
     pendingCapture: null
   });
@@ -12249,7 +12253,7 @@ async function continuousScanLoop() {
 async function processContinuousScanFrame() {
   const scan = state.continuousScan;
   if (scan.pendingCapture) {
-    setContinuousScanStatus("Confirma cantidad u omite la lectura actual para seguir escaneando.");
+    await enrichPendingContinuousScanCapture();
     return;
   }
   const video = elements.continuousScanVideo;
@@ -12385,15 +12389,27 @@ function getOcrLines(text) {
 function isLikelyNoiseScanLine(line) {
   const clean = normalize(line);
   return /^(lote|lot|batch|vence|venc|vto|exp|cad|elab|fabricado|gtin|ean|codigo|cod|barra|fecha|registro|reg|servicio)$/.test(clean)
+    || /\b(?:lote|lot|batch|vence|venc|vto|exp|cad|elab|gtin|ean|codigo|cod|barra)\b/.test(clean)
+    || /(?:\(\d{2,4}\)|^01\d{14}|^\d{8,14}$)/.test(clean.replace(/\s+/g, ""))
     || /^(www\.|http|tel|rut|r\.s\.)/.test(clean);
 }
 
 function extractFormatFromText(text) {
-  const match = String(text || "").match(/(\d+(?:[,.]\d+)?)\s*(kg|g|gr|gramos|lt|l|litro|litros|ml|cc|un|u|unidad|unidades)\b/i);
-  if (!match) return "";
-  const value = match[1].replace(",", ".");
+  const readableText = String(text || "").replace(/\b(\d{2,4})\s*9\b/g, "$1g");
+  const pattern = /(\d+(?:[,.]\d+)?)\s*(kg|g|gr|gramos|lt|l|litro|litros|ml|cc|un|u|unidad|unidades)\b/gi;
   const unitMap = { gr: "g", gramos: "g", l: "lt", litro: "lt", litros: "lt", un: "unidad", u: "unidad", unidades: "unidad" };
-  const unit = unitMap[match[2].toLowerCase()] || match[2].toLowerCase();
+  const matches = [...readableText.matchAll(pattern)].map((match) => {
+    const value = Number(match[1].replace(",", "."));
+    const unit = unitMap[match[2].toLowerCase()] || match[2].toLowerCase();
+    let score = unit === "unidad" ? 2 : 20;
+    if (unit === "g" && value >= 50) score += 12;
+    if ((unit === "kg" || unit === "lt") && value <= 50) score += 8;
+    if ((unit === "ml" || unit === "cc") && value >= 50) score += 8;
+    return { value: match[1].replace(",", "."), unit, score };
+  });
+  const best = matches.sort((a, b) => b.score - a.score)[0];
+  if (!best) return "";
+  const { value, unit } = best;
   return `${value} ${unit}`;
 }
 
@@ -12496,6 +12512,7 @@ function normalizeOcrLotValue(value) {
   let lot = normalizeLotValue(value).replace(/[.,;:]+$/g, "");
   lot = lot.replace(/^O(?=\d)/, "0");
   lot = lot.replace(/(\d)O(?=\d)/g, "$10");
+  lot = lot.replace(/^(\d{2}L)[O0][S5](\d{2})$/i, (_match, prefix, suffix) => `${prefix}05${suffix}`);
   return lot;
 }
 
@@ -12537,7 +12554,12 @@ function extractExpiryFromText(text) {
   const parsed = parseFlexibleLabelDate(value, { mode: "expiry" }) || parseMonthYearExpiry(value);
   if (parsed && isValidIsoDate(parsed)) return parsed;
   if (/\b(?:consumir\s+antes\s+de|vence|vencimiento|venc|vto|cad|caduca|exp|expiry|fecha\s+vencimiento|f\.?\s*vencimiento|v)\b/i.test(raw)) {
-    return "";
+    const genericMatches = raw.match(new RegExp(datePattern, "gi")) || [];
+    const best = genericMatches
+      .map((candidate) => parseFlexibleLabelDate(candidate, { mode: "expiry" }) || parseMonthYearExpiry(candidate))
+      .filter(isValidIsoDate)
+      .sort((a, b) => scoreFlexibleDateCandidate(b, "expiry", true) - scoreFlexibleDateCandidate(a, "expiry", true))[0];
+    return best || "";
   }
 
   const genericMatches = raw.match(new RegExp(datePattern, "gi")) || [];
@@ -12586,11 +12608,84 @@ function extractGtinFromScanText(text, barcodeValue) {
   return any.find(isValidGtin) || "";
 }
 
+function scoreProductIdentityLine(line, format) {
+  const raw = String(line || "").trim();
+  if (!raw || raw === format || isLikelyNoiseScanLine(raw) || extractExpiryFromText(raw) || extractLotFromText(raw)) return -100;
+  if (!/[A-Za-z]/.test(raw)) return -90;
+  const clean = normalize(raw);
+  const digits = (raw.match(/\d/g) || []).length;
+  const letters = (raw.match(/[A-Za-z]/g) || []).length;
+  let score = letters * 2 - digits;
+  if (/\b(?:semola|fardo|arroz|pure|pasta|lasana|lasaña|espirales|almidon|maiz|te|hierba|menta|shot|check|papas|cereal|harina|chuño|chuno|chuchoca|polenta)\b/.test(clean)) score += 18;
+  if (/\b(?:kg|g|gr|ml|lt|x|un|unidad|unidades|bolsa|caja|manga|pack)\b/.test(clean)) score += 6;
+  if (raw.length >= 7 && raw.length <= 64) score += 8;
+  if (digits > letters) score -= 20;
+  return score;
+}
+
+function cleanProductIdentityName(line) {
+  let value = String(line || "").trim();
+  if (!value) return "";
+  const keyword = value.match(/\b(?:semola|arroz|pure|pasta|lasana|lasa.a|espirales|almidon|maiz|harina|chu.o|chuchoca|polenta|hierba|menta|shot|check|papas)\b/i);
+  if (keyword && keyword.index > 0) value = value.slice(keyword.index).trim();
+  value = value
+    .replace(/[|\\\]]/g, "I")
+    .replace(/\bLUCCHETT[II1]?\b/i, "LUCCHETTI")
+    .replace(/\b(\d{2,4})\s*9\b/g, "$1g")
+    .replace(/\s*[-:]?\s*(?:os|o)?\d{2,4}\s*$/i, "")
+    .replace(/\s+\d{1,2}$/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const formatEnd = value.match(/^(.{3,80}?\b\d+(?:[,.]\d+)?\s*(?:kg|g|gr|gramos|lt|l|litro|litros|ml|cc|un|unidad|unidades)\b)/i);
+  if (formatEnd) value = formatEnd[1].trim();
+  return value;
+}
+
+function scoreProductIdentityLineBetter(line, format) {
+  const raw = String(line || "").trim();
+  if (!raw || raw === format || isLikelyNoiseScanLine(raw) || extractExpiryFromText(raw) || extractLotFromText(raw)) return -100;
+  if (!/[A-Za-z]/.test(raw)) return -90;
+  const clean = normalize(raw);
+  const digits = (raw.match(/\d/g) || []).length;
+  const letters = (raw.match(/[A-Za-z]/g) || []).length;
+  const symbols = (raw.match(/[^A-Za-z0-9\s.,'&/-]/g) || []).length;
+  const shortTokens = clean.split(" ").filter((token) => token.length > 0 && token.length <= 2).length;
+  const hasProductWord = /\b(?:semola|fardo|arroz|pure|pasta|lasana|espirales|almidon|maiz|te|hierba|menta|shot|check|papas|cereal|harina|chuno|chuchoca|polenta)\b/.test(clean);
+  const hasPackWord = /\b(?:kg|g|gr|ml|lt|x|un|unidad|unidades|bolsa|caja|manga|pack)\b/.test(clean);
+  let score = letters * 2 - digits;
+  if (hasProductWord) score += 60;
+  if (hasPackWord) score += 12;
+  if (raw.length >= 7 && raw.length <= 64) score += 8;
+  if (digits > letters) score -= 20;
+  if (!hasProductWord && !hasPackWord) score -= 28;
+  score -= symbols * 14;
+  score -= shortTokens * 5;
+  return score;
+}
+
+function getProductIdentityLineFragments(lines) {
+  return lines.flatMap((line) => {
+    const raw = String(line || "").trim();
+    if (!raw) return [];
+    const beforeMetadata = raw.split(/\b(?:lote|lot|batch|vence|vencimiento|venc|vto|exp|cad|elab|fabricado)\b/i)[0]?.trim() || "";
+    const cleaned = beforeMetadata
+      .replace(/\b(?:codigo|cod|gtin|ean)\b\s*[:#.-]?\s*\d{3,}/ig, "")
+      .replace(/\(\d{2,4}\)[A-Z0-9/_-]+/ig, "")
+      .replace(/\b\d{8,14}\b/g, "")
+      .trim();
+    return [raw, cleaned].filter((fragment, index, list) => fragment.length >= 3 && list.indexOf(fragment) === index);
+  });
+}
+
 function extractProductIdentityFromText(lines, format) {
-  const candidates = lines.filter((line) => !isLikelyNoiseScanLine(line) && line !== format && !extractExpiryFromText(line) && !extractLotFromText(line));
+  const candidates = getProductIdentityLineFragments(lines)
+    .map((line) => ({ line, score: scoreProductIdentityLineBetter(line, format) }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((candidate) => candidate.line);
   const brand = candidates.find((line) => /^[A-Z0-9 &.'-]{3,28}$/.test(line) && /[A-Z]{2}/.test(line)) || "";
   const name = candidates.find((line) => line !== brand && /[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(line)) || brand || "";
-  return { brand, name };
+  return { brand, name: cleanProductIdentityName(name) };
 }
 
 function buildScanField(value, confidence, source = "", detail = "") {
@@ -12741,12 +12836,22 @@ function mergeContinuousOcrResults(results) {
   const methods = [...new Set(usableResults.map((result) => result.method).filter(Boolean))];
   const regions = usableResults.map((result) => result.region).filter(Boolean);
   const notices = usableResults.map((result) => result.notice).filter(Boolean);
+  const observations = usableResults.map((result) => ({
+    text: result.text || "",
+    method: result.method || "",
+    status: result.status || "",
+    fields: result.fields || {},
+    notice: result.notice || "",
+    region: result.region || "",
+    at: new Date().toISOString()
+  }));
   return {
     text,
     method: methods.join(" + ") || "no disponible",
     status: usableResults.some((result) => result.status === "ok") ? "ok" : (usableResults[0]?.status || "unavailable"),
     fields,
     regions,
+    observations,
     notice: fields.hasUsefulData ? "" : (notices[0] || "OCR sin datos utiles de etiqueta.")
   };
 }
@@ -12787,6 +12892,190 @@ async function buildContinuousScanExtractionWithOcr({ barcode, video, source = v
   ocr = await runContinuousScanOcrFromCanvases(ocrCanvases);
   extraction = buildContinuousScanExtraction({ barcode, text: ocr.text || "", ocr });
   return { extraction, ocr };
+}
+
+function getBarcodeFromScanExtraction(extraction) {
+  const barcode = extraction?.sources?.barcode || {};
+  const rawValue = barcode.rawValue || barcode.normalizedValue || extraction?.fields?.codigoBarra?.value || extraction?.fields?.gtin?.value || "";
+  if (!rawValue) return null;
+  return {
+    rawValue,
+    format: barcode.format || extraction?.barcodeFormat || "",
+    engine: barcode.engine || extraction?.barcodeEngine || "lectura previa",
+    confidence: barcode.confidence || extraction?.fields?.codigoBarra?.confidence || 0.9
+  };
+}
+
+function scoreDetectedProductNameValue(value) {
+  const raw = String(value || "");
+  const clean = normalize(raw);
+  if (!clean) return 0;
+  const tokens = clean.split(" ").filter((token) => token.length >= 3 && !/^\d+$/.test(token));
+  const hasProductWord = /\b(?:semola|arroz|pure|pasta|lasana|espirales|almidon|maiz|harina|hierba|menta)\b/.test(clean);
+  const hasPackWord = /\b(?:fardo|kg|g|ml|lt|unidad|pack|caja|manga)\b/.test(clean);
+  const symbols = (raw.match(/[^A-Za-z0-9\s.,'&/-]/g) || []).length;
+  const shortTokens = clean.split(" ").filter((token) => token.length > 0 && token.length <= 2).length;
+  let score = clean.length + tokens.length * 12;
+  if (tokens.length < 2) score -= 24;
+  if (hasProductWord) score += 16;
+  if (hasPackWord) score += 8;
+  if (!hasProductWord && !hasPackWord) score -= 36;
+  score -= symbols * 12;
+  score -= shortTokens * 4;
+  return score;
+}
+
+function isUsefulDetectedProductName(value) {
+  const clean = normalize(value || "");
+  const tokens = clean.split(" ").filter((token) => token.length >= 3 && !/^\d+$/.test(token));
+  return tokens.length >= 2 && scoreDetectedProductNameValue(value) >= 42;
+}
+
+function getMissingScanInfoLabels(extraction) {
+  const fields = extraction?.fields || {};
+  const missing = [];
+  if (!isUsefulDetectedProductName(fields.nombre?.value)) missing.push("nombre");
+  if (!fields.lote?.value) missing.push("lote");
+  if (!fields.fechaVencimiento?.value) missing.push("vencimiento");
+  return missing;
+}
+
+function shouldContinueScanInfoSearch(extraction) {
+  return getMissingScanInfoLabels(extraction).length > 0;
+}
+
+function flattenScanOcrObservations(result) {
+  if (!result) return [];
+  if (Array.isArray(result.observations) && result.observations.length) return result.observations;
+  if (!result.text && result.status !== "ok") return [];
+  return [{
+    text: result.text || "",
+    method: result.method || "",
+    status: result.status || "",
+    fields: result.fields || {},
+    notice: result.notice || "",
+    at: new Date().toISOString()
+  }];
+}
+
+function mergeScanOcrResults(previousOcr, nextOcr) {
+  const observations = [...flattenScanOcrObservations(previousOcr), ...flattenScanOcrObservations(nextOcr)]
+    .filter((result) => result && (result.text || result.status === "ok"));
+  if (!observations.length) return nextOcr || previousOcr || buildDeferredOcrResult();
+  const unique = [];
+  const seen = new Set();
+  observations.forEach((observation) => {
+    const key = normalize(String(observation.text || "").slice(0, 500)) || `${observation.method}-${observation.status}-${unique.length}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push(observation);
+  });
+  const selected = unique.slice(-8);
+  const text = selected.map((observation) => observation.text || "").filter(Boolean).join("\n");
+  const fields = extractAdaptiveLabelFields(text);
+  const methods = [...new Set(selected.map((observation) => observation.method).filter(Boolean))];
+  const notices = selected.map((observation) => observation.notice).filter(Boolean);
+  return {
+    text,
+    method: methods.join(" + ") || "OCR",
+    status: selected.some((observation) => observation.status === "ok") ? "ok" : (selected[0]?.status || "unavailable"),
+    fields,
+    observations: selected,
+    notice: fields.hasUsefulData ? "" : (notices[0] || "OCR sin datos utiles de etiqueta.")
+  };
+}
+
+function mergeScanField(previousField = {}, nextField = {}) {
+  if (!previousField?.value && nextField?.value) return { ...nextField };
+  if (!nextField?.value) return { ...previousField };
+  if (!previousField?.value) return { ...nextField };
+  if (String(previousField.value) === String(nextField.value)) {
+    return Number(nextField.confidence || 0) > Number(previousField.confidence || 0) ? { ...nextField } : { ...previousField };
+  }
+  if (String(nextField.source || "") === "gs1" && String(previousField.source || "") !== "manual") return { ...nextField };
+  return Number(nextField.confidence || 0) > Number(previousField.confidence || 0) ? { ...nextField } : { ...previousField };
+}
+
+function mergeScanExtractions(previousExtraction, nextExtraction) {
+  if (!previousExtraction) return nextExtraction;
+  if (!nextExtraction) return previousExtraction;
+  const fieldKeys = new Set([
+    ...Object.keys(previousExtraction.fields || {}),
+    ...Object.keys(nextExtraction.fields || {})
+  ]);
+  const fields = {};
+  fieldKeys.forEach((key) => {
+    if (key === "textoOcr") {
+      const previousField = previousExtraction.fields?.[key] || {};
+      const nextField = nextExtraction.fields?.[key] || {};
+      fields[key] = String(nextField.value || "").length >= String(previousField.value || "").length
+        ? { ...nextField }
+        : { ...previousField };
+      return;
+    }
+    if (key === "nombre") {
+      const previousField = previousExtraction.fields?.[key] || {};
+      const nextField = nextExtraction.fields?.[key] || {};
+      fields[key] = scoreDetectedProductNameValue(nextField.value) > scoreDetectedProductNameValue(previousField.value)
+        ? { ...nextField }
+        : { ...previousField };
+      return;
+    }
+    fields[key] = mergeScanField(previousExtraction.fields?.[key], nextExtraction.fields?.[key]);
+  });
+  return {
+    ...previousExtraction,
+    ...nextExtraction,
+    fields,
+    productByCode: nextExtraction.productByCode || previousExtraction.productByCode,
+    productLinked: Boolean(nextExtraction.productLinked || previousExtraction.productLinked),
+    warnings: [...new Set([...(previousExtraction.warnings || []), ...(nextExtraction.warnings || [])])],
+    sources: {
+      ...(previousExtraction.sources || {}),
+      ...(nextExtraction.sources || {}),
+      barcode: nextExtraction.sources?.barcode?.detected ? nextExtraction.sources.barcode : previousExtraction.sources?.barcode,
+      gs1: nextExtraction.sources?.gs1?.isGs1 ? nextExtraction.sources.gs1 : previousExtraction.sources?.gs1,
+      ocr: nextExtraction.sources?.ocr || previousExtraction.sources?.ocr,
+      productLink: nextExtraction.sources?.productLink || previousExtraction.sources?.productLink || null
+    }
+  };
+}
+
+function scanExtractionImproved(previousExtraction, nextExtraction) {
+  const beforeMissing = getMissingScanInfoLabels(previousExtraction);
+  const afterMissing = getMissingScanInfoLabels(nextExtraction);
+  if (afterMissing.length < beforeMissing.length) return true;
+  const beforeFields = previousExtraction?.fields || {};
+  const afterFields = nextExtraction?.fields || {};
+  return ["nombre", "lote", "fechaVencimiento", "fechaElaboracion", "cantidadPorCaja", "cantidadDetectada"].some((key) =>
+    afterFields[key]?.value &&
+    (!beforeFields[key]?.value || Number(afterFields[key].confidence || 0) > Number(beforeFields[key].confidence || 0))
+  );
+}
+
+async function buildEnrichedScanExtractionFromFrame({ extraction, source, previousOcr, onStatus = null } = {}) {
+  const barcode = getBarcodeFromScanExtraction(extraction);
+  if (!source || !barcode) return null;
+  if (typeof onStatus === "function") {
+    const missing = getMissingScanInfoLabels(extraction);
+    onStatus(missing.length ? `Buscando ${missing.join(", ")} en la etiqueta...` : "Refinando lectura de etiqueta...");
+  }
+  const fresh = await buildContinuousScanExtractionWithOcr({
+    barcode,
+    source,
+    forceOcr: true,
+    onStatus
+  });
+  const mergedOcr = mergeScanOcrResults(previousOcr, fresh.ocr);
+  const rebuilt = buildContinuousScanExtraction({
+    barcode,
+    text: mergedOcr.text || "",
+    ocr: mergedOcr
+  });
+  return {
+    extraction: mergeScanExtractions(extraction, rebuilt),
+    ocr: mergedOcr
+  };
 }
 
 function captureVideoFrameDataUrl(source, { maxWidth = 960, quality = 0.72 } = {}) {
@@ -13202,6 +13491,56 @@ function renderContinuousScanDetectedList() {
   }).join("");
 }
 
+async function enrichPendingContinuousScanCapture() {
+  const scan = state.continuousScan;
+  const capture = scan.pendingCapture;
+  const video = elements.continuousScanVideo;
+  if (!capture || !video?.videoWidth || !video?.videoHeight) return false;
+  if (!shouldContinueScanInfoSearch(capture.extraction)) {
+    setContinuousScanStatus("Lectura lista. Confirma cantidad u omite para seguir escaneando.");
+    return false;
+  }
+  const now = Date.now();
+  if (now - scan.lastOcrEnrichmentAt < SCAN_OCR_ENRICH_INTERVAL_MS) {
+    const missing = getMissingScanInfoLabels(capture.extraction);
+    setContinuousScanStatus(`Mueve la camara hacia ${missing.join(", ")} o confirma cantidad.`);
+    return false;
+  }
+  scan.lastOcrEnrichmentAt = now;
+  const enriched = await buildEnrichedScanExtractionFromFrame({
+    extraction: capture.extraction,
+    source: video,
+    previousOcr: capture.ocr,
+    onStatus: setContinuousScanStatus
+  });
+  if (!enriched) return false;
+  const mergedExtraction = enriched.extraction;
+  if (!scanExtractionImproved(capture.extraction, mergedExtraction)) {
+    const missing = getMissingScanInfoLabels(capture.extraction);
+    setContinuousScanStatus(missing.length
+      ? `Sigue apuntando a ${missing.join(", ")} o confirma cantidad.`
+      : "Lectura lista. Confirma cantidad u omite para seguir escaneando.");
+    return false;
+  }
+  const scanId = capture.scanId || capture.row?._scanId;
+  const nextRow = continuousScanExtractionToPosRow(mergedExtraction, enriched.ocr, capture.reason);
+  if (scanId) nextRow._scanId = scanId;
+  capture.extraction = mergedExtraction;
+  capture.ocr = enriched.ocr;
+  capture.row = nextRow;
+  capture.scanId = scanId || nextRow._scanId;
+  renderContinuousScanDetectedList();
+  renderContinuousScanAcceptCard();
+  renderContinuousScanCapabilities();
+  const filled = ["nombre", "lote", "fechaVencimiento", "cantidadPorCaja", "cantidadDetectada"]
+    .filter((key) => mergedExtraction.fields?.[key]?.value)
+    .map((key) => key === "fechaVencimiento" ? "vencimiento" : key);
+  setContinuousScanStatus(filled.length
+    ? `Lectura actualizada: ${filled.join(", ")}. Confirma cantidad cuando este listo.`
+    : "Lectura actualizada. Confirma cantidad cuando este listo.");
+  return true;
+}
+
 async function captureContinuousScanFrame({ barcodes, metrics, reason, source = elements.continuousScanVideo }) {
   const scan = state.continuousScan;
   const barcode = barcodes[0]
@@ -13561,18 +13900,20 @@ function renderProductLearningImagePreview() {
     : '<div class="empty compact-empty">La captura de referencia aparecera al detectar la etiqueta.</div>';
 }
 
-function fillProductLearningEditableFields(extraction) {
+function setProductLearningInputValue(input, value, { preserveExisting = false } = {}) {
+  if (!input) return;
+  if (preserveExisting && String(input.value || "").trim()) return;
+  input.value = value || "";
+}
+
+function fillProductLearningEditableFields(extraction, { preserveExisting = false } = {}) {
   const fields = extraction?.fields || {};
-  if (elements.productLearningCodeInput) {
-    elements.productLearningCodeInput.value = fields.codigoBarra?.value || fields.gtin?.value || "";
-  }
-  if (elements.productLearningLotInput) elements.productLearningLotInput.value = fields.lote?.value || "";
-  if (elements.productLearningExpiryInput) elements.productLearningExpiryInput.value = fields.fechaVencimiento?.value || "";
-  if (elements.productLearningMfgInput) elements.productLearningMfgInput.value = fields.fechaElaboracion?.value || "";
-  if (elements.productLearningDetectedQuantityInput) {
-    elements.productLearningDetectedQuantityInput.value = fields.cantidadPorCaja?.value || fields.cantidadDetectada?.value || "";
-  }
-  if (elements.productLearningNotesInput) elements.productLearningNotesInput.value = "";
+  setProductLearningInputValue(elements.productLearningCodeInput, fields.codigoBarra?.value || fields.gtin?.value || "", { preserveExisting });
+  setProductLearningInputValue(elements.productLearningLotInput, fields.lote?.value || "", { preserveExisting });
+  setProductLearningInputValue(elements.productLearningExpiryInput, fields.fechaVencimiento?.value || "", { preserveExisting });
+  setProductLearningInputValue(elements.productLearningMfgInput, fields.fechaElaboracion?.value || "", { preserveExisting });
+  setProductLearningInputValue(elements.productLearningDetectedQuantityInput, fields.cantidadPorCaja?.value || fields.cantidadDetectada?.value || "", { preserveExisting });
+  if (elements.productLearningNotesInput && !preserveExisting) elements.productLearningNotesInput.value = "";
 }
 
 function clearProductLearningEditableFields() {
@@ -13644,6 +13985,9 @@ function renderProductLearningDetected() {
     ["Codigo", fields.codigoBarra.value || "-"],
     ["Tipo", fields.tipoCodigo.value || "-"],
     ["Motor", extraction.barcodeEngine || "-"],
+    ["Nombre", fields.nombre.value || "-"],
+    ["Marca", fields.marca.value || "-"],
+    ["Formato", fields.formato.value || "-"],
     ["GTIN", fields.gtin.value || "-"],
     ["Lote", fields.lote.value || "-"],
     ["Vence", fields.fechaVencimiento.value ? formatDisplayDate(fields.fechaVencimiento.value) : "-"],
@@ -13785,6 +14129,7 @@ function resetProductLearningStateForSession() {
     currentOcr: null,
     currentImageDataUrl: "",
     currentBarcodeKey: "",
+    lastOcrEnrichmentAt: 0,
     selectedProductId: null,
     lastCompletedCode: "",
     lastCompletedAt: 0
@@ -13793,20 +14138,24 @@ function resetProductLearningStateForSession() {
   setProductLearningStatus("Esperando camara...");
 }
 
-function setProductLearningResult(extraction, ocr) {
+function setProductLearningResult(extraction, ocr, { preserveSelection = false, preserveEditable = false, refreshImage = false } = {}) {
   const scan = state.productLearning;
+  const previousSelectedId = scan.selectedProductId;
+  const previousSearch = elements.productLearningSearch?.value || "";
   scan.currentExtraction = extraction;
   scan.currentOcr = ocr;
-  if (!scan.currentImageDataUrl) {
+  if (!scan.currentImageDataUrl || refreshImage) {
     scan.currentImageDataUrl = captureVideoFrameDataUrl(elements.productLearningVideo);
   }
   scan.currentBarcodeKey = getProductLearningCodeKey(extraction);
   const existingLink = getExistingLearningLink(extraction);
   const linkedProduct = getProductFromCodeLink(existingLink);
-  scan.selectedProductId = linkedProduct?.id || null;
-  if (elements.productLearningSearch) elements.productLearningSearch.value = linkedProduct?.nombre || "";
-  fillProductLearningEditableFields(extraction);
-  prepareProductLearningPackageRule({ preferExisting: true });
+  scan.selectedProductId = preserveSelection && previousSelectedId ? previousSelectedId : (linkedProduct?.id || null);
+  if (elements.productLearningSearch) {
+    elements.productLearningSearch.value = preserveSelection && previousSearch ? previousSearch : (linkedProduct?.nombre || "");
+  }
+  fillProductLearningEditableFields(extraction, { preserveExisting: preserveEditable });
+  if (!preserveEditable) prepareProductLearningPackageRule({ preferExisting: true });
   renderProductLearningImagePreview();
   renderProductLearningDetected();
   renderProductLearningResults();
@@ -13973,7 +14322,7 @@ function finishProductLearning() {
 async function productLearningLoop() {
   const scan = state.productLearning;
   if (!scan.running) return;
-  if (!scan.currentExtraction && !scan.processing) {
+  if (!scan.processing) {
     scan.processing = true;
     try {
       await processProductLearningFrame();
@@ -13986,10 +14335,57 @@ async function productLearningLoop() {
   scan.loopTimer = window.setTimeout(productLearningLoop, PRODUCT_LEARNING_SCAN_INTERVAL_MS);
 }
 
+async function enrichCurrentProductLearningFrame() {
+  const scan = state.productLearning;
+  const video = elements.productLearningVideo;
+  if (!scan.currentExtraction || !video?.videoWidth || !video?.videoHeight) return false;
+  if (!shouldContinueScanInfoSearch(scan.currentExtraction)) {
+    setProductLearningStatus("Lectura lista. Selecciona producto y acepta para continuar.");
+    return false;
+  }
+  const now = Date.now();
+  if (now - scan.lastOcrEnrichmentAt < SCAN_OCR_ENRICH_INTERVAL_MS) {
+    const missing = getMissingScanInfoLabels(scan.currentExtraction);
+    setProductLearningStatus(`Sigue apuntando a ${missing.join(", ")} para completar la etiqueta.`);
+    return false;
+  }
+  scan.lastOcrEnrichmentAt = now;
+  const enriched = await buildEnrichedScanExtractionFromFrame({
+    extraction: scan.currentExtraction,
+    source: video,
+    previousOcr: scan.currentOcr,
+    onStatus: setProductLearningStatus
+  });
+  if (!enriched) return false;
+  const mergedExtraction = enriched.extraction;
+  if (!scanExtractionImproved(scan.currentExtraction, mergedExtraction)) {
+    const missing = getMissingScanInfoLabels(scan.currentExtraction);
+    setProductLearningStatus(missing.length
+      ? `No aparecieron datos nuevos. Mueve la camara hacia ${missing.join(", ")}.`
+      : "Lectura lista. Selecciona producto y acepta.");
+    return false;
+  }
+  setProductLearningResult(mergedExtraction, enriched.ocr, {
+    preserveSelection: true,
+    preserveEditable: true,
+    refreshImage: true
+  });
+  const missing = getMissingScanInfoLabels(mergedExtraction);
+  setProductLearningStatus(missing.length
+    ? `Etiqueta actualizada. Falta ${missing.join(", ")}; sigue apuntando si aparece.`
+    : "Etiqueta completa. Selecciona producto y acepta.");
+  return true;
+}
+
 async function processProductLearningFrame() {
   const scan = state.productLearning;
   const video = elements.productLearningVideo;
   if (!video?.videoWidth || !video?.videoHeight) return;
+
+  if (scan.currentExtraction) {
+    await enrichCurrentProductLearningFrame();
+    return;
+  }
 
   let barcodes = await detectBarcodesWithBarcodeDetectorForScanner(video, scan);
   if (!hasGs1BarcodeCandidate(barcodes)) {
