@@ -697,6 +697,23 @@ function saveProductLabelImage(db, {
   return { id, image_path: imagePath, image_hash: hash, captured_at: capturedAt };
 }
 
+function saveScanSessionImage(payload = {}, userId = null) {
+  const db = openExistingDatabase();
+  try {
+    return saveProductLabelImage(db, {
+      productCodeLinkId: payload.product_code_link_id || payload.productCodeLinkId || null,
+      productId: payload.product_id || payload.productId || null,
+      imageDataUrl: payload.image_data_url || payload.imageDataUrl || "",
+      createdBy: payload.created_by || payload.createdBy || userId || null,
+      notes: payload.notes || "Captura de ingreso por escaneo",
+      ocrText: payload.ocr_text || payload.ocrText || null,
+      metadata: payload.metadata_json || payload.metadataJson || payload.metadata || {}
+    });
+  } finally {
+    db.close();
+  }
+}
+
 function mapProductCodeLink(row) {
   const parsed = deserializeRow(row);
   if (!parsed) return null;
@@ -1546,6 +1563,7 @@ module.exports = {
   listPendingEntries,
   listProductCodeLinks,
   queryLocalTable,
+  saveScanSessionImage,
   saveDailyTask,
   removeLocalAdminSeedIfPresent,
   upsertProductCodeLink,

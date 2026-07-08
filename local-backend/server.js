@@ -21,6 +21,7 @@ const {
   listProductCodeLinks,
   queryLocalTable,
   removeLocalAdminSeedIfPresent,
+  saveScanSessionImage,
   saveDailyTask,
   upsertProductCodeLink,
   updateDailyTask,
@@ -345,6 +346,15 @@ app.post("/api/product-code-links", (req, res) => {
   try {
     const link = upsertProductCodeLink(req.body?.link || req.body || {}, req.body?.userId || null);
     res.json({ ok: true, link });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post("/api/scan-session-images", (req, res) => {
+  try {
+    const image = saveScanSessionImage(req.body?.image || req.body || {}, req.body?.userId || null);
+    res.json({ ok: true, image });
   } catch (error) {
     sendError(res, error);
   }

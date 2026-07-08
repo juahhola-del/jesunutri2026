@@ -33,6 +33,7 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
@@ -166,8 +167,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
+        val launchServer = intent.getStringExtra("server_url").orEmpty()
         val savedServer = getPreferences(MODE_PRIVATE).getString("server_url", "") ?: ""
-        serverInput.setText(savedServer.ifBlank { "http://192.168.1.132:8787" })
+        serverInput.setText(launchServer.ifBlank { savedServer.ifBlank { "http://192.168.1.132:8787" } })
         loadCachedProducts()
         if (products.isNotEmpty()) updateProductAdapter(products)
         setBackendConnected(false)
@@ -455,11 +457,11 @@ class MainActivity : ComponentActivity() {
         conversionRow.addView(conversionFactorInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         conversionRow.addView(conversionNotesInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f))
 
-        learnButton = button("Aceptar y continuar") { saveLearning() }
+        learnButton = button("Guardar aprendizaje") { saveLearning() }
 
         packageCountInput = editText("Cantidad de cajas/mangas a ingresar")
         panel.addView(packageCountInput)
-        intakeButton = button("Agregar a sesion pendiente") { addIntakeItem() }
+        intakeButton = button("Enviar a revision") { addIntakeItem() }
         finishSessionButton = button("Finalizar sesion") { finishSession() }
         panel.addView(buttonRow(intakeButton, finishSessionButton))
 
@@ -488,7 +490,7 @@ class MainActivity : ComponentActivity() {
         conversionRow.visibility = View.GONE
         packageCountInput.visibility = if (isLearningMode) View.GONE else View.VISIBLE
         intakeButton.visibility = if (isLearningMode) View.GONE else View.VISIBLE
-        finishSessionButton.visibility = if (isLearningMode) View.GONE else View.VISIBLE
+        finishSessionButton.visibility = View.GONE
         selectedProduct = null
         currentLink = null
         lastLookupCode = ""
@@ -806,8 +808,10 @@ class MainActivity : ComponentActivity() {
             runCatching {
                 client.saveProductCodeLink(editedResult, product, rule.withEditorNotes(), imageDataUrl, "android-capturer")
                 withContext(Dispatchers.Main) {
-                    setStatus("Producto aprendido en tablet. No crea ingreso pendiente; cambia a Ingresar para recibir stock.")
                     clearCurrentScan()
+                    val message = "Enviado a tablet: producto aprendido. Para stock usa Ingresar."
+                    setStatus(message)
+                    showToast(message)
                 }
             }.onFailure { error ->
                 withContext(Dispatchers.Main) {
@@ -835,23 +839,33 @@ class MainActivity : ComponentActivity() {
             setStatus("Ingresa cantidad de cajas, mangas o packs.")
             return
         }
-        lifecycleScope.launch(Dispatchers.IO) {
-            runCatching {
-                val sessionId = currentSessionId ?: client.createScanSession("android-capturer", "capturador@local").also {
-                    currentSessionId = it
-                }
-                val product = products.firstOrNull { it.id == link.productId }
-                client.addSessionItem(sessionId, currentResult, link, product, count)
-                withContext(Dispatchers.Main) {
-                    setStatus("Item agregado. Presiona Finalizar para enviarlo a revision en tablet.")
-                    packageCountInput.setText("")
-                    clearCurrentScan()
-                }
-            }.onFailure { error ->
-                withContext(Dispatchers.Main) {
-                    setBackendConnected(false)
-                    backendClient = null
-                    setStatus("No se pudo agregar ingreso: ${error.message}. Reintentando conexion.")
+        val result = currentResult
+        setStatus("Enviando ingreso y foto a revision en tablet...")
+        captureImageDataUrl { imageDataUrl ->
+            lifecycleScope.launch(Dispatchers.IO) {
+                runCatching {
+                    val sessionId = client.createScanSession("android-capturer", "capturador@local")
+                    val product = products.firstOrNull { it.id == link.productId }
+                    val imagePath = client.saveScanSessionImage(result, link, imageDataUrl, "android-capturer")
+                    client.addSessionItem(sessionId, result, link, product, count, imagePath)
+                    client.submitSession(sessionId, "Ingreso enviado desde capturador Android con 1 item.")
+                    sessionId
+                }.onSuccess { sessionId ->
+                    withContext(Dispatchers.Main) {
+                        currentSessionId = null
+                        packageCountInput.setText("")
+                        clearCurrentScan()
+                        val shortId = sessionId.takeLast(6).uppercase(Locale.ROOT)
+                        val message = "Enviado a tablet: ingreso pendiente #$shortId."
+                        setStatus(message)
+                        showToast(message)
+                    }
+                }.onFailure { error ->
+                    withContext(Dispatchers.Main) {
+                        setBackendConnected(false)
+                        backendClient = null
+                        setStatus("No se pudo enviar ingreso: ${error.message}. Reintentando conexion.")
+                    }
                 }
             }
         }
@@ -869,8 +883,10 @@ class MainActivity : ComponentActivity() {
                 client.submitSession(sessionId)
                 currentSessionId = null
                 withContext(Dispatchers.Main) {
-                    setStatus("Sesion enviada a revision. La aprobacion queda en la tablet/admin.")
                     clearCurrentScan()
+                    val message = "Sesion enviada a revision. La aprobacion queda en la tablet/admin."
+                    setStatus(message)
+                    showToast(message)
                 }
             }.onFailure { error ->
                 withContext(Dispatchers.Main) {
@@ -1242,6 +1258,10 @@ class MainActivity : ComponentActivity() {
 
     private fun setStatus(message: String) {
         statusView.text = message
+    }
+
+    private fun showToast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
     private fun setupAttentionHighlights() {

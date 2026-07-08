@@ -95,12 +95,39 @@ class BackendClient(baseUrl: String) {
         return id
     }
 
+    fun saveScanSessionImage(
+        result: LabelScanResult,
+        link: ProductCodeLink,
+        imageDataUrl: String?,
+        userId: String
+    ): String? {
+        if (imageDataUrl.isNullOrBlank()) return null
+        val image = JSONObject()
+            .put("productId", link.productId)
+            .put("productCodeLinkId", link.id ?: JSONObject.NULL)
+            .put("imageDataUrl", imageDataUrl)
+            .put("createdBy", userId)
+            .put("ocrText", result.ocrText)
+            .put("notes", "Captura enviada desde ingreso por escaneo Android")
+            .put(
+                "metadata",
+                JSONObject()
+                    .put("rawCode", result.codeRaw.ifBlank { link.codeRaw })
+                    .put("normalizedCode", result.codeNormalized.ifBlank { link.codeNormalized })
+                    .put("barcodeFormat", result.barcodeFormat)
+                    .put("source", "android_mlkit_intake")
+            )
+        val response = postJson("/api/scan-session-images", JSONObject().put("image", image).put("userId", userId))
+        return response.optJSONObject("image")?.optString("image_path")?.ifBlank { null }
+    }
+
     fun addSessionItem(
         sessionId: String,
         result: LabelScanResult,
         link: ProductCodeLink,
         product: Product?,
-        packageCount: Double
+        packageCount: Double,
+        imagePath: String? = null
     ) {
         val factor = link.conversionFactor ?: link.packageQuantity ?: 1.0
         val total = packageCount * factor
@@ -129,6 +156,7 @@ class BackendClient(baseUrl: String) {
                         .put("expiry_date", result.expiryDate.ifBlank { link.detectedExpiry })
                         .put("mfg_date", result.mfgDate.ifBlank { link.detectedMfgDate })
                         .put("confidence", maxOf(result.confidence, link.confidence))
+                        .put("image_path", imagePath ?: JSONObject.NULL)
                         .put("status", "pending")
                         .put(
                             "metadata_json",
@@ -142,7 +170,8 @@ class BackendClient(baseUrl: String) {
         )
     }
 
-    fun submitSession(sessionId: String) {
+    fun submitSession(sessionId: String, notes: String = "Sesion enviada desde capturador Android") {
+        val now = java.time.Instant.now().toString()
         tableQuery(
             "operator_scan_sessions",
             JSONObject()
@@ -151,7 +180,14 @@ class BackendClient(baseUrl: String) {
                     "filters",
                     JSONArray().put(JSONObject().put("column", "id").put("op", "eq").put("value", sessionId))
                 )
-                .put("payload", JSONObject().put("status", "submitted"))
+                .put(
+                    "payload",
+                    JSONObject()
+                        .put("status", "submitted")
+                        .put("submitted_at", now)
+                        .put("last_activity_at", now)
+                        .put("notes", notes)
+                )
         )
     }
 

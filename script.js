@@ -10,7 +10,7 @@ const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
 const BROWSER_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_browser_local_enabled_v1";
-const APP_BUILD_LABEL = "tablet-indexeddb-v47";
+const APP_BUILD_LABEL = "android-tablet-local-v49";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -1704,6 +1704,7 @@ function shouldRouteToBrowserLocalBackend() {
 }
 
 function shouldPreferBrowserLocalBackend() {
+  if (state.backend.hasOwnLocalBackend === true && state.backend.local.mode !== "browser") return false;
   return Boolean(
     isHostedAppOrigin() ||
     shouldRouteToBrowserLocalBackend() ||
@@ -1750,7 +1751,7 @@ function hasOperationalLocalData() {
 
 function isInitialLocalImportComplete() {
   if (!isPrincipalDevice()) return false;
-  return Boolean(readLocalSetupState().initialImportComplete || state.backend.initialImportComplete || hasOperationalLocalData());
+  return Boolean(readLocalSetupState().initialImportComplete || state.backend.initialImportComplete || state.backend.local.importedAt || hasOperationalLocalData());
 }
 
 function shouldHideLocalSetupShortcut() {
@@ -1960,8 +1961,10 @@ const dataProvider = {
         databasePath: status.databasePath || "",
         connectionUrls: status.connectionUrls || [],
         counts: status.counts || {},
+        importedAt: status.importedAt || "",
         lastChecked: new Date().toISOString(),
-        error: ""
+        error: "",
+        mode: status.mode || "node"
       };
       if (state.backend.hasOwnLocalBackend === true && status.installed) rememberOfficialLocalDevice(status);
       updateActiveBackendMode();
@@ -2343,23 +2346,48 @@ async function loadAuthorizedUser(authUser) {
     return state.currentUser;
   }
 
-  let { data, error } = await dataProvider.table("usuarios_app")
-    .select("id,email,nombre,rol,activo")
-    .eq("id", authUser.id)
-    .maybeSingle();
+  const trustedLocalBootstrap = shouldUseLocalBackend() && isAdminRoleValue("", authUser?.email);
+  const authProfileClient = remoteSupabaseClient?.from ? remoteSupabaseClient : dataProvider;
+  let data = null;
+  let error = null;
 
-  if (error) throw error;
-  if (!data && authUser.email) {
-    const fallback = await dataProvider.table("usuarios_app")
+  try {
+    const result = await authProfileClient.from("usuarios_app")
       .select("id,email,nombre,rol,activo")
-      .eq("email", authUser.email)
+      .eq("id", authUser.id)
       .maybeSingle();
-    if (fallback.error) throw fallback.error;
-    data = fallback.data;
+    data = result.data;
+    error = result.error;
+  } catch (queryError) {
+    error = queryError;
+  }
+
+  if (error && !trustedLocalBootstrap) throw error;
+  if (!data && authUser.email) {
+    try {
+      const fallback = await authProfileClient.from("usuarios_app")
+        .select("id,email,nombre,rol,activo")
+        .eq("email", authUser.email)
+        .maybeSingle();
+      if (fallback.error && !trustedLocalBootstrap) throw fallback.error;
+      data = fallback.data;
+    } catch (fallbackError) {
+      if (!trustedLocalBootstrap) throw fallbackError;
+    }
   }
 
   const active = data?.activo === true || data?.activo === 1 || data?.activo === "true";
   if (!data || !active) {
+    if (trustedLocalBootstrap && !data) {
+      state.currentUser = {
+        id: authUser.id,
+        email: authUser.email,
+        nombre: "Jesu",
+        rol: "admin",
+        source: "supabase"
+      };
+      return state.currentUser;
+    }
     await supabaseClient.auth.signOut();
     throw new Error("Usuario sin acceso autorizado.");
   }
