@@ -44,6 +44,8 @@ const PUBLIC_APP_ASSETS = new Set([
   "logo.png",
   "icon-192.png",
   "icon-512.png",
+  "vendor/supabase-js-2.min.js",
+  "vendor/xlsx.full.min.js",
   "vendor/zxing-browser.min.js"
 ]);
 
@@ -121,6 +123,8 @@ app.get([
   "/logo.png",
   "/icon-192.png",
   "/icon-512.png",
+  "/vendor/supabase-js-2.min.js",
+  "/vendor/xlsx.full.min.js",
   "/vendor/zxing-browser.min.js"
 ], sendPublicAppAsset);
 

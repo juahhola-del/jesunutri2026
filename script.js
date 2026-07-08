@@ -10,7 +10,7 @@ const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
 const BROWSER_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_browser_local_enabled_v1";
-const APP_BUILD_LABEL = "android-tablet-local-v49";
+const APP_BUILD_LABEL = "android-native-local-v50";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
