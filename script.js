@@ -10,7 +10,7 @@ const LOCAL_SESSION_STORAGE_KEY = "jesunutri_local_session_v1";
 const LOCAL_SETUP_STORAGE_KEY = "jesunutri_local_setup_v1";
 const OFFICIAL_LOCAL_DEVICE_STORAGE_KEY = "jesunutri_official_local_device_v1";
 const BROWSER_LOCAL_BACKEND_STORAGE_KEY = "jesunutri_browser_local_enabled_v1";
-const APP_BUILD_LABEL = "android-native-local-v50";
+const APP_BUILD_LABEL = "android-native-local-v53";
 
 function createUnavailableSupabaseClient() {
   const unavailableError = () => new Error("Supabase no esta disponible. Usando backend local si esta activo.");
@@ -1316,8 +1316,13 @@ function isStandaloneMode() {
   return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
 }
 
+function isAndroidNativeHost() {
+  return /JESUnutriAndroid/i.test(window.navigator.userAgent || "") ||
+    new URLSearchParams(window.location.search || "").has("androidNative");
+}
+
 function updateInstallUi() {
-  const installed = isStandaloneMode();
+  const installed = isStandaloneMode() || isAndroidNativeHost();
   const installButtons = [elements.installAppBtn, elements.installAppHeaderBtn].filter(Boolean);
   document.body.classList.toggle("app-installed", installed);
   elements.installHint.hidden = installed;
@@ -1431,7 +1436,13 @@ async function probeBackendHealth(url, timeoutMs = 1600) {
 }
 
 async function detectOwnDeviceBackend() {
-  for (const url of LOCAL_BACKEND_CANDIDATE_URLS) {
+  const currentOriginUrl = getCurrentOriginBackendUrl();
+  const currentOriginIsLoopback = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(currentOriginUrl);
+  const candidates = [
+    ...LOCAL_BACKEND_CANDIDATE_URLS,
+    ...(currentOriginIsLoopback ? [currentOriginUrl] : [])
+  ];
+  for (const url of [...new Set(candidates.map(normalizeBackendUrl).filter(Boolean))]) {
     try {
       await probeBackendHealth(url);
       state.backend.hasOwnLocalBackend = true;
@@ -1496,6 +1507,7 @@ function applyDeviceModeUi() {
   document.body.classList.toggle("principal-device", principalMode);
   if (elements.localSetupBtn) elements.localSetupBtn.hidden = shouldHideLocalSetupShortcut() || !canShowOfficialLocalSetup();
   if (elements.adminStartContinuousScanBtn) elements.adminStartContinuousScanBtn.hidden = !captureMode;
+  if (elements.learnProductsBtn) elements.learnProductsBtn.hidden = isAndroidNativeHost();
   if (elements.reviewScanSessionsBtn) elements.reviewScanSessionsBtn.hidden = captureMode;
   if (elements.prepareLocalModeBtn) elements.prepareLocalModeBtn.hidden = !canPrepareOfficialLocalMode();
   if (elements.importSupabaseBtn) elements.importSupabaseBtn.hidden = !canImportOfficialLocalData();

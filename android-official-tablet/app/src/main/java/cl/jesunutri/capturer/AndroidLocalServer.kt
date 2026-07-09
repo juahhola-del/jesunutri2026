@@ -14,6 +14,8 @@ class AndroidLocalServer(context: Context, private val portNumber: Int = 8787) :
     private val assets = context.applicationContext.assets
     private val store = AndroidLocalStore(context.applicationContext)
     private val recentErrors = ArrayDeque<JSONObject>()
+    val localBaseUrl: String
+        get() = "http://127.0.0.1:$portNumber"
 
     override fun serve(session: IHTTPSession): Response {
         if (session.method == Method.OPTIONS) return cors(textResponse(Response.Status.OK, JSONObject().put("ok", true)))

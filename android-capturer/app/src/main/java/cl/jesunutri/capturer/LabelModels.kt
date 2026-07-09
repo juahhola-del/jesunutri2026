@@ -26,6 +26,7 @@ data class PackageRule(
 data class ProductCodeLink(
     val id: String?,
     val productId: String,
+    val productNameSnapshot: String = "",
     val codeRaw: String,
     val codeNormalized: String,
     val codeType: String,

@@ -66,6 +66,7 @@ import java.text.Normalizer
 import java.time.LocalDate
 import java.time.YearMonth
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.roundToInt
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ExecutorService
@@ -133,6 +134,7 @@ class MainActivity : ComponentActivity() {
     private var backendConnected = false
     private var backendConnecting = false
     private var products: List<Product> = emptyList()
+    private var productLinks: List<ProductCodeLink> = emptyList()
     private var selectedProduct: Product? = null
     private var currentResult = LabelScanResult()
     private var currentLink: ProductCodeLink? = null
@@ -159,6 +161,9 @@ class MainActivity : ComponentActivity() {
     }
     private val nextDateInput = mutableMapOf<EditText, EditText?>()
     private val datePadByInput = mutableMapOf<EditText, LinearLayout>()
+    private var simulationRequested = false
+    private var simulationStarted = false
+    private val offlineQueueDir: File by lazy { File(filesDir, "offline-capturer-queue").apply { mkdirs() } }
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startCamera() else setStatus("Permiso de camara rechazado.")
@@ -168,11 +173,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         buildUi()
         val launchServer = intent.getStringExtra("server_url").orEmpty()
+        simulationRequested = intent.getBooleanExtra("simulate_label", false)
         val savedServer = getPreferences(MODE_PRIVATE).getString("server_url", "") ?: ""
         serverInput.setText(launchServer.ifBlank { savedServer.ifBlank { "http://192.168.1.132:8787" } })
         loadCachedProducts()
+        loadCachedLinks()
         if (products.isNotEmpty()) updateProductAdapter(products)
         setBackendConnected(false)
+        setOfflineReadyStatus()
         serverInput.post {
             connectBackend(auto = true)
             startBackendMonitor()
@@ -223,7 +231,7 @@ class MainActivity : ComponentActivity() {
         headerTop.addView(backendIndicator, LinearLayout.LayoutParams(dp(36), LinearLayout.LayoutParams.WRAP_CONTENT))
         header.addView(headerTop)
         header.addView(TextView(this).apply {
-            text = "Capturador de etiquetas conectado al inventario oficial."
+            text = "Capturador de etiquetas. Guarda local y sincroniza con la tablet."
             setTextColor(Color.rgb(203, 213, 225))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         })
@@ -639,11 +647,14 @@ class MainActivity : ComponentActivity() {
                 val client = BackendClient(url)
                 client.health()
                 val loadedProducts = client.loadProducts()
+                val loadedLinks = runCatching { client.loadLinks() }.getOrDefault(emptyList())
                 withContext(Dispatchers.Main) {
                     backendClient = client
                     backendConnecting = false
                     products = loadedProducts
+                    productLinks = loadedLinks
                     cacheProducts(loadedProducts)
+                    cacheLinks(loadedLinks)
                     getPreferences(MODE_PRIVATE).edit().putString("server_url", url).apply()
                     if (serverInput.text.toString() != url) serverInput.setText(url)
                     val wasDisconnected = !backendConnected
@@ -654,6 +665,8 @@ class MainActivity : ComponentActivity() {
                     }
                     if (editorOpen && productSelector.text.isBlank()) suggestProductForEditor()
                     if (!isLearningMode) lookupCurrentCode()
+                    flushOfflineQueue(client)
+                    maybeRunSimulationAfterConnect()
                 }
             }.onFailure { error ->
                 withContext(Dispatchers.Main) {
@@ -663,16 +676,107 @@ class MainActivity : ComponentActivity() {
                     setBackendConnected(false)
                     if (products.isNotEmpty()) {
                         if (!auto || wasConnected) {
-                            setStatus("Sin conexion a tablet. Puedes seguir viendo productos guardados, pero no se guardara hasta reconectar.")
+                            setOfflineReadyStatus()
                         }
                     } else if (!auto) {
                         setStatus("No se pudo conectar: ${error.message}")
                     } else if (!editorOpen) {
-                        setStatus("Sin conexion a tablet. Verifica servidor principal.")
+                        setOfflineReadyStatus()
                     }
                 }
             }
         }
+    }
+
+    private fun maybeRunSimulationAfterConnect() {
+        if (!simulationRequested || simulationStarted) return
+        val client = backendClient ?: return
+        val product = pickSimulationProduct()
+        if (product == null) {
+            setStatus("Simulacion detenida: no hay productos importados en la tablet.")
+            return
+        }
+        simulationStarted = true
+        val code = intent.getStringExtra("simulation_code").orEmpty().ifBlank { "17802500025633" }
+        val result = LabelScanResult(
+            codeRaw = code,
+            codeNormalized = code.replace("\\s+".toRegex(), "").uppercase(Locale.ROOT),
+            codeType = if (code.length == 14) "DUN-14" else "codigo",
+            barcodeFormat = "SIMULADO",
+            gtin = code.takeIf { it.length in 8..14 }.orEmpty(),
+            lot = intent.getStringExtra("simulation_lot").orEmpty().ifBlank { "01L0526" },
+            expiryDate = intent.getStringExtra("simulation_expiry").orEmpty().ifBlank { "2027-05-12" },
+            mfgDate = "",
+            detectedQuantity = 10.0,
+            suggestedName = intent.getStringExtra("simulation_name").orEmpty().ifBlank { "SEMOLA 500 GR" },
+            presentation = "FARDO 500G",
+            dominantColor = "blanco",
+            ocrText = "SIMULACION S25 SEMOLA LUCCHETTI FARDO 500G LOTE 01L0526 VENC 20270512",
+            gs1Payload = mapOf("01" to code, "10" to "01L0526", "17" to "270512"),
+            sources = mapOf("code" to "simulation", "lot" to "simulation", "expiry" to "simulation"),
+            confidence = 0.99,
+            stableFrames = 5
+        )
+        val rule = PackageRule(
+            packageType = "caja",
+            packageQuantity = 10.0,
+            packageUnit = "unidad",
+            baseUnit = product.baseUnit.ifBlank { "unidad" },
+            conversionFactor = 10.0,
+            notes = "Simulacion controlada desde S25 para validar envio a tablet."
+        )
+        val imageDataUrl = simulationImageDataUrl()
+        setStatus("Simulando etiqueta y enviando sesion pendiente a tablet...")
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                val link = client.saveProductCodeLink(result, product, rule, imageDataUrl, "android-capturer-s25")
+                val sessionId = client.createScanSession("android-capturer-s25", "capturador-s25@local")
+                val imagePath = client.saveScanSessionImage(result, link, imageDataUrl, "android-capturer-s25")
+                client.addSessionItem(sessionId, result, link, product, packageCount = 1.0, imagePath = imagePath)
+                client.submitSession(sessionId, "Simulacion S25 enviada desde capturador Android.")
+                sessionId
+            }.onSuccess { sessionId ->
+                withContext(Dispatchers.Main) {
+                    currentResult = result
+                    selectedProduct = product
+                    setBackendConnected(true)
+                    renderResult()
+                    val message = "Simulacion enviada a tablet: ingreso pendiente #${sessionId.takeLast(6).uppercase(Locale.ROOT)}."
+                    setStatus(message)
+                    showToast(message)
+                }
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) {
+                    simulationStarted = false
+                    setBackendConnected(false)
+                    backendClient = null
+                    setStatus("No se pudo simular envio: ${error.message}.")
+                }
+            }
+        }
+    }
+
+    private fun pickSimulationProduct(): Product? {
+        if (products.isEmpty()) return null
+        val requested = intent.getStringExtra("simulation_product").orEmpty().ifBlank { "semola 500" }
+        val candidates = listOf(requested, "semola 500", "semola", "arroz")
+        return candidates.firstNotNullOfOrNull { term ->
+            val normalized = normalizeForSimulationMatch(term)
+            products.firstOrNull { product ->
+                normalizeForSimulationMatch("${product.name} ${product.normalizedName}").contains(normalized)
+            }
+        } ?: products.firstOrNull()
+    }
+
+    private fun normalizeForSimulationMatch(value: String): String {
+        return Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFD)
+            .replace("\\p{Mn}+".toRegex(), "")
+            .replace("[^a-z0-9]+".toRegex(), " ")
+            .trim()
+    }
+
+    private fun simulationImageDataUrl(): String {
+        return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
     }
 
     private fun normalizeServerUrl(raw: String): String {
@@ -693,10 +797,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun setOfflineReadyStatus(prefix: String = "") {
+        val intro = prefix.takeIf { it.isNotBlank() }?.let { "$it " }.orEmpty()
+        val pending = offlineQueueCount()
+        val productCount = products.size
+        val linkCount = productLinks.size
+        setStatus(
+            intro + "Modo offline: puedes editar y guardar. " +
+                "Pendientes por enviar: $pending. Productos guardados: $productCount. Codigos aprendidos: $linkCount."
+        )
+    }
+
     private fun lookupCurrentCode() {
         val code = currentResult.codeNormalized
+        if (code.isBlank()) return
+        findCachedLink(code)?.let { cachedLink ->
+            applyExistingLink(cachedLink)
+            if (isLearningMode) {
+                setStatus("Codigo aprendido en este capturador. Puedes confirmar o corregir.")
+            } else {
+                setStatus("Codigo aprendido. Ingresa cantidad de ${cachedLink.packageType.ifBlank { "empaques" }}.")
+            }
+            renderResult()
+        }
         val client = backendClient ?: return
-        if (code.isBlank() || code == lastLookupCode) return
+        if (code == lastLookupCode) return
         lastLookupCode = code
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
@@ -704,6 +829,7 @@ class MainActivity : ComponentActivity() {
                 withContext(Dispatchers.Main) {
                     currentLink = link
                     if (link != null) {
+                        upsertCachedLink(link)
                         applyExistingLink(link)
                         if (isLearningMode) {
                             setStatus("Codigo ya aprendido. Puedes confirmar o corregir el producto y empaque.")
@@ -726,7 +852,7 @@ class MainActivity : ComponentActivity() {
                     lastLookupCode = ""
                     setBackendConnected(false)
                     backendClient = null
-                    setStatus("No se pudo consultar codigo: ${error.message}. Reintentando conexion.")
+                    setOfflineReadyStatus("No se pudo consultar codigo: ${error.message}.")
                 }
             }
         }
@@ -735,7 +861,7 @@ class MainActivity : ComponentActivity() {
     private fun applyExistingLink(link: ProductCodeLink) {
         currentLink = link
         selectedProduct = products.firstOrNull { it.id == link.productId }
-        productSelector.setText(selectedProduct?.name ?: "Producto vinculado", false)
+        productSelector.setText(selectedProduct?.name ?: link.productNameSnapshot.ifBlank { "Producto vinculado" }, false)
         link.packageType.takeIf { it.isNotBlank() }?.let { setSpinnerValue(packageTypeSpinner, it) }
         packageQuantityInput.setText(formatQuantity(link.packageQuantity))
         packageUnitInput.setText(link.packageUnit)
@@ -764,7 +890,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadCachedProducts() {
-        val raw = getPreferences(MODE_PRIVATE).getString("cached_products", null) ?: return
+        val raw = getPreferences(MODE_PRIVATE).getString("cached_products", null)
+        if (raw.isNullOrBlank()) {
+            products = loadBundledProducts()
+            if (products.isNotEmpty()) cacheProducts(products)
+            return
+        }
         runCatching {
             val array = JSONArray(raw)
             products = (0 until array.length()).mapNotNull { index ->
@@ -777,6 +908,112 @@ class MainActivity : ComponentActivity() {
                 ).takeIf { it.id.isNotBlank() && it.name.isNotBlank() }
             }
         }
+        if (products.isEmpty()) products = loadBundledProducts()
+    }
+
+    private fun loadBundledProducts(): List<Product> {
+        return runCatching {
+            assets.open("offline_products_seed.json").bufferedReader().use { reader ->
+                val array = JSONArray(reader.readText())
+                (0 until array.length()).mapNotNull { index ->
+                    val item = array.optJSONObject(index) ?: return@mapNotNull null
+                    Product(
+                        id = item.optString("id"),
+                        name = item.optString("name"),
+                        normalizedName = item.optString("normalizedName"),
+                        baseUnit = item.optString("baseUnit")
+                    ).takeIf { it.id.isNotBlank() && it.name.isNotBlank() }
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun cacheLinks(items: List<ProductCodeLink>) {
+        val array = JSONArray()
+        items.forEach { link -> array.put(link.toJson()) }
+        getPreferences(MODE_PRIVATE).edit().putString("cached_product_links", array.toString()).apply()
+    }
+
+    private fun loadCachedLinks() {
+        val raw = getPreferences(MODE_PRIVATE).getString("cached_product_links", null) ?: return
+        runCatching {
+            val array = JSONArray(raw)
+            productLinks = (0 until array.length()).mapNotNull { index ->
+                array.optJSONObject(index)?.toProductCodeLinkLocal()
+            }
+        }
+    }
+
+    private fun upsertCachedLink(link: ProductCodeLink) {
+        val normalized = normalizeCode(link.codeNormalized.ifBlank { link.codeRaw })
+        if (normalized.isBlank()) return
+        productLinks = (listOf(link.copy(codeNormalized = normalized)) + productLinks.filterNot {
+            normalizeCode(it.codeNormalized.ifBlank { it.codeRaw }) == normalized
+        }).take(5000)
+        cacheLinks(productLinks)
+    }
+
+    private fun findCachedLink(code: String): ProductCodeLink? {
+        val normalized = normalizeCode(code)
+        return productLinks.firstOrNull { normalizeCode(it.codeNormalized.ifBlank { it.codeRaw }) == normalized }
+    }
+
+    private fun normalizeCode(value: String): String {
+        return value.replace("\\s+".toRegex(), "").uppercase(Locale.ROOT)
+    }
+
+    private fun ProductCodeLink.toJson(): JSONObject {
+        return JSONObject()
+            .put("id", id ?: "")
+            .put("productId", productId)
+            .put("productNameSnapshot", productNameSnapshot)
+            .put("codeRaw", codeRaw)
+            .put("codeNormalized", codeNormalized)
+            .put("codeType", codeType)
+            .put("gtin", gtin)
+            .put("barcodeFormat", barcodeFormat)
+            .put("detectedLot", detectedLot)
+            .put("detectedExpiry", detectedExpiry)
+            .put("detectedMfgDate", detectedMfgDate)
+            .put("detectedQuantity", detectedQuantity ?: JSONObject.NULL)
+            .put("packageType", packageType)
+            .put("packageQuantity", packageQuantity ?: JSONObject.NULL)
+            .put("packageUnit", packageUnit)
+            .put("baseUnit", baseUnit)
+            .put("conversionFactor", conversionFactor ?: JSONObject.NULL)
+            .put("conversionNotes", conversionNotes)
+            .put("labelTextOcr", labelTextOcr)
+            .put("confidence", confidence)
+    }
+
+    private fun JSONObject.toProductCodeLinkLocal(): ProductCodeLink {
+        return ProductCodeLink(
+            id = optString("id").ifBlank { null },
+            productId = optString("productId").ifBlank { optString("product_id") },
+            productNameSnapshot = optString("productNameSnapshot").ifBlank { optString("product_name_snapshot") },
+            codeRaw = optString("codeRaw").ifBlank { optString("code_raw") },
+            codeNormalized = optString("codeNormalized").ifBlank { optString("code_normalized") },
+            codeType = optString("codeType").ifBlank { optString("code_type") },
+            gtin = optString("gtin"),
+            barcodeFormat = optString("barcodeFormat").ifBlank { optString("barcode_format") },
+            detectedLot = optString("detectedLot").ifBlank { optString("detected_lot") },
+            detectedExpiry = optString("detectedExpiry").ifBlank { optString("detected_expiry") },
+            detectedMfgDate = optString("detectedMfgDate").ifBlank { optString("detected_mfg_date") },
+            detectedQuantity = optNullableDoubleLocal("detectedQuantity", "detected_quantity"),
+            packageType = optString("packageType").ifBlank { optString("package_type") },
+            packageQuantity = optNullableDoubleLocal("packageQuantity", "package_quantity"),
+            packageUnit = optString("packageUnit").ifBlank { optString("package_unit") },
+            baseUnit = optString("baseUnit").ifBlank { optString("base_unit") },
+            conversionFactor = optNullableDoubleLocal("conversionFactor", "conversion_factor"),
+            conversionNotes = optString("conversionNotes").ifBlank { optString("conversion_notes") },
+            labelTextOcr = optString("labelTextOcr").ifBlank { optString("label_text_ocr") },
+            confidence = optDouble("confidence", 0.0)
+        )
+    }
+
+    private fun JSONObject.optNullableDoubleLocal(vararg names: String): Double? {
+        val name = names.firstOrNull { has(it) && !isNull(it) } ?: return null
+        return optDouble(name).takeIf { !it.isNaN() }
     }
 
     private fun saveLearning() {
@@ -787,13 +1024,9 @@ class MainActivity : ComponentActivity() {
             return
         }
         currentResult = buildEditedResult()
-        val product = selectedProduct
-        if (client == null) {
-            setStatus("Conecta al backend principal primero.")
-            return
-        }
+        val product = selectedOrManualProduct()
         if (product == null) {
-            setStatus("Selecciona el producto correcto.")
+            setStatus("Escribe o selecciona el producto.")
             return
         }
         if (currentResult.codeNormalized.isBlank()) {
@@ -801,13 +1034,20 @@ class MainActivity : ComponentActivity() {
             return
         }
         val rule = readPackageRule() ?: return
-        setStatus("Guardando aprendizaje e imagen en el backend principal...")
+        val finalRule = rule.withEditorNotes()
+        if (client == null) {
+            enqueueLearning(currentResult, product, finalRule, pendingLabelImageDataUrl, "Sin conexion a tablet")
+            return
+        }
+        setStatus("Guardando aprendizaje e imagen en la tablet...")
         val editedResult = currentResult
         val imageDataUrl = pendingLabelImageDataUrl
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
-                client.saveProductCodeLink(editedResult, product, rule.withEditorNotes(), imageDataUrl, "android-capturer")
+                client.saveProductCodeLink(editedResult, product, finalRule, imageDataUrl, "android-capturer")
+            }.onSuccess { link ->
                 withContext(Dispatchers.Main) {
+                    upsertCachedLink(link.copy(productNameSnapshot = link.productNameSnapshot.ifBlank { product.name }))
                     clearCurrentScan()
                     val message = "Enviado a tablet: producto aprendido. Para stock usa Ingresar."
                     setStatus(message)
@@ -817,7 +1057,7 @@ class MainActivity : ComponentActivity() {
                 withContext(Dispatchers.Main) {
                     setBackendConnected(false)
                     backendClient = null
-                    setStatus("No se pudo guardar: ${error.message}. Reintentando conexion.")
+                    enqueueLearning(editedResult, product, finalRule, imageDataUrl, "No se pudo enviar: ${error.message}")
                 }
             }
         }
@@ -826,10 +1066,6 @@ class MainActivity : ComponentActivity() {
     private fun addIntakeItem() {
         val client = backendClient
         val link = currentLink
-        if (client == null) {
-            setStatus("Conecta al backend principal primero.")
-            return
-        }
         if (link == null) {
             setStatus("Este codigo no esta aprendido. Primero aprende la etiqueta.")
             return
@@ -840,12 +1076,18 @@ class MainActivity : ComponentActivity() {
             return
         }
         val result = currentResult
+        if (client == null) {
+            captureImageDataUrl { imageDataUrl ->
+                enqueueIntake(result, link, productForLink(link), count, imageDataUrl, "Sin conexion a tablet")
+            }
+            return
+        }
         setStatus("Enviando ingreso y foto a revision en tablet...")
         captureImageDataUrl { imageDataUrl ->
             lifecycleScope.launch(Dispatchers.IO) {
                 runCatching {
                     val sessionId = client.createScanSession("android-capturer", "capturador@local")
-                    val product = products.firstOrNull { it.id == link.productId }
+                    val product = productForLink(link)
                     val imagePath = client.saveScanSessionImage(result, link, imageDataUrl, "android-capturer")
                     client.addSessionItem(sessionId, result, link, product, count, imagePath)
                     client.submitSession(sessionId, "Ingreso enviado desde capturador Android con 1 item.")
@@ -864,11 +1106,321 @@ class MainActivity : ComponentActivity() {
                     withContext(Dispatchers.Main) {
                         setBackendConnected(false)
                         backendClient = null
-                        setStatus("No se pudo enviar ingreso: ${error.message}. Reintentando conexion.")
+                        enqueueIntake(result, link, productForLink(link), count, imageDataUrl, "No se pudo enviar: ${error.message}")
                     }
                 }
             }
         }
+    }
+
+    private fun enqueueLearning(
+        result: LabelScanResult,
+        product: Product,
+        rule: PackageRule,
+        imageDataUrl: String?,
+        reason: String
+    ) {
+        val id = UUID.randomUUID().toString()
+        val imageFile = storeOfflineImage(id, imageDataUrl)
+        appendOfflineItem(
+            JSONObject()
+                .put("id", id)
+                .put("type", "learning")
+                .put("createdAt", java.time.Instant.now().toString())
+                .put("reason", reason)
+                .put("result", result.toJson())
+                .put("product", product.toJson())
+                .put("rule", rule.toJson())
+                .put("imageFile", imageFile)
+        )
+        upsertCachedLink(offlineLink(result, product, rule))
+        clearCurrentScan()
+        val message = "Guardado en capturador. Se enviara a la tablet al reconectar (${offlineQueueCount()} pendientes)."
+        setStatus(message)
+        showToast(message)
+    }
+
+    private fun enqueueIntake(
+        result: LabelScanResult,
+        link: ProductCodeLink,
+        product: Product?,
+        packageCount: Double,
+        imageDataUrl: String?,
+        reason: String
+    ) {
+        val id = UUID.randomUUID().toString()
+        val imageFile = storeOfflineImage(id, imageDataUrl)
+        appendOfflineItem(
+            JSONObject()
+                .put("id", id)
+                .put("type", "intake")
+                .put("createdAt", java.time.Instant.now().toString())
+                .put("reason", reason)
+                .put("result", result.toJson())
+                .put("link", link.toJson())
+                .put("product", (product ?: productForLink(link))?.toJson() ?: JSONObject())
+                .put("rule", packageRuleFromLink(link).toJson())
+                .put("packageCount", packageCount)
+                .put("imageFile", imageFile)
+        )
+        packageCountInput.setText("")
+        clearCurrentScan()
+        val message = "Ingreso guardado en capturador. Se enviara a la tablet al reconectar (${offlineQueueCount()} pendientes)."
+        setStatus(message)
+        showToast(message)
+    }
+
+    private fun flushOfflineQueue(client: BackendClient) {
+        val files = offlineQueueFiles()
+        if (files.isEmpty()) return
+        setStatus("Conectado. Enviando ${files.size} pendientes a la tablet...")
+        lifecycleScope.launch(Dispatchers.IO) {
+            var sent = 0
+            var firstError: String? = null
+            val syncedLinks = mutableListOf<ProductCodeLink>()
+            files.sortedBy { it.name }.forEach { file ->
+                runCatching {
+                    val item = JSONObject(file.readText())
+                    val imageDataUrl = readOfflineImage(item.optString("imageFile"))
+                    val link = when (item.optString("type")) {
+                        "learning" -> syncOfflineLearning(client, item, imageDataUrl)
+                        "intake" -> syncOfflineIntake(client, item, imageDataUrl)
+                        else -> null
+                    }
+                    link?.let { syncedLinks += it }
+                    deleteOfflineImage(item.optString("imageFile"))
+                    file.delete()
+                    sent += 1
+                }.onFailure { error ->
+                    if (firstError == null) firstError = error.message ?: "No se pudo sincronizar pendiente."
+                }
+            }
+            withContext(Dispatchers.Main) {
+                syncedLinks.forEach { upsertCachedLink(it) }
+                if (sent > 0) {
+                    showToast("Sincronizados $sent pendientes con la tablet.")
+                }
+                if (firstError != null) {
+                    setStatus("Tablet conectada, pero quedaron ${offlineQueueCount()} pendientes: $firstError")
+                } else if (sent > 0) {
+                    setStatus("Tablet conectada. Pendientes sincronizados.")
+                }
+            }
+        }
+    }
+
+    private fun syncOfflineLearning(client: BackendClient, item: JSONObject, imageDataUrl: String?): ProductCodeLink {
+        val result = item.optJSONObject("result")?.toLabelScanResultLocal() ?: LabelScanResult()
+        val product = item.optJSONObject("product")?.toProductLocal() ?: Product(
+            id = "manual:${UUID.randomUUID()}",
+            name = result.suggestedName.ifBlank { "PRODUCTO POR REVISAR" },
+            normalizedName = normalizeProductName(result.suggestedName),
+            baseUnit = "unidad"
+        )
+        val rule = item.optJSONObject("rule")?.toPackageRuleLocal() ?: PackageRule("otro", 1.0, "unidad", product.baseUnit.ifBlank { "unidad" }, 1.0, "")
+        return client.saveProductCodeLink(result, product, rule, imageDataUrl, "android-capturer-offline")
+            .copy(productNameSnapshot = product.name)
+    }
+
+    private fun syncOfflineIntake(client: BackendClient, item: JSONObject, imageDataUrl: String?): ProductCodeLink {
+        val result = item.optJSONObject("result")?.toLabelScanResultLocal() ?: LabelScanResult()
+        val storedLink = item.optJSONObject("link")?.toProductCodeLinkLocal()
+        val product = item.optJSONObject("product")?.toProductLocal()
+            ?: storedLink?.let { productForLink(it) }
+            ?: Product("manual:${UUID.randomUUID()}", result.suggestedName.ifBlank { "PRODUCTO POR REVISAR" }, normalizeProductName(result.suggestedName), "unidad")
+        val rule = item.optJSONObject("rule")?.toPackageRuleLocal()
+            ?: storedLink?.let { packageRuleFromLink(it) }
+            ?: PackageRule("otro", 1.0, product.baseUnit.ifBlank { "unidad" }, product.baseUnit.ifBlank { "unidad" }, 1.0, "")
+        val realLink = client.saveProductCodeLink(result, product, rule, imageDataUrl, "android-capturer-offline")
+            .copy(productNameSnapshot = product.name)
+        val sessionId = client.createScanSession("android-capturer-offline", "capturador@local")
+        val imagePath = client.saveScanSessionImage(result, realLink, imageDataUrl, "android-capturer-offline")
+        client.addSessionItem(
+            sessionId = sessionId,
+            result = result,
+            link = realLink,
+            product = product,
+            packageCount = item.optDouble("packageCount", 1.0).takeIf { it > 0.0 } ?: 1.0,
+            imagePath = imagePath
+        )
+        client.submitSession(sessionId, "Ingreso sincronizado desde cola offline del capturador Android.")
+        return realLink
+    }
+
+    private fun appendOfflineItem(item: JSONObject) {
+        offlineQueueDir.mkdirs()
+        File(offlineQueueDir, "${item.optString("id")}.json").writeText(item.toString())
+    }
+
+    private fun storeOfflineImage(id: String, imageDataUrl: String?): String {
+        if (imageDataUrl.isNullOrBlank()) return ""
+        offlineQueueDir.mkdirs()
+        val file = File(offlineQueueDir, "$id-image.txt")
+        file.writeText(imageDataUrl)
+        return file.name
+    }
+
+    private fun readOfflineImage(fileName: String): String? {
+        if (fileName.isBlank()) return null
+        val file = File(offlineQueueDir, fileName)
+        return file.takeIf { it.exists() }?.readText()
+    }
+
+    private fun deleteOfflineImage(fileName: String) {
+        if (fileName.isNotBlank()) File(offlineQueueDir, fileName).delete()
+    }
+
+    private fun offlineQueueFiles(): List<File> {
+        return offlineQueueDir.listFiles { file -> file.isFile && file.name.endsWith(".json") }?.toList().orEmpty()
+    }
+
+    private fun offlineQueueCount(): Int = offlineQueueFiles().size
+
+    private fun offlineLink(result: LabelScanResult, product: Product, rule: PackageRule): ProductCodeLink {
+        val code = normalizeCode(result.codeNormalized.ifBlank { result.gtin }.ifBlank { result.codeRaw })
+        return ProductCodeLink(
+            id = null,
+            productId = product.id,
+            productNameSnapshot = product.name,
+            codeRaw = result.codeRaw.ifBlank { code },
+            codeNormalized = code,
+            codeType = result.codeType.ifBlank { "codigo" },
+            gtin = result.gtin.ifBlank { code.takeIf { it.length in 8..14 }.orEmpty() },
+            barcodeFormat = result.barcodeFormat,
+            detectedLot = result.lot,
+            detectedExpiry = result.expiryDate,
+            detectedMfgDate = result.mfgDate,
+            detectedQuantity = result.detectedQuantity,
+            packageType = rule.packageType,
+            packageQuantity = rule.packageQuantity,
+            packageUnit = rule.packageUnit,
+            baseUnit = rule.baseUnit,
+            conversionFactor = rule.conversionFactor,
+            conversionNotes = rule.notes,
+            labelTextOcr = result.ocrText,
+            confidence = result.confidence
+        )
+    }
+
+    private fun productForLink(link: ProductCodeLink): Product? {
+        return products.firstOrNull { it.id == link.productId }
+            ?: link.productNameSnapshot.takeIf { it.isNotBlank() }?.let {
+                Product(link.productId.ifBlank { "manual:${normalizeProductName(it)}" }, it, normalizeProductName(it), link.baseUnit.ifBlank { "unidad" })
+            }
+    }
+
+    private fun packageRuleFromLink(link: ProductCodeLink): PackageRule {
+        return PackageRule(
+            packageType = link.packageType.ifBlank { "otro" },
+            packageQuantity = link.packageQuantity,
+            packageUnit = link.packageUnit.ifBlank { link.baseUnit.ifBlank { "unidad" } },
+            baseUnit = link.baseUnit.ifBlank { link.packageUnit.ifBlank { "unidad" } },
+            conversionFactor = link.conversionFactor ?: link.packageQuantity,
+            notes = link.conversionNotes
+        )
+    }
+
+    private fun Product.toJson(): JSONObject {
+        return JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("normalizedName", normalizedName)
+            .put("baseUnit", baseUnit)
+    }
+
+    private fun JSONObject.toProductLocal(): Product? {
+        val name = optString("name").ifBlank { optString("nombre") }
+        if (name.isBlank()) return null
+        return Product(
+            id = optString("id").ifBlank { "manual:${normalizeProductName(name)}" },
+            name = name,
+            normalizedName = optString("normalizedName").ifBlank { optString("nombre_normalizado").ifBlank { normalizeProductName(name) } },
+            baseUnit = optString("baseUnit").ifBlank { optString("unidad_default").ifBlank { "unidad" } }
+        )
+    }
+
+    private fun PackageRule.toJson(): JSONObject {
+        return JSONObject()
+            .put("packageType", packageType)
+            .put("packageQuantity", packageQuantity ?: JSONObject.NULL)
+            .put("packageUnit", packageUnit)
+            .put("baseUnit", baseUnit)
+            .put("conversionFactor", conversionFactor ?: JSONObject.NULL)
+            .put("notes", notes)
+    }
+
+    private fun JSONObject.toPackageRuleLocal(): PackageRule {
+        return PackageRule(
+            packageType = optString("packageType").ifBlank { optString("package_type").ifBlank { "otro" } },
+            packageQuantity = optNullableDoubleLocal("packageQuantity", "package_quantity"),
+            packageUnit = optString("packageUnit").ifBlank { optString("package_unit").ifBlank { "unidad" } },
+            baseUnit = optString("baseUnit").ifBlank { optString("base_unit").ifBlank { "unidad" } },
+            conversionFactor = optNullableDoubleLocal("conversionFactor", "conversion_factor"),
+            notes = optString("notes").ifBlank { optString("conversionNotes").ifBlank { optString("conversion_notes") } }
+        )
+    }
+
+    private fun LabelScanResult.toJson(): JSONObject {
+        return JSONObject()
+            .put("codeRaw", codeRaw)
+            .put("codeNormalized", codeNormalized)
+            .put("codeType", codeType)
+            .put("barcodeFormat", barcodeFormat)
+            .put("gtin", gtin)
+            .put("lot", lot)
+            .put("expiryDate", expiryDate)
+            .put("mfgDate", mfgDate)
+            .put("detectedQuantity", detectedQuantity ?: JSONObject.NULL)
+            .put("suggestedName", suggestedName)
+            .put("presentation", presentation)
+            .put("dominantColor", dominantColor)
+            .put("ocrText", ocrText)
+            .put("gs1Payload", JSONObject(gs1Payload))
+            .put("sources", JSONObject(sources))
+            .put("confidence", confidence)
+            .put("stableFrames", stableFrames)
+            .put("missingFields", JSONArray(missingFields))
+            .put("updatedAtMs", updatedAtMs)
+    }
+
+    private fun JSONObject.toLabelScanResultLocal(): LabelScanResult {
+        return LabelScanResult(
+            codeRaw = optString("codeRaw"),
+            codeNormalized = optString("codeNormalized"),
+            codeType = optString("codeType"),
+            barcodeFormat = optString("barcodeFormat"),
+            gtin = optString("gtin"),
+            lot = optString("lot"),
+            expiryDate = optString("expiryDate"),
+            mfgDate = optString("mfgDate"),
+            detectedQuantity = optNullableDoubleLocal("detectedQuantity"),
+            suggestedName = optString("suggestedName"),
+            presentation = optString("presentation"),
+            dominantColor = optString("dominantColor"),
+            ocrText = optString("ocrText"),
+            gs1Payload = optJSONObject("gs1Payload").toStringMap(),
+            sources = optJSONObject("sources").toStringMap(),
+            confidence = optDouble("confidence", 0.0),
+            stableFrames = optInt("stableFrames", 0),
+            missingFields = optJSONArray("missingFields").toStringList(),
+            updatedAtMs = optLong("updatedAtMs", System.currentTimeMillis())
+        )
+    }
+
+    private fun JSONObject?.toStringMap(): Map<String, String> {
+        if (this == null) return emptyMap()
+        val map = mutableMapOf<String, String>()
+        val keys = keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            map[key] = optString(key)
+        }
+        return map
+    }
+
+    private fun JSONArray?.toStringList(): List<String> {
+        if (this == null) return emptyList()
+        return (0 until length()).mapNotNull { index -> optString(index).takeIf { it.isNotBlank() } }
     }
 
     private fun finishSession() {
@@ -954,6 +1506,32 @@ class MainActivity : ComponentActivity() {
             conversionFactor = factor,
             notes = notes
         )
+    }
+
+    private fun selectedOrManualProduct(): Product? {
+        selectedProduct?.let { return it }
+        val typed = productSelector.text.toString().trim()
+        if (typed.isBlank()) return null
+        val exact = products.firstOrNull { normalizeProductName(it.name) == normalizeProductName(typed) }
+        if (exact != null) {
+            selectedProduct = exact
+            return exact
+        }
+        val manualName = typed.uppercase(Locale.ROOT)
+        val manualId = "manual:${normalizeProductName(manualName).replace(" ", "-").take(48).ifBlank { UUID.randomUUID().toString() }}"
+        return Product(
+            id = manualId,
+            name = manualName,
+            normalizedName = normalizeProductName(manualName),
+            baseUnit = baseUnitInput.text.toString().trim().ifBlank { "unidad" }
+        ).also { selectedProduct = it }
+    }
+
+    private fun normalizeProductName(value: String): String {
+        return Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFD)
+            .replace("\\p{Mn}+".toRegex(), "")
+            .replace("[^a-z0-9]+".toRegex(), " ")
+            .trim()
     }
 
     private fun inferredPackageUnit(): String {
@@ -1155,7 +1733,9 @@ class MainActivity : ComponentActivity() {
 
     private fun suggestProductForEditor() {
         if (products.isEmpty()) {
-            productSelector.hint = "Conecta la tablet para sugerir producto"
+            productSelector.setText(currentResult.suggestedName, false)
+            productSelector.hint = "Escribe producto o crea en tablet despues"
+            selectedProduct = null
             return
         }
         updateProductAdapter(filteredProductsFor("${currentResult.suggestedName} ${currentResult.ocrText}").take(30))
@@ -1166,8 +1746,8 @@ class MainActivity : ComponentActivity() {
             match.baseUnit.takeIf { it.isNotBlank() }?.let { baseUnitInput.setText(it) }
             productSelector.hint = "Producto sugerido"
         } else {
-            productSelector.setText("", false)
-            productSelector.hint = "No encontrado. Buscar o crear en tablet"
+            productSelector.setText(currentResult.suggestedName, false)
+            productSelector.hint = "Buscar o escribir producto nuevo"
         }
     }
 
@@ -1355,7 +1935,7 @@ class MainActivity : ComponentActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                addView(button("X") { input.setText("") }, LinearLayout.LayoutParams(dp(54), LinearLayout.LayoutParams.WRAP_CONTENT))
+                addView(button("X") { clearAndFocus(input) }, LinearLayout.LayoutParams(dp(54), LinearLayout.LayoutParams.WRAP_CONTENT))
                 checkbox?.let {
                     it.setTextColor(Color.rgb(203, 213, 225))
                     it.buttonTintList = ColorStateList.valueOf(Color.rgb(79, 140, 255))
@@ -1363,6 +1943,24 @@ class MainActivity : ComponentActivity() {
                 }
             })
         }
+    }
+
+    private fun clearAndFocus(input: EditText) {
+        if (input is AutoCompleteTextView) {
+            input.setText("", false)
+            selectedProduct = null
+            updateProductAdapter(products.take(80))
+        } else {
+            input.setText("")
+        }
+        input.requestFocus()
+        input.setSelection(input.text.length)
+        if (input.inputType != InputType.TYPE_NULL) {
+            input.postDelayed({
+                getSystemService(InputMethodManager::class.java)?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            }, 80)
+        }
+        refreshAttentionHighlights()
     }
 
     private fun dateEditorField(label: String, day: EditText, month: EditText, year: Spinner, checkbox: CheckBox): LinearLayout {

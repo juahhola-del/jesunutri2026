@@ -1,4 +1,4 @@
-const CACHE_NAME = "jesunutri-pwa-v53";
+const CACHE_NAME = "jesunutri-pwa-v56";
 const STATIC_ASSETS = [
   "./",
   "./index.html",

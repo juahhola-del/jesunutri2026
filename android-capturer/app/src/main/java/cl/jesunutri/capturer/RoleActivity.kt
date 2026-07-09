@@ -12,6 +12,15 @@ import androidx.activity.ComponentActivity
 class RoleActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (
+            intent.getBooleanExtra("simulate_label", false) ||
+            intent.getStringExtra("mode").equals("capturador", ignoreCase = true) ||
+            intent.getStringExtra("server_url").orEmpty().isNotBlank()
+        ) {
+            startActivity(Intent(this, MainActivity::class.java).putExtras(intent))
+            finish()
+            return
+        }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER

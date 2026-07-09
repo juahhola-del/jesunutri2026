@@ -46,11 +46,20 @@ class TabletHostActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
-        startBackendService()
         lifecycleScope.launch {
-            startServer()
-            refreshStatus()
-            loadAdminApp()
+            runCatching {
+                startServer()
+                startBackendService()
+                refreshStatus()
+                loadAdminApp()
+            }.onFailure {
+                showError(it)
+                webView.loadData(
+                    "<html><body style='background:#090d14;color:white;font-family:sans-serif;padding:24px'><h2>No se pudo abrir JESUnutri local</h2><p>${it.message ?: "Error de inicio"}</p></body></html>",
+                    "text/html",
+                    "utf-8"
+                )
+            }
         }
     }
 
@@ -59,11 +68,15 @@ class TabletHostActivity : ComponentActivity() {
     }
 
     private fun startBackendService() {
-        val intent = Intent(this, TabletBackendService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
+        try {
+            val intent = Intent(this, TabletBackendService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+        } catch (error: Exception) {
+            showToast("Backend activo sin servicio permanente: ${error.message ?: "servicio no disponible"}")
         }
     }
 
@@ -74,19 +87,14 @@ class TabletHostActivity : ComponentActivity() {
         }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(14), dp(12), dp(10))
+            setPadding(dp(12), dp(8), dp(12), dp(6))
             setBackgroundColor(Color.rgb(9, 13, 20))
         }
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        top.addView(TextView(this).apply {
-            text = "Jesunutri Tablet Oficial"
-            textSize = 18f
-            setTextColor(Color.WHITE)
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        top.addView(View(this), LinearLayout.LayoutParams(0, dp(44), 1f))
         statusDot = TextView(this).apply {
             text = "\u25CF"
             textSize = 20f
@@ -94,11 +102,16 @@ class TabletHostActivity : ComponentActivity() {
             gravity = Gravity.CENTER
         }
         top.addView(statusDot, LinearLayout.LayoutParams(dp(32), LinearLayout.LayoutParams.WRAP_CONTENT))
+        val captureButton = smallButton("Capturador") {
+            startActivity(Intent(this, MainActivity::class.java).putExtra("server_url", localBaseUrl()))
+        }
+        top.addView(captureButton, LinearLayout.LayoutParams(dp(180), dp(44)).apply { leftMargin = dp(8) })
         header.addView(top)
         statusText = TextView(this).apply {
             text = "Iniciando backend local Android..."
             textSize = 13f
             setTextColor(Color.rgb(203, 213, 225))
+            visibility = View.GONE
         }
         header.addView(statusText)
         connectText = TextView(this).apply {
@@ -106,6 +119,7 @@ class TabletHostActivity : ComponentActivity() {
             textSize = 12f
             setTextColor(Color.rgb(147, 197, 253))
             setPadding(0, dp(4), 0, 0)
+            visibility = View.GONE
         }
         header.addView(connectText)
 
@@ -119,14 +133,8 @@ class TabletHostActivity : ComponentActivity() {
             loadAdminApp()
             showToast("Ingresa como admin y usa Importar datos existentes.")
         }
-        val adminButton = smallButton("Abrir app") { loadAdminApp() }
-        val captureButton = smallButton("Capturador") {
-            startActivity(Intent(this, MainActivity::class.java).putExtra("server_url", "http://127.0.0.1:8787"))
-        }
         setupPanel.addView(installButton, LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(6) })
-        setupPanel.addView(importButton, LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(6) })
-        setupPanel.addView(adminButton, LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(6) })
-        setupPanel.addView(captureButton, LinearLayout.LayoutParams(0, dp(44), 1f))
+        setupPanel.addView(importButton, LinearLayout.LayoutParams(0, dp(44), 1f))
         header.addView(setupPanel)
         root.addView(header)
 
@@ -140,6 +148,7 @@ class TabletHostActivity : ComponentActivity() {
             settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             settings.mediaPlaybackRequiresUserGesture = false
+            settings.userAgentString = "${settings.userAgentString} JESUnutriAndroidOfficial/0.1.5"
         }
         root.addView(webView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
@@ -184,25 +193,25 @@ class TabletHostActivity : ComponentActivity() {
     }
 
     private fun loadAdminApp() {
-        webView.loadUrl(LOCAL_APP_URL)
+        webView.loadUrl("${localBaseUrl()}/?androidNative=1")
     }
 
     private suspend fun refreshStatus() {
         val status = withContext(Dispatchers.IO) { getJson("/api/status") }
         val installed = status.optBoolean("installed", false)
         val imported = status.optString("importedAt").let { it.isNotBlank() && it != "null" }
-        val products = status.optJSONObject("counts")?.optInt("productos", 0) ?: 0
-        val sessions = status.optJSONObject("counts")?.optInt("operatorScanSessions", 0) ?: 0
         statusDot.setTextColor(if (installed) Color.rgb(34, 197, 94) else Color.rgb(250, 204, 21))
         statusText.text = if (installed) {
-            if (imported) "Base oficial local activa. Insumos: $products. Sesiones escaneo: $sessions."
+            if (imported) ""
             else "Backend local instalado. Falta importar datos existentes."
         } else {
             "Backend Android activo. Falta instalar la base local."
         }
-        val lanUrl = server.connectionUrls().firstOrNull { !it.contains("127.0.0.1") } ?: "http://127.0.0.1:8787"
-        connectText.text = "Conecta capturador en: $lanUrl"
-        setupPanel.visibility = View.VISIBLE
+        val lanUrl = server.connectionUrls().firstOrNull { !it.contains("127.0.0.1") } ?: localBaseUrl()
+        connectText.text = if (imported) "" else "Conecta capturador en: $lanUrl"
+        statusText.visibility = if (imported) View.GONE else View.VISIBLE
+        connectText.visibility = if (imported) View.GONE else View.VISIBLE
+        setupPanel.visibility = if (imported) View.GONE else View.VISIBLE
         installButton.visibility = if (imported) View.GONE else View.VISIBLE
         installButton.isEnabled = !installed
         installButton.text = if (installed) "Base local instalada" else "Instalar local"
@@ -212,7 +221,7 @@ class TabletHostActivity : ComponentActivity() {
     }
 
     private suspend fun getJson(path: String): JSONObject = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url("http://127.0.0.1:8787$path").get().build()
+        val request = Request.Builder().url("${localBaseUrl()}$path").get().build()
         http.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) error("HTTP ${response.code}: $text")
@@ -222,7 +231,7 @@ class TabletHostActivity : ComponentActivity() {
 
     private suspend fun postJson(path: String, body: JSONObject): JSONObject = withContext(Dispatchers.IO) {
         val request = Request.Builder()
-            .url("http://127.0.0.1:8787$path")
+            .url("${localBaseUrl()}$path")
             .post(body.toString().toRequestBody(jsonMedia))
             .build()
         http.newCall(request).execute().use { response ->
@@ -259,8 +268,9 @@ class TabletHostActivity : ComponentActivity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private fun localBaseUrl(): String = if (::server.isInitialized) server.localBaseUrl else "http://127.0.0.1:8787"
+
     companion object {
-        private const val LOCAL_APP_URL = "http://127.0.0.1:8787/"
         private const val SUPABASE_URL = "https://kfobwrcxvqygmfvvccfl.supabase.co"
         private const val SUPABASE_ANON_KEY =
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmb2J3cmN4dnF5Z21mdnZjY2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMzY0MTQsImV4cCI6MjA5NTgxMjQxNH0.hgGBTlCDtz3gbBTxnwmikVEtM6FFzRI1pL5BzgRFTPI"

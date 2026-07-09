@@ -40,6 +40,14 @@ class BackendClient(baseUrl: String) {
         return json.optJSONObject("link")?.toProductCodeLink()
     }
 
+    fun loadLinks(): List<ProductCodeLink> {
+        val json = getJson("/api/product-code-links?active=true")
+        val links = json.optJSONArray("links") ?: JSONArray()
+        return (0 until links.length()).mapNotNull { index ->
+            links.optJSONObject(index)?.toProductCodeLink()
+        }
+    }
+
     fun saveProductCodeLink(
         result: LabelScanResult,
         product: Product,
@@ -144,7 +152,7 @@ class BackendClient(baseUrl: String) {
                         .put("product_code_link_id", link.id ?: JSONObject.NULL)
                         .put("raw_code", result.codeRaw.ifBlank { link.codeRaw })
                         .put("normalized_code", result.codeNormalized.ifBlank { link.codeNormalized })
-                        .put("product_name_snapshot", product?.name ?: "")
+                        .put("product_name_snapshot", product?.name ?: link.productNameSnapshot)
                         .put("package_type", link.packageType)
                         .put("package_quantity", link.packageQuantity ?: JSONObject.NULL)
                         .put("package_unit", link.packageUnit)
@@ -220,6 +228,7 @@ class BackendClient(baseUrl: String) {
         return ProductCodeLink(
             id = optString("id").ifBlank { null },
             productId = optString("product_id", optString("productId")),
+            productNameSnapshot = optString("product_name_snapshot", optString("productNameSnapshot")),
             codeRaw = optString("code_raw", optString("codeRaw")),
             codeNormalized = optString("code_normalized", optString("codeNormalized")),
             codeType = optString("code_type", optString("codeType")),

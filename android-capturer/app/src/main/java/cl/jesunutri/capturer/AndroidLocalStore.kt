@@ -65,6 +65,7 @@ class AndroidLocalStore(private val appContext: Context) :
             setMeta(db, "migration_version", MIGRATION_VERSION)
             setMeta(db, "latest_migration", MIGRATION_VERSION)
             setMeta(db, "installed_at", nowIso())
+            ensureLocalAdmin(db)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -73,10 +74,12 @@ class AndroidLocalStore(private val appContext: Context) :
     }
 
     fun status(connectionUrls: List<String>): JSONObject {
-        val db = readableDatabase
+        val db = writableDatabase
+        ensureLocalAdmin(db)
         val installed = getMeta(db, "installed") == "1"
         val importedAt = getMeta(db, "imported_at")
         val counts = JSONObject()
+            .put("usuarios", countRows(db, "usuarios_app"))
             .put("productos", countRows(db, "productos_insumos"))
             .put("lotes", countRows(db, "insumo_lotes"))
             .put("movimientos", countRows(db, "movimientos_inventario"))
@@ -139,6 +142,7 @@ class AndroidLocalStore(private val appContext: Context) :
         val totals = totals(summary)
         val importedEnough = totals.optInt("fetched", 0) > 0 || totals.optInt("errors", 0) == 0
         val db = writableDatabase
+        ensureLocalAdmin(db)
         if (importedEnough) setMeta(db, "imported_at", nowIso())
         return JSONObject()
             .put("ok", true)
@@ -152,7 +156,7 @@ class AndroidLocalStore(private val appContext: Context) :
     fun inventorySnapshot(): JSONObject {
         val db = readableDatabase
         val products = tableRows(db, "productos_insumos")
-            .filter { truthy(it.opt("activo"), true) && it.optString("deleted_at").isBlank() }
+            .filter { truthy(it.opt("activo"), true) && notDeleted(it) }
             .sortedBy { it.optString("nombre").lowercase(Locale.ROOT) }
         val inventory = availableInventoryRows(db)
         val lowStock = lowStockRows(db, inventory)
@@ -538,9 +542,36 @@ class AndroidLocalStore(private val appContext: Context) :
         return rows.map { JSONObject().put("id", it.optString("id")) }
     }
 
+    private fun ensureLocalAdmin(db: SQLiteDatabase) {
+        val existing = tableRows(db, "usuarios_app")
+            .firstOrNull { it.optString("email").equals("jesu@nutri.cl", ignoreCase = true) }
+        if (existing != null) {
+            if (!truthy(existing.opt("activo"), true) || !isAdminRole(existing.optString("rol"))) {
+                existing.put("rol", "admin")
+                existing.put("activo", true)
+                existing.put("updated_at", nowIso())
+                saveRow(db, "usuarios_app", existing)
+            }
+            return
+        }
+        val now = nowIso()
+        saveRow(
+            db,
+            "usuarios_app",
+            JSONObject()
+                .put("id", "local-admin")
+                .put("email", "jesu@nutri.cl")
+                .put("nombre", "Jesu")
+                .put("rol", "admin")
+                .put("activo", true)
+                .put("created_at", now)
+                .put("updated_at", now)
+        )
+    }
+
     private fun availableInventoryRows(db: SQLiteDatabase): List<JSONObject> {
         val products = tableRows(db, "productos_insumos").associateBy { it.optString("id") }
-        val lots = tableRows(db, "insumo_lotes").filter { truthy(it.opt("activo"), true) && it.optString("deleted_at").isBlank() }
+        val lots = tableRows(db, "insumo_lotes").filter { truthy(it.opt("activo"), true) && notDeleted(it) }
         val movements = tableRows(db, "movimientos_inventario")
         return lots.mapNotNull { lot ->
             val lotId = lot.optString("id")
@@ -570,10 +601,10 @@ class AndroidLocalStore(private val appContext: Context) :
 
     private fun findOrCreateProduct(db: SQLiteDatabase, payload: JSONObject): JSONObject {
         val requestedId = payload.optString("productoId").ifBlank { payload.optString("producto_id") }
-        tableRows(db, "productos_insumos").firstOrNull { it.optString("id") == requestedId && it.optString("deleted_at").isBlank() }?.let { return it }
+        tableRows(db, "productos_insumos").firstOrNull { it.optString("id") == requestedId && notDeleted(it) }?.let { return it }
         val name = payload.optString("nombre").ifBlank { "Producto sin nombre" }.trim()
         val normalized = payload.optString("nombreNormalizado").ifBlank { payload.optString("nombre_normalizado").ifBlank { normalizeName(name) } }
-        tableRows(db, "productos_insumos").firstOrNull { it.optString("nombre_normalizado") == normalized && it.optString("deleted_at").isBlank() }?.let { return it }
+        tableRows(db, "productos_insumos").firstOrNull { it.optString("nombre_normalizado") == normalized && notDeleted(it) }?.let { return it }
         val product = JSONObject()
             .put("id", requestedId.ifBlank { uuid("prod") })
             .put("nombre", name)
@@ -811,6 +842,14 @@ class AndroidLocalStore(private val appContext: Context) :
                 is Number -> value.toInt() != 0
                 else -> value.toString().equals("true", true) || value.toString() == "1"
             }
+        }
+        fun isNullish(value: Any?): Boolean {
+            return value == null || value == JSONObject.NULL || value.toString().isBlank() || value.toString().equals("null", true)
+        }
+        fun notDeleted(row: JSONObject): Boolean = isNullish(row.opt("deleted_at"))
+        fun isAdminRole(role: String): Boolean {
+            val normalized = normalizeName(role)
+            return normalized == "admin" || normalized == "administrador" || normalized == "administradora"
         }
         fun compareString(value: Any?): String = if (value == null || value == JSONObject.NULL) "" else value.toString()
         fun compareJsonValues(left: Any?, right: Any?): Int {

@@ -11,22 +11,31 @@ import androidx.core.app.NotificationCompat
 class TabletBackendService : Service() {
     override fun onCreate() {
         super.onCreate()
-        TabletServerRuntime.ensureStarted(this)
-        createChannel()
-        startForeground(
-            8787,
-            NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-                .setContentTitle("Jesunutri local activo")
-                .setContentText("Backend de tablet disponible para capturadores.")
-                .setOngoing(true)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .build()
-        )
+        try {
+            val server = TabletServerRuntime.ensureStarted(this)
+            createChannel()
+            startForeground(
+                8787,
+                NotificationCompat.Builder(this, CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+                    .setContentTitle("Jesunutri local activo")
+                    .setContentText("Backend de tablet disponible en ${server.localBaseUrl}.")
+                    .setOngoing(true)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .build()
+            )
+        } catch (error: Exception) {
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        TabletServerRuntime.ensureStarted(this)
+        try {
+            TabletServerRuntime.ensureStarted(this)
+        } catch (error: Exception) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         return START_STICKY
     }
 
